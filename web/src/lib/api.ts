@@ -230,6 +230,45 @@ export function useEcg(w: TimeWindow) {
   });
 }
 
+/** Operation-level ECG point: a single spike on the waveform. */
+export interface EcgOp {
+  at: number;
+  /** Duration in ms — the spike's width on screen. */
+  d: number;
+  out: number;
+  r?: number;
+  fill?: number;
+  sid: string;
+  project: string;
+  /** tool rows */
+  name?: string;
+  status?: string;
+  add?: number;
+  del?: number;
+  /** turn rows */
+  model?: string;
+  err?: number;
+}
+export interface EcgSpan {
+  child: string;
+  from: number;
+  to: number;
+  parent: string;
+  project: string;
+}
+
+export function useEcgOps(w: TimeWindow, project?: string | null) {
+  return useQuery({
+    queryKey: ["ecg-ops", rangeKey(w), project ?? null],
+    queryFn: () =>
+      get<{ tools: EcgOp[]; turns: EcgOp[]; spans: EcgSpan[]; truncated: boolean }>(
+        `/api/ecg/ops?${qs(w)}${project ? `&project=${encodeURIComponent(project)}` : ""}`
+      ),
+    // the waveform is the stage's main visual — keep it fresh but not chatty
+    staleTime: 60000,
+  });
+}
+
 /** ECG marker layer: compaction arrows, retry/loop bars, failure crosses. */
 export function useMarkers(w: TimeWindow, types = "compaction,retry,loop,failure") {
   return useQuery({

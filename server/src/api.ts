@@ -286,6 +286,44 @@ export function createApp(deps: {
     });
   });
 
+  /**
+   * Operation-level ECG feed: one entry per tool call (above the baseline) and
+   * per assistant turn (below it). `d` is the operation's duration — the spike's
+   * width — and `out`/`r` drive its amplitude. Served separately from the
+   * bucketed `/api/ecg` because this is the render-heavy endpoint.
+   */
+  app.get("/api/ecg/ops", (req, res) => {
+    const win = windowOf(req, res);
+    if (!win) return;
+    const { from, to } = win;
+    const project = req.query.project ? String(req.query.project) : null;
+    const LIMIT = 20000;
+
+    const tools = q<any>(
+      `SELECT t.name, t.status, t.started AS at, COALESCE(t.dur_ms,0) AS d, COALESCE(t.output_chars,0) AS out,
+              COALESCE(t.additions,0) AS "add", COALESCE(t.deletions,0) AS "del", t.session_id AS sid, s.project
+       FROM tools t JOIN sessions s ON s.id = t.session_id
+       WHERE t.started BETWEEN ? AND ? AND (? IS NULL OR s.project = ?)
+       ORDER BY t.started LIMIT ${LIMIT}`,
+      from, to, project, project
+    );
+    const turns = q<any>(
+      `SELECT m.created AS at, COALESCE(m.dur_ms,0) AS d, COALESCE(m.output,0) AS out, COALESCE(m.reasoning,0) AS r,
+              COALESCE(m.fill,0) AS fill, m.session_id AS sid, s.project, m.model, COALESCE(m.has_error,0) AS err
+       FROM turns m JOIN sessions s ON s.id = m.session_id
+       WHERE m.role='assistant' AND m.created BETWEEN ? AND ? AND (? IS NULL OR s.project = ?)
+       ORDER BY m.created LIMIT ${LIMIT}`,
+      from, to, project, project
+    );
+    const spans = q<any>(
+      `SELECT t.target_session AS child, t.started AS "from", COALESCE(t.ended, t.started) AS "to", t.session_id AS parent, s.project
+       FROM tools t JOIN sessions s ON s.id = t.session_id
+       WHERE t.target_session IS NOT NULL AND t.started BETWEEN ? AND ? AND (? IS NULL OR s.project = ?)`,
+      from, to, project, project
+    );
+    res.json({ tools, turns, spans, truncated: tools.length >= LIMIT || turns.length >= LIMIT });
+  });
+
   /** Marker layer for the ECG: compaction arrows, retry/loop bars, failure crosses. */
   app.get("/api/events", (req, res) => {
     const win = windowOf(req, res);
