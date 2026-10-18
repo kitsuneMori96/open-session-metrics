@@ -1,0 +1,18 @@
+{
+  "name": "opencode-holo-cockpit",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Holo-Cockpit \u2014 a session monitoring & analysis cockpit for OpenCode (ECG narrative + micro probes + self-knowledge + what-if sandbox)",
+  "scripts": {
+    "dev": "concurrently -n server,web -c cyan,magenta \"pnpm -F @holo/server dev\" \"pnpm -F @holo/web dev\"",
+    "materialize": "pnpm -F @holo/server materialize",
+    "build": "pnpm -F @holo/web build",
+    "start": "pnpm -F @holo/server start",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
