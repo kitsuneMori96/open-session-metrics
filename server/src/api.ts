@@ -11,7 +11,10 @@ const HOUR = 3600000;
 /** Cap for one ECG lane; wider windows are coarsened server-side. */
 const MAX_POINTS = 900;
 
-export function createApp(deps: { db: () => DatabaseSync; refresh: () => Promise<BuildReport | undefined> }) {
+export function createApp(deps: {
+  db: () => DatabaseSync;
+  refresh: (full: boolean) => Promise<BuildReport | undefined>;
+}) {
   const app = express();
   app.use(cors());
   app.use(express.json());
@@ -67,7 +70,7 @@ export function createApp(deps: { db: () => DatabaseSync; refresh: () => Promise
   app.post("/api/refresh", async (req, res) => {
     try {
       const full = req.body?.full === true;
-      const report = await deps.refresh();
+      const report = await deps.refresh(full);
       res.json({ ok: true, full, report });
     } catch (e) {
       res.status(500).json({ ok: false, error: (e as Error).message });

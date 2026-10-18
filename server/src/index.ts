@@ -4,44 +4,41 @@ import path from "node:path";
 import { METRICS_DB, PORT, ROOT, HOST } from "./config";
 import { createApp } from "./api";
 import { current, rebuild, sourceChanged } from "./metrics/store";
-import type { BuildReport } from "./metrics/build";
 
 const REFRESH_MS = 120000;
-let busy: Promise<BuildReport | undefined> | null = null;
+/**
+ * Builds are serialized: a full rebuild swaps `metrics.db` by renaming a side
+ * file over it, so two overlapping builds would clobber each other's snapshot.
+ */
+let queue: Promise<unknown> = Promise.resolve();
+
+function materialize(opts: { force?: boolean; full?: boolean } = {}) {
+  const run = queue.then(() => doMaterialize(opts), () => doMaterialize(opts));
+  queue = run.catch(() => undefined);
+  return run;
+}
 
 /**
  * Refresh is driven by the *source watermark*, not the wall clock: we only
  * re-materialize when opencode.db actually has newer rows than we stored. The
  * incremental path re-parses just the changed sessions (milliseconds).
  */
-async function materializeIfNeeded(force: boolean): Promise<BuildReport | undefined> {
-  if (busy) return busy;
-  const task = (async () => {
-    if (!existsSync(METRICS_DB)) {
-      console.log("[osm] no metrics.db yet — materializing…");
-      const r = await rebuild({ full: true });
-      console.log(`[osm] built: ${r.sessions} sessions / ${r.turns} turns / ${r.tools} tools in ${r.ms}ms`);
-      return r;
-    }
-    if (!force && !sourceChanged()) return undefined;
-    const r = await rebuild();
-    console.log(
-      `[osm] ${r.mode} sync: ${r.sessions} sessions / ${r.turns} turns / ${r.events} events / ${r.flow} flow cells in ${r.ms}ms`
-    );
+async function doMaterialize({ force = false, full = false }: { force?: boolean; full?: boolean }) {
+  if (!existsSync(METRICS_DB) || full) {
+    console.log(`[osm] ${full ? "full rebuild requested" : "no metrics.db yet"} — materializing…`);
+    const r = await rebuild({ full: true });
+    console.log(`[osm] built: ${r.sessions} sessions / ${r.turns} turns / ${r.tools} tools in ${r.ms}ms`);
     return r;
-  })();
-  busy = task;
-  try {
-    return await task;
-  } catch (e) {
-    console.error("[osm] refresh failed:", (e as Error).message);
-    return undefined;
-  } finally {
-    busy = null;
   }
+  if (!force && !sourceChanged()) return undefined;
+  const r = await rebuild();
+  console.log(
+    `[osm] ${r.mode} sync: ${r.sessions} sessions / ${r.turns} turns / ${r.events} events / ${r.flow} flow cells in ${r.ms}ms`
+  );
+  return r;
 }
 
-const app = createApp({ db: current, refresh: () => materializeIfNeeded(true) });
+const app = createApp({ db: current, refresh: (full) => materialize({ force: true, full }) });
 
 const webDist = path.join(ROOT, "web", "dist");
 if (existsSync(webDist)) {
@@ -52,6 +49,6 @@ if (existsSync(webDist)) {
 
 app.listen(PORT, HOST, async () => {
   console.log(`[osm] api on http://${HOST}:${PORT}`);
-  await materializeIfNeeded(false);
-  setInterval(() => void materializeIfNeeded(false), REFRESH_MS);
+  await materialize();
+  setInterval(() => void materialize().catch((e) => console.error("[osm] refresh failed:", (e as Error).message)), REFRESH_MS);
 });
