@@ -53,6 +53,17 @@ export default function TrayDrawer() {
 
 /* ------------------------------------------------------------------ ROI ---- */
 
+/** Powers of ten inside the domain — d3's log `ticks(n)` ignores the count and floods the axis. */
+function decadeTicks(domain: number[]): number[] {
+  const [lo, hi] = domain;
+  const out: number[] = [];
+  for (let e = Math.floor(Math.log10(Math.max(1, lo))); e <= Math.ceil(Math.log10(Math.max(10, hi))); e++) {
+    const v = Math.pow(10, e);
+    if (v >= lo && v <= hi) out.push(v);
+  }
+  return out;
+}
+
 const PAD_L = 46;
 const PAD_B = 20;
 const PAD_T = 8;
@@ -131,13 +142,13 @@ function RoiScatter() {
             />
           ))}
           {scales &&
-            scales.y.ticks(4).map((v) => (
+            decadeTicks(scales.y.domain()).map((v) => (
               <text key={`y${v}`} x={PAD_L - 6} y={Y(v) + 3} textAnchor="end" fontSize="8" className="font-mono" fill="oklch(0.42 0.03 250)">
                 {compact(v)}
               </text>
             ))}
           {scales &&
-            scales.x.ticks(5).map((v) => (
+            decadeTicks(scales.x.domain()).map((v) => (
               <text key={`x${v}`} x={X(v)} y={size.h - 6} textAnchor="middle" fontSize="8" className="font-mono" fill="oklch(0.42 0.03 250)">
                 {compact(v)}
               </text>
@@ -310,7 +321,7 @@ function Sandbox() {
   const dearer = res != null && res.delta > 0.0001;
 
   return (
-    <div className="h-full grid" style={{ gridTemplateColumns: "286px_minmax(0,1fr)" }}>
+    <div className="h-full grid" style={{ gridTemplateColumns: "286px minmax(0,1fr)" }}>
       {/* mixer */}
       <div className="border-r border-rule overflow-y-auto no-scrollbar p-2">
         <div className="micro">MIXER · 推演旋钮</div>

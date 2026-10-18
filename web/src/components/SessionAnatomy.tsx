@@ -95,7 +95,7 @@ export default function SessionAnatomy({ id }: { id: string }) {
           <div className="flex items-baseline justify-between mb-1">
             <span className="micro">CONTEXT HEALTH BAND · 上下文健康度剖面</span>
             <span className="tape text-ink-faint">
-              窗口 {compact(turns[0]?.context_window ?? 0)} TK · {duration(geom.t1 - geom.t0)}
+              窗口 {compact(turns.reduce((a, t) => Math.max(a, t.context_window), 0))} TK · {duration(geom.t1 - geom.t0)}
             </span>
           </div>
 
@@ -347,7 +347,7 @@ export default function SessionAnatomy({ id }: { id: string }) {
         <aside className="hairline-l overflow-y-auto no-scrollbar">
           <div className="px-2 py-1.5 border-b border-rule micro">SUBAGENTS · 代理分叉</div>
           <TreeItem label={data.session.title ?? id} active onSelect={() => openSession(id)} meta={`${data.session.turns} T`} />
-          {data.children.map((c) => (
+          {childrenOf(data).map((c) => (
             <TreeItem key={c.id} label={c.title ?? c.id} meta={`${c.turns} T · ${money(c.cost)}`} onSelect={() => openSession(c.id)} />
           ))}
           {forksOf(data).map((f) => (
@@ -400,10 +400,20 @@ function dotClass(type: EventRow["type"]): string {
   return "bg-ink-faint";
 }
 
-/** `task`-tool forks that are outside the parent_id children list. */
+function childrenOf(data: SessionPayload) {
+  return [...new Map(data.children.map((c) => [c.id, c])).values()];
+}
+
+/** `task`-tool forks that are outside the parent_id children list (deduped). */
 function forksOf(data: SessionPayload) {
   const kids = new Set(data.children.map((c) => c.id));
-  return data.forks.filter((f) => f.target_session && !kids.has(f.target_session));
+  const seen = new Set<string>();
+  return data.forks.filter((f) => {
+    const sid = f.target_session;
+    if (!sid || kids.has(sid) || seen.has(sid)) return false;
+    seen.add(sid);
+    return true;
+  });
 }
 
 function Probe({ k, v, tone }: { k: string; v: number | string; tone?: "danger" }) {
