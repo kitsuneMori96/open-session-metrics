@@ -2,17 +2,17 @@
  * Offline ETL tests: a synthetic OpenCode v2 database is materialized and the
  * invariants the cockpit relies on are asserted (no server, no network).
  *
- *   pnpm -F @holo/server test
+ *   pnpm -F @osm/server test
  */
 import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-const dir = mkdtempSync(path.join(tmpdir(), "holo-etl-"));
-process.env.HOLO_DATA_DIR = dir;
-process.env.HOLO_OFFLINE = "1";
-process.env.HOLO_SOURCE_DB = path.join(dir, "source.db");
+const dir = mkdtempSync(path.join(tmpdir(), "osm-etl-"));
+process.env.OSM_DATA_DIR = dir;
+process.env.OSM_OFFLINE = "1";
+process.env.OSM_SOURCE_DB = path.join(dir, "source.db");
 
 let failures = 0;
 function ok(name: string, cond: boolean, extra = "") {
@@ -27,7 +27,7 @@ const T0 = 1790000000000;
 const MIN = 60000;
 
 function seed() {
-  const db = new DatabaseSync(process.env.HOLO_SOURCE_DB!);
+  const db = new DatabaseSync(process.env.OSM_SOURCE_DB!);
   db.exec(`
     CREATE TABLE project (id TEXT PRIMARY KEY, name TEXT, worktree TEXT);
     CREATE TABLE session_v2 (
@@ -145,7 +145,7 @@ async function main() {
   const rows = (sql: string, ...a: any[]) => db.prepare(sql).all(...a) as any[];
   const one = (sql: string, ...a: any[]) => db.prepare(sql).get(...a) as any;
 
-  const src = new SourceReader(process.env.HOLO_SOURCE_DB!);
+  const src = new SourceReader(process.env.OSM_SOURCE_DB!);
   const srcCompactions = src.events().filter((e) => e.type === "compaction").length;
   src.close();
   const metricCompactions = rows("SELECT * FROM events WHERE type='compaction'").length;
@@ -192,13 +192,13 @@ async function main() {
   ok("conversion coverage is countable", total === 2 && withDiff === 1, JSON.stringify({ total, withDiff }));
 
   // ---- incremental: touch one message, expect only that session re-materialized ----
-  const src2 = new SourceReader(process.env.HOLO_SOURCE_DB!);
+  const src2 = new SourceReader(process.env.OSM_SOURCE_DB!);
   const watermark = src2.maxMessageTime();
   const changed = src2.changedSessions(watermark);
   ok("no change → no dirty sessions", changed.size === 0, `got ${changed.size}`);
   src2.close();
 
-  const w = new DatabaseSync(process.env.HOLO_SOURCE_DB!);
+  const w = new DatabaseSync(process.env.OSM_SOURCE_DB!);
   const at = T0 + 12 * MIN;
   w.prepare("INSERT INTO session_message VALUES (?,?,?,?,?,?,?)").run(
     "m_extra", "ses_child", "assistant", 999, at, at,
@@ -212,7 +212,7 @@ async function main() {
   );
   w.close();
 
-  const src3 = new SourceReader(process.env.HOLO_SOURCE_DB!);
+  const src3 = new SourceReader(process.env.OSM_SOURCE_DB!);
   const dirty = src3.changedSessions(watermark);
   const incReport = await build(db, { mode: "incremental", sessionIds: dirty });
   src3.close();

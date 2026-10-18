@@ -1,14 +1,14 @@
 {
-  "name": "opencode-holo-cockpit",
+  "name": "opencode-session-metrics",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Holo-Cockpit \u2014 a session monitoring & analysis cockpit for OpenCode (ECG narrative + micro probes + self-knowledge + what-if sandbox)",
+  "description": "Materialize OpenCode session data into a metrics store and serve it over an analytics API",
   "scripts": {
-    "dev": "concurrently -n server,web -c cyan,magenta \"pnpm -F @holo/server dev\" \"pnpm -F @holo/web dev\"",
-    "materialize": "pnpm -F @holo/server materialize",
-    "build": "pnpm -F @holo/web build",
-    "start": "pnpm -F @holo/server start",
+    "dev": "concurrently -n server,web -c cyan,magenta \"pnpm -F @osm/server dev\" \"pnpm -F @osm/web dev\"",
+    "materialize": "pnpm -F @osm/server materialize",
+    "build": "pnpm -F @osm/web build",
+    "start": "pnpm -F @osm/server start",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test"
   },

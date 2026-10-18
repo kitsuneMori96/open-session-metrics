@@ -117,7 +117,7 @@ export async function loadCatalog(wanted: Set<string>): Promise<Catalog> {
   const missing = [...wanted].filter((k) => !cache.models[k]);
 
   let fresh: Catalog = {};
-  const offline = process.env.HOLO_OFFLINE === "1";
+  const offline = process.env.OSM_OFFLINE === "1";
   if ((missing.length > 0 || stale) && !offline) {
     try {
       const res = await fetch("https://models.dev/api.json", { signal: AbortSignal.timeout(20000) });

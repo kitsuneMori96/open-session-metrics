@@ -1,6 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
-const BASE = process.env.HOLO_BASE ?? "http://127.0.0.1:8787";
+const BASE = process.env.OSM_BASE ?? "http://127.0.0.1:8787";
 const DAY = 86400000;
 const to = Date.now();
 const from = to - 30 * DAY;

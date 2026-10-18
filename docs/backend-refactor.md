@@ -97,14 +97,14 @@
 ## 4. 运行时变化
 
 - **默认绑 `127.0.0.1:8787`**（原来是 `0.0.0.0` + 全开 CORS —— 载荷里有你的明文 prompt）。
-  需要局域网访问用 `HOLO_HOST=0.0.0.0 pnpm -F @holo/server dev`。
+  需要局域网访问用 `OSM_HOST=0.0.0.0 pnpm -F @osm/server dev`。
 - **刷新是水位驱动的增量**：`MAX(消息表, session_v2.time_updated)` 没前进就直接跳过；
   真有变化时只重算脏掉的 session，实测 3563ms → **109ms**。所以 `/api/status` 里的 `materializedAt`
   不会每 2 分钟跳一次了，`mode` 字段会是 `full` / `incremental`。
 - 新命令：
-  - `pnpm -F @holo/server test` —— 离线 fixture 测试（25 项断言，不需要服务和网络）
-  - `pnpm -F @holo/server test:smoke` —— 原来的 HTTP 冒烟（需要服务在线）
-  - `pnpm -F @holo/server materialize --full` —— CLI 强制全量重建
+  - `pnpm -F @osm/server test` —— 离线 fixture 测试（25 项断言，不需要服务和网络）
+  - `pnpm -F @osm/server test:smoke` —— 原来的 HTTP 冒烟（需要服务在线）
+  - `pnpm -F @osm/server materialize --full` —— CLI 强制全量重建
 
 ---
 

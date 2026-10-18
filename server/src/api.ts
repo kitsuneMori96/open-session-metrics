@@ -40,6 +40,10 @@ export function createApp(deps: { db: () => DatabaseSync; refresh: () => Promise
   app.get("/api/status", (_req, res) => {
     const db = deps.db();
     const count = (t: string) => (one<{ c: number }>(`SELECT COUNT(*) c FROM ${t}`)?.c ?? 0);
+    const extent =
+      one<{ from_ts: number | null; to_ts: number | null }>(
+        `SELECT MIN(created) AS from_ts, MAX(COALESCE(updated, created)) AS to_ts FROM sessions`
+      ) ?? { from_ts: null, to_ts: null };
     res.json({
       sourceDb: getMeta(db, "sourceDb"),
       sourceSchema: getMeta(db, "sourceSchema"),
@@ -47,6 +51,7 @@ export function createApp(deps: { db: () => DatabaseSync; refresh: () => Promise
       materializedAt: getMetaNumber(db, "materializedAt"),
       mode: getMeta(db, "mode"),
       bucketMs: BUCKET_MS,
+      extent: { from: Number(extent.from_ts ?? 0), to: Number(extent.to_ts ?? Date.now()) },
       counts: {
         sessions: count("sessions"),
         turns: count("turns"),
