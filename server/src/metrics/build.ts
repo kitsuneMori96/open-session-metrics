@@ -17,6 +17,55 @@ interface TurnCalc extends SrcTurn {
   costComputed: number;
 }
 
+/**
+ * Most OpenCode sessions are launched from `/` or the home directory, so
+ * `directory` alone makes the ECG collapse into meaningless lanes. Recover the
+ * real project from the absolute paths the session's tools actually touched.
+ */
+const CONTAINERS = /\/(?:projects|repos|plugins|workspace|Code)\/([^/.][^/]*)\//;
+const HOME_LEVEL = /^\/(?:home|Users)\/([^/]+)\/([^/.][^/]*)\//;
+const ROOT_LEVEL = /^\/(?:tmp|srv|opt|data|work)\/([^/.][^/]*)\//;
+const IGNORED = new Set([
+  "home", "root", "users", "usr", "tmp", "var", "srv", "opt", "bin", "lib", "src", "dist",
+  "data", "log", "logs", "cache", "config", "appdata", "desktop", "documents", "downloads",
+  "program", "programs", "programdata", "node_modules", "versions", "share", "code",
+]);
+
+export function inferProject(
+  paths: string[],
+  fallback: string,
+  accounts: Set<string>
+): string {
+  const votes = new Map<string, number>();
+  const vote = (label: string | null | undefined, weight: number) => {
+    if (!label) return;
+    const l = label.toLowerCase();
+    if (l.startsWith(".") || l.length < 3 || IGNORED.has(l)) return;
+    votes.set(label, (votes.get(label) ?? 0) + weight);
+  };
+  for (const raw of paths) {
+    const p = raw.replace(/^\/mnt\/[a-zA-Z]\//, "/");
+    const container = p.match(CONTAINERS);
+    if (container) vote(container[1], 4);
+    else {
+      const home = p.match(HOME_LEVEL);
+      if (home) vote(home[2], 2);
+      else vote(p.match(ROOT_LEVEL)?.[1], 1);
+    }
+  }
+  // A directory that is only an account root is not a project.
+  const junk = fallback === "/" || fallback === "unknown" || accounts.has(fallback);
+  let bestV = junk ? 0 : 2;
+  let best = junk ? "unknown" : fallback;
+  for (const [label, v] of votes) if (v > bestV) ((bestV = v), (best = label));
+  return best;
+}
+
+/** `kitsunemori` from `/home/kitsunemori` (also WSL-mounted `C:\Users\…`). */
+export function accountOf(path: string | null | undefined): string | null {
+  return (path ?? "").replace(/^\/mnt\/[a-zA-Z]\//, "/").match(/^\/(?:home|Users)\/([^/]+)$/)?.[1] ?? null;
+}
+
 function localDayHour(ts: number): { dow: number; hour: number } {
   const d = new Date(ts);
   return { dow: (d.getDay() + 7) % 7, hour: d.getHours() };
@@ -44,6 +93,32 @@ export async function build(db: DatabaseSync): Promise<BuildReport> {
     const sessionById = new Map<string, SrcSession>(srcSessions.map((s) => [s.id, s]));
     const turnsRaw = src.turns();
     const events = src.events();
+
+    const pathsBySession = new Map<string, string[]>();
+    for (const t of turnsRaw) {
+      if (!t.tools.length) continue;
+      const arr = pathsBySession.get(t.sessionId) ?? [];
+      for (const tl of t.tools) arr.push(...tl.paths);
+      pathsBySession.set(t.sessionId, arr);
+    }
+    const accounts = new Set(
+      srcSessions.map((s) => accountOf(s.directory)).filter((a): a is string => !!a)
+    );
+    for (const s of srcSessions) s.project = inferProject(pathsBySession.get(s.id) ?? [], s.project, accounts);
+
+    // Sub-agent sessions rarely touch files themselves — borrow the parent's lane.
+    const isJunk = (p: string) => p === "/" || p === "unknown" || accounts.has(p);
+    for (let pass = 0; pass < 3; pass++) {
+      let changed = false;
+      for (const s of srcSessions) {
+        if (!isJunk(s.project)) continue;
+        const parent = s.parentId ? sessionById.get(s.parentId) : null;
+        if (parent && !isJunk(parent.project)) ((s.project = parent.project), (changed = true));
+      }
+      if (!changed) break;
+    }
+    // Sessions started in the account root with no file evidence are scratch work.
+    for (const s of srcSessions) if (isJunk(s.project)) s.project = "scratch";
 
     const wanted = new Set<string>();
     for (const s of srcSessions) if (s.model) wanted.add(catalogKey(s.provider, s.model));

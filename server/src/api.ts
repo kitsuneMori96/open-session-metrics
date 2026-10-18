@@ -41,6 +41,12 @@ export function createApp(deps: { db: () => DatabaseSync; refresh: () => Promise
     }
   });
 
+  /** Full data extent, so the time scrubber knows its universe. */
+  app.get("/api/range", (_req, res) => {
+    const r = one<any>("SELECT MIN(created) AS min, MAX(updated) AS max FROM sessions");
+    res.json({ from: Number(r?.min ?? Date.now() - 30 * DAY), to: Number(r?.max ?? Date.now()) });
+  });
+
   /** Global totals for a time window (drives the header readouts + what-if sandbox). */
   app.get("/api/overview", (req, res) => {
     const { from, to } = windowOf(req);

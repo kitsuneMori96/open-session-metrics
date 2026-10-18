@@ -62,6 +62,8 @@ export interface SrcTool {
   files: number;
   error: string | null;
   sig: string;
+  /** Absolute paths touched by this call — used to infer the real project. */
+  paths: string[];
 }
 
 export interface SrcEvent {
@@ -102,6 +104,26 @@ function fileStats(files: any): { additions: number; deletions: number; files: n
     d += num(f?.deletions);
   }
   return { additions: a, deletions: d, files: files.length };
+}
+
+/** Absolute paths a tool call touched (explicit fields, diff file list, shell command tokens). */
+function pathsOf(input: any, files: any): string[] {
+  const out: string[] = [];
+  const push = (v: unknown) => {
+    if (typeof v === "string" && v.startsWith("/") && v.length > 1) out.push(v);
+  };
+  push(input?.path);
+  push(input?.filePath);
+  push(input?.file_path);
+  push(input?.notebookPath);
+  push(input?.notebook_path);
+  if (Array.isArray(input?.paths)) input.paths.forEach(push);
+  if (Array.isArray(files)) for (const f of files) push(f?.file ?? f?.path);
+  const cmd = input?.command;
+  if (typeof cmd === "string") {
+    for (const m of cmd.matchAll(/\/(?:home|Users|mnt|srv|opt|root|var|workspace)\/[^\s"'`;|&)]{2,}/g)) out.push(m[0]);
+  }
+  return out;
 }
 
 function hashSig(name: string, input: unknown): string {
@@ -247,6 +269,7 @@ export class SourceReader {
             files: fs.files,
             error: st.status === "error" ? (st.error?.message ?? "tool error") : null,
             sig: hashSig(item.name ?? "unknown", st.input),
+            paths: pathsOf(st.input, st.metadata?.files),
           });
         }
       }
@@ -324,6 +347,7 @@ export class SourceReader {
             additions: 0, deletions: 0, files: 0,
             error: st.status === "error" ? (st.error ?? st.output ?? "tool error") : null,
             sig: hashSig(p.tool ?? "unknown", st.input),
+            paths: pathsOf(st.input, []),
           });
         }
       }
