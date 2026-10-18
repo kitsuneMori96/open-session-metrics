@@ -121,7 +121,9 @@ function pathsOf(input: any, files: any): string[] {
   if (Array.isArray(files)) for (const f of files) push(typeof f === "string" ? f : f?.file ?? f?.path);
   const cmd = input?.command;
   if (typeof cmd === "string") {
-    for (const m of cmd.matchAll(/\/(?:home|Users|mnt|srv|opt|root|var|workspace)\/[^\s"'`;|&)]{2,}/g)) out.push(m[0]);
+    // Restricted charset: API route literals inside a command (`/workspace/global?directory=…`)
+    // would otherwise be voted in as a project lane.
+    for (const m of cmd.matchAll(/\/(?:home|Users|mnt|srv|opt|root|var|workspace)\/[\w.+\-@/]{2,}/g)) out.push(m[0]);
   }
   return out;
 }
