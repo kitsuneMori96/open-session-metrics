@@ -1,29 +1,33 @@
 import express from "express";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { METRICS_DB, PORT, ROOT } from "./config";
+import { METRICS_DB, PORT, ROOT, HOST } from "./config";
 import { createApp } from "./api";
-import { current, rebuild } from "./metrics/store";
+import { current, rebuild, sourceChanged } from "./metrics/store";
 import type { BuildReport } from "./metrics/build";
 
 const REFRESH_MS = 120000;
 let busy: Promise<BuildReport | undefined> | null = null;
 
+/**
+ * Refresh is driven by the *source watermark*, not the wall clock: we only
+ * re-materialize when opencode.db actually has newer rows than we stored. The
+ * incremental path re-parses just the changed sessions (milliseconds).
+ */
 async function materializeIfNeeded(force: boolean): Promise<BuildReport | undefined> {
   if (busy) return busy;
   const task = (async () => {
     if (!existsSync(METRICS_DB)) {
       console.log("[holo] no metrics.db yet — materializing…");
-      const r = await rebuild();
-      console.log(`[holo] built: ${r.turns} turns / ${r.sessions} sessions / ${r.tools} tools in ${r.ms}ms`);
+      const r = await rebuild({ full: true });
+      console.log(`[holo] built: ${r.sessions} sessions / ${r.turns} turns / ${r.tools} tools in ${r.ms}ms`);
       return r;
     }
-    const rows = current().prepare("SELECT key, value FROM meta").all() as { key: string; value: string }[];
-    const meta = Object.fromEntries(rows.map((m) => [m.key, m.value]));
-    const srcMax = Number(meta.sourceMaxTime ?? 0);
-    if (!force && Date.now() - srcMax < 60000) return undefined; // no recent OpenCode activity
+    if (!force && !sourceChanged()) return undefined;
     const r = await rebuild();
-    console.log(`[holo] re-materialized: ${r.turns} turns / ${r.sessions} sessions in ${r.ms}ms`);
+    console.log(
+      `[holo] ${r.mode} sync: ${r.sessions} sessions / ${r.turns} turns / ${r.events} events / ${r.flow} flow cells in ${r.ms}ms`
+    );
     return r;
   })();
   busy = task;
@@ -46,8 +50,8 @@ if (existsSync(webDist)) {
   console.log(`[holo] serving built web from ${webDist}`);
 }
 
-app.listen(PORT, "0.0.0.0", async () => {
-  console.log(`[holo] cockpit API on http://0.0.0.0:${PORT}`);
+app.listen(PORT, HOST, async () => {
+  console.log(`[holo] cockpit API on http://${HOST}:${PORT}`);
   await materializeIfNeeded(false);
   setInterval(() => void materializeIfNeeded(false), REFRESH_MS);
 });

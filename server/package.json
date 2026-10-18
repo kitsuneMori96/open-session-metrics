@@ -8,7 +8,8 @@
     "start": "tsx src/index.ts",
     "materialize": "tsx src/cli/materialize.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx src/tests/run.ts"
+    "test": "tsx src/tests/etl.ts",
+    "test:smoke": "tsx src/tests/run.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",
