@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRange, DAY, type TimeWindow } from "../lib/api";
+import { useStatus, DAY, type TimeWindow } from "../lib/api";
 import { dateShort } from "../lib/format";
 
 type Drag = { mode: "pan" | "left" | "right"; startX: number; from: number; to: number } | null;
@@ -16,7 +16,8 @@ export default function TimeScrubber({
   window: TimeWindow;
   onChange: (w: TimeWindow) => void;
 }) {
-  const { data: universe } = useRange();
+  const { data: status } = useStatus();
+  const universe = status?.extent;
   const trackRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<Drag>(null);
 
@@ -72,11 +73,14 @@ export default function TimeScrubber({
   const ticks = useMemo(() => {
     const days = span / DAY;
     const step = days > 240 ? 30 : days > 120 ? 14 : days > 45 ? 7 : days > 12 ? 1 : 0.25;
+    const ms = step * DAY;
+    // Local-midnight anchored, otherwise every label lands on the same clock time.
+    const midnight = new Date(lo);
+    midnight.setHours(0, 0, 0, 0);
     const out: { at: number; major: boolean }[] = [];
-    const start = Math.ceil(lo / (step * DAY)) * step * DAY;
-    for (let t = start; t <= hi; t += step * DAY) {
-      out.push({ at: t, major: new Date(t).getHours() === 0 });
-    }
+    let t = midnight.getTime();
+    while (t < lo) t += ms;
+    for (; t <= hi; t += ms) out.push({ at: t, major: new Date(t).getHours() === 0 });
     return out;
   }, [lo, hi, span]);
 

@@ -1,15 +1,17 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 export const DAY = 86_400_000;
 
+/** `/api/ecg` point. `tokens` is generated volume only — cache is reported apart (§1.4). */
 export interface FlowPoint {
   project: string;
   bucket: number;
   tokens: number;
+  cache: number;
   cost: number;
   sessions: number;
-  dominant_model: string;
-  peak_fill: number;
+  peak: number;
+  model: string;
 }
 export interface SessionRow {
   id: string;
@@ -24,8 +26,10 @@ export interface SessionRow {
   tool_errors: number;
   compactions: number;
   retries: number;
+  loops: number;
   additions: number;
   deletions: number;
+  files_changed?: number;
   peak_fill: number;
   avg_fill: number;
   eff_score: number;
@@ -37,12 +41,14 @@ export interface SessionRow {
 export interface TurnRow {
   id: string;
   session_id: string;
-  project: string;
+  seq: number;
   created: number;
   completed: number | null;
   dur_ms: number | null;
+  role: string;
   model: string | null;
   provider: string | null;
+  agent: string | null;
   input: number;
   output: number;
   reasoning: number;
@@ -51,7 +57,9 @@ export interface TurnRow {
   prompt_total: number;
   occupancy: number;
   context_window: number;
+  /** Context occupancy at send time: prompt_total / context_window. */
   fill: number;
+  fill_after: number;
   finish: string | null;
   has_error: number;
   tool_calls: number;
@@ -59,9 +67,11 @@ export interface TurnRow {
   additions: number;
   deletions: number;
   cost: number;
-  text: string | null;
+  /** Only present with `?include=text`. */
+  text?: string | null;
 }
 export interface ToolRow {
+  session_id: string;
   turn_id: string;
   call_id: string;
   name: string;
@@ -75,15 +85,39 @@ export interface ToolRow {
   deletions: number;
   files: number;
   error: string | null;
+  input_preview?: string | null;
+  target_session?: string | null;
+}
+export interface EventDetail {
+  reason?: string;
+  summary?: string;
+  before?: number;
+  after?: number;
+  delta?: number;
+  model?: string;
+  sourceTokens?: number;
+  tool?: string;
+  title?: string;
+  error?: string;
+  sig?: string;
+  repeats?: number;
+  span_ms?: number;
+  first_failed?: boolean;
 }
 export interface EventRow {
   id: number;
   session_id: string;
   turn_id: string | null;
-  type: "compaction" | "retry" | "failure" | "idle" | "switch" | "error";
+  type: "compaction" | "retry" | "loop" | "failure" | "idle" | "switch" | "error";
   at: number;
+  end_at: number | null;
+  count: number;
   fill: number;
+  /** JSON text; parse with `detailOf`. */
   detail: string | null;
+}
+export interface MarkerRow extends Omit<EventRow, "id" | "turn_id"> {
+  project: string;
 }
 export interface ModelRow {
   id: string;
@@ -94,6 +128,57 @@ export interface ModelRow {
   cost_output: number;
   cost_cache_read: number;
   cost_cache_write: number;
+  source?: string;
+  overridden?: boolean;
+}
+export interface SessionPayload {
+  session: SessionRow & Record<string, unknown>;
+  subtree: string[];
+  forks: { turn_id: string; started: number; target_session: string; title: string | null; status: string }[];
+  turns: TurnRow[];
+  tools: ToolRow[];
+  events: EventRow[];
+  prompts: { id: string; session_id: string; created: number; text: string }[];
+  children: SessionRow[];
+  probe: {
+    failuresOver80: number;
+    compactions: number;
+    retries: number;
+    loops: number;
+    peakFill: number;
+    avgFill: number;
+    effScore: number;
+    tokensPerLine: number;
+    diffLines: number;
+    tokens: number;
+  };
+}
+export interface SandboxResult {
+  range: { from: number; to: number };
+  current: number;
+  projected: number;
+  delta: number;
+  deltaPct: number;
+  byModel: {
+    key: string;
+    label: string;
+    tokens: { input: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number };
+    current: number;
+    projected: number;
+    delta: number;
+    price: { input: number; output: number; cacheRead: number; cacheWrite: number };
+    target: string | null;
+    pricedFrom: string;
+  }[];
+}
+
+export function detailOf(e: { detail: string | null }): EventDetail | null {
+  if (!e.detail) return null;
+  try {
+    return typeof e.detail === "string" ? (JSON.parse(e.detail) as EventDetail) : (e.detail as EventDetail);
+  } catch {
+    return null;
+  }
 }
 
 async function get<T>(path: string): Promise<T> {
@@ -104,31 +189,52 @@ async function get<T>(path: string): Promise<T> {
 
 export const rangeKey = (w: { from: number; to: number }) => `${w.from}|${w.to}`;
 
+/** Also carries `extent` — the full recorded history the scrubber can pan across. */
 export function useStatus() {
-  return useQuery({ queryKey: ["status"], queryFn: () => get<any>("/api/status"), refetchInterval: 30000 });
-}
-
-/** Full extent of the recorded history — the scrubber's universe. */
-export function useRange() {
   return useQuery({
-    queryKey: ["range"],
-    queryFn: () => get<{ from: number; to: number }>("/api/range"),
-    staleTime: 60000,
+    queryKey: ["status"],
+    queryFn: () => get<{ counts: Record<string, number>; materializedAt: number; sourceSchema: string; mode: string; extent: { from: number; to: number } }>("/api/status"),
+    refetchInterval: 30000,
   });
 }
 
 export function useOverview(w: TimeWindow) {
   return useQuery({
     queryKey: ["overview", rangeKey(w)],
-    queryFn: () => get<any>(`/api/overview?${qs(w)}`),
+    queryFn: () =>
+      get<{
+        totals: {
+          input: number;
+          output: number;
+          reasoning: number;
+          cache_read: number;
+          cache_write: number;
+          cost: number;
+          flowCost: number;
+          generated: number;
+          turns: number;
+          tool_errors: number;
+          additions: number;
+          deletions: number;
+          sessions: number;
+        };
+        coverage: { total: number; with_diff: number; with_cost: number };
+      }>(`/api/overview?${qs(w)}`),
   });
 }
 
 export function useEcg(w: TimeWindow) {
   return useQuery({
     queryKey: ["ecg", rangeKey(w)],
-    queryFn: () =>
-      get<{ step: number; projects: string[]; points: FlowPoint[] }>(`/api/ecg?${qs(w)}`),
+    queryFn: () => get<{ step: number; projects: string[]; points: FlowPoint[] }>(`/api/ecg?${qs(w)}`),
+  });
+}
+
+/** ECG marker layer: compaction arrows, retry/loop bars, failure crosses. */
+export function useMarkers(w: TimeWindow, types = "compaction,retry,loop,failure") {
+  return useQuery({
+    queryKey: ["markers", rangeKey(w), types],
+    queryFn: () => get<MarkerRow[]>(`/api/events?${qs(w)}&type=${types}`),
   });
 }
 
@@ -140,13 +246,11 @@ export function useSessions(w: TimeWindow, project?: string | null) {
   });
 }
 
-export function useSession(id: string | null) {
+export function useSession(id: string | null, includeText = false) {
   return useQuery({
-    queryKey: ["session", id],
+    queryKey: ["session", id, includeText ? "text" : "lean"],
     queryFn: () =>
-      get<{ session: SessionRow & Record<string, unknown>; turns: TurnRow[]; tools: ToolRow[]; events: EventRow[]; prompts: { id: string; session_id: string; created: number; text: string }[]; children: SessionRow[]; probe: { failureOverload: number } }>(
-        `/api/session/${id}`
-      ),
+      get<SessionPayload>(`/api/session/${id}${includeText ? "?include=text" : ""}`),
     enabled: !!id,
   });
 }
@@ -155,9 +259,18 @@ export function useHeatmap(w: TimeWindow) {
   return useQuery({
     queryKey: ["heatmap", rangeKey(w)],
     queryFn: () =>
-      get<{ days: number; cells: { dow: number; hour: number; tokens: number; cost: number; turns: number }[]; nightShare: number; peak: any; totalTokens: number }>(
-        `/api/heatmap?${qs(w)}`
-      ),
+      get<{
+        days: number;
+        fromDay: number;
+        cells: { dow: number; hour: number; gen: number; cache: number; cost: number; turns: number }[];
+        spectrogram: { day: number; hour: number; gen: number; cache: number; cost: number; turns: number }[];
+        totalTokens: number;
+        totalCacheRead: number;
+        nightShare: number;
+        peak: { dow: number; hour: number; gen: number } | null;
+        topHour: number;
+        insight: string | null;
+      }>(`/api/heatmap?${qs(w)}`),
   });
 }
 
@@ -174,10 +287,27 @@ export function useFocus(w: TimeWindow) {
         deepFocusShare: number;
         interruptionShare: number;
         histogram: { seconds: number; count: number }[];
-        series: { at: number; gap: number; session: string }[];
+        series: { at: number; gap: number; session: string; tool: string }[];
         flow: { bucket: number; tokens: number }[];
       }>(`/api/focus?${qs(w)}`),
   });
+}
+
+export interface ConversionPoint {
+  session: string;
+  project: string;
+  title: string | null;
+  cost: number;
+  created: number;
+  dominant_model: string;
+  tokens: number;
+  lines: number;
+  files_changed: number;
+  eff_score: number;
+  peak_fill: number;
+  turns: number;
+  expected_lines: number | null;
+  ratio: number | null;
 }
 
 export function useConversion(w: TimeWindow) {
@@ -185,10 +315,12 @@ export function useConversion(w: TimeWindow) {
     queryKey: ["conversion", rangeKey(w)],
     queryFn: () =>
       get<{
-        points: { session: string; project: string; title: string | null; cost: number; tokens: number; lines: number; ratio: number; expected_lines: number; eff_score: number; peak_fill: number; created: number }[];
-        regression: { slope: number; intercept: number };
+        points: ConversionPoint[];
+        /** null when fewer than 3 sessions have diff data — the line is meaningless then. */
+        regression: { slope: number; intercept: number } | null;
         linesPer10k: number;
-        padded: any[];
+        padded: ConversionPoint[];
+        coverage: { total: number; withDiff: number };
       }>(`/api/conversion?${qs(w)}`),
   });
 }
@@ -201,6 +333,45 @@ export function useModels() {
   });
 }
 
+/** Re-run the incremental materialisation after editing prices. */
+export function useRefresh() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (full: boolean) =>
+      fetch("/api/refresh", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ full }),
+      }).then((r) => {
+        if (!r.ok) throw new Error(`/api/refresh → HTTP ${r.status}`);
+        return r.json() as Promise<{ ok: boolean; full: boolean; report: unknown }>;
+      }),
+    onSuccess: () => qc.invalidateQueries(),
+  });
+}
 
-export interface TimeWindow { from: number; to: number }
+/** What-if pricing runs server-side so it uses the same price table as history. */
+export function useSandbox() {
+  return useMutation({
+    mutationFn: (body: {
+      from: number;
+      to: number;
+      swaps?: { from: string; to: string }[];
+      cacheReadGain?: number;
+    }) =>
+      fetch("/api/sandbox", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }).then((r) => {
+        if (!r.ok) throw new Error(`/api/sandbox → HTTP ${r.status}`);
+        return r.json() as Promise<SandboxResult>;
+      }),
+  });
+}
+
+export interface TimeWindow {
+  from: number;
+  to: number;
+}
 const qs = (w: TimeWindow) => `from=${w.from}&to=${w.to}`;

@@ -1,8 +1,14 @@
 import { useMemo, useRef, useState } from "react";
 import { scaleLinear } from "d3-scale";
-import { useQueryClient } from "@tanstack/react-query";
 import { useCockpit } from "../state/CockpitContext";
-import { useSession, type EventRow, type ToolRow, type TurnRow } from "../lib/api";
+import {
+  detailOf,
+  useSession,
+  type EventRow,
+  type SessionPayload,
+  type ToolRow,
+  type TurnRow,
+} from "../lib/api";
 import { clock, compact, duration, money, pct, shortModel } from "../lib/format";
 import { Crosshair, Spinner } from "./ui";
 
@@ -20,13 +26,18 @@ const SEG = [
 /** System 2 — single-session dissection: health band + event probes + agent tree. */
 export default function SessionAnatomy({ id }: { id: string }) {
   const { openSession, setMode, callId, setCallId } = useCockpit();
-  const { data } = useSession(id);
+  const [wantText, setWantText] = useState(false);
+  const { data } = useSession(id, wantText);
   const [hoverEvent, setHoverEvent] = useState<EventRow | null>(null);
   const [flash, setFlash] = useState(0);
   const bandRef = useRef<HTMLDivElement>(null);
 
   const turns = useMemo(() => (data?.turns ?? []).filter((t) => t.session_id === id), [data, id]);
   const events = useMemo(() => (data?.events ?? []).filter((e) => e.session_id === id), [data, id]);
+  const userText = useMemo(
+    () => new Map((data?.prompts ?? []).map((p) => [p.id, p.text])),
+    [data]
+  );
 
   const geom = useMemo(() => {
     if (turns.length < 1) return null;
@@ -34,10 +45,6 @@ export default function SessionAnatomy({ id }: { id: string }) {
     const t1 = Math.max(turns[turns.length - 1].created, t0 + 60000);
     return { x: scaleLinear().domain([t0, t1]).range([0, 1]), t0, t1 };
   }, [turns]);
-
-  const overloadFailures = events.filter((e) => e.type === "failure" && e.fill >= 0.8);
-  const compactions = events.filter((e) => e.type === "compaction");
-  const retries = events.filter((e) => e.type === "retry");
 
   const chart = useMemo(() => {
     if (!callId) return null;
@@ -52,11 +59,10 @@ export default function SessionAnatomy({ id }: { id: string }) {
   const width = bandRef.current?.clientWidth ?? 720;
   const X = (ts: number) => geom.x(ts) * width;
 
-  const fillAt = (ts: number): TurnRow | undefined => {
-    let last: TurnRow | undefined;
-    for (const t of turns) if (t.created <= ts) last = t;
-    return last ?? turns[0];
-  };
+  const compactions = events.filter((e) => e.type === "compaction");
+  const retries = events.filter((e) => e.type === "retry");
+  const loops = events.filter((e) => e.type === "loop");
+  const failures = events.filter((e) => e.type === "failure");
 
   return (
     <div className="h-full flex flex-col min-h-0 bg-paper">
@@ -65,8 +71,12 @@ export default function SessionAnatomy({ id }: { id: string }) {
           ← 心电图
         </button>
         <div className="min-w-0 flex-1">
-          <div className="micro">{data.session.project} · {clock(data.session.created)} 开启 · {data.session.turns} TURNS · {data.session.tool_calls} TOOLS</div>
-          <h1 className="font-mono font-extralight text-[22px] leading-tight truncate">{data.session.title ?? data.session.first_prompt ?? id}</h1>
+          <div className="micro">
+            {data.session.project} · {clock(data.session.created)} 开启 · {data.session.turns} TURNS · {data.session.tool_calls} TOOLS
+          </div>
+          <h1 className="font-mono font-extralight text-[22px] leading-tight truncate">
+            {data.session.title ?? data.session.first_prompt ?? id}
+          </h1>
           {data.session.first_prompt && data.session.title !== data.session.first_prompt && (
             <p className="tape text-ink-soft mt-0.5 line-clamp-2">“{data.session.first_prompt}”</p>
           )}
@@ -92,6 +102,23 @@ export default function SessionAnatomy({ id }: { id: string }) {
           <div ref={bandRef} className="relative hairline bg-paper-raised" style={{ height: BAND_H + PROBE_H }}>
             {/* probe layer */}
             <div className="absolute left-0 right-0 top-0" style={{ height: PROBE_H }}>
+              {loops.map((e) => (
+                <div
+                  key={`l${e.id}`}
+                  className="absolute top-[3px] h-[8px]"
+                  style={{
+                    left: X(e.at),
+                    width: Math.max(5, X(e.end_at ?? e.at) - X(e.at)),
+                    background:
+                      "repeating-linear-gradient(45deg, oklch(0.55 0.22 25 / 0.75) 0 3px, oklch(0.55 0.22 25 / 0.25) 3px 6px)",
+                  }}
+                  title={`卡死循环 ×${e.count}`}
+                >
+                  <span className="absolute -top-[3px] left-full ml-1 tape text-[8px] text-danger whitespace-nowrap leading-none">
+                    LOOP ×{e.count}
+                  </span>
+                </div>
+              ))}
               {compactions.map((e) => (
                 <button
                   key={`c${e.id}`}
@@ -101,7 +128,7 @@ export default function SessionAnatomy({ id }: { id: string }) {
                     setFlash(Date.now());
                   }}
                   onMouseLeave={() => setHoverEvent(null)}
-                  className="absolute top-1 w-[14px] h-[26px] -translate-x-1/2"
+                  className="absolute top-[10px] w-[14px] h-[26px] -translate-x-1/2"
                   style={{ left: X(e.at) }}
                   title="压缩事件"
                 >
@@ -111,37 +138,38 @@ export default function SessionAnatomy({ id }: { id: string }) {
                   </svg>
                 </button>
               ))}
-              {retryRuns(retries, X, (run) => (
-                <div
-                  key={`r${run.from}`}
-                  className="absolute top-[13px] h-[1px] bg-danger"
-                  style={{ left: run.from, width: Math.max(4, run.to - run.from) }}
-                  title={`连续重试 ×${run.count} — 代理卡住 ${duration(run.span)}`}
+              {retries.map((e) => (
+                <button
+                  key={`r${e.id}`}
+                  type="button"
+                  onMouseEnter={() => setHoverEvent(e)}
+                  onMouseLeave={() => setHoverEvent(null)}
+                  className="absolute top-[22px] h-[1px] bg-danger"
+                  style={{ left: X(e.at), width: Math.max(4, X(e.end_at ?? e.at) - X(e.at)) }}
+                  title={`重试 — 相同调用在 ${duration((e.end_at ?? e.at) - e.at)} 内重发`}
                 >
-                  <span className="absolute -top-[9px] left-0 tape text-[8px] text-danger whitespace-nowrap">
-                    RETRY ×{run.count}
+                  <span className="absolute -top-[11px] left-0 tape text-[8px] text-danger whitespace-nowrap leading-none">
+                    RETRY{e.count > 1 ? ` ×${e.count}` : ""}
                   </span>
                   <Crosshair size={9} />
-                </div>
+                </button>
               ))}
-              {events
-                .filter((e) => e.type === "failure")
-                .map((e) => {
-                  const y = PROBE_H + BAND_H * (1 - e.fill) - 5;
-                  return (
-                    <button
-                      key={`f${e.id}`}
-                      type="button"
-                      onMouseEnter={() => setHoverEvent(e)}
-                      onMouseLeave={() => setHoverEvent(null)}
-                      className="absolute w-[11px] h-[11px] -translate-x-1/2 grid place-items-center"
-                      style={{ left: X(e.at), top: y }}
-                      title="失败标记"
-                    >
-                      <Crosshair size={11} />
-                    </button>
-                  );
-                })}
+              {failures.map((e) => {
+                const y = PROBE_H + BAND_H * (1 - e.fill) - 5;
+                return (
+                  <button
+                    key={`f${e.id}`}
+                    type="button"
+                    onMouseEnter={() => setHoverEvent(e)}
+                    onMouseLeave={() => setHoverEvent(null)}
+                    className="absolute w-[11px] h-[11px] -translate-x-1/2 grid place-items-center"
+                    style={{ left: X(e.at), top: y }}
+                    title="失败标记"
+                  >
+                    <Crosshair size={11} />
+                  </button>
+                );
+              })}
             </div>
 
             {/* band body */}
@@ -160,6 +188,7 @@ export default function SessionAnatomy({ id }: { id: string }) {
                   return <rect key={s.key} x={X(t.created)} y={BAND_H - y0 - h * v} width={w} height={Math.max(0, h * v)} fill={s.color} />;
                 });
                 const isPeak = t.fill >= 0.8;
+                const afterY = BAND_H * (1 - Math.min(1, t.fill_after));
                 return (
                   <g
                     key={t.id}
@@ -172,15 +201,10 @@ export default function SessionAnatomy({ id }: { id: string }) {
                   >
                     <rect x={X(t.created)} y={0} width={w} height={BAND_H} fill="transparent" />
                     {rects}
-                    {isPeak && (
-                      <rect
-                        x={X(t.created)}
-                        y={BAND_H - h}
-                        width={w}
-                        height={h}
-                        fill="url(#hazard)"
-                      />
-                    )}
+                    {isPeak && <rect x={X(t.created)} y={BAND_H - h} width={w} height={h} fill="url(#hazard)" />}
+                    {t.fill_after > t.fill ? (
+                      <line x1={X(t.created)} x2={X(t.created) + w} y1={afterY} y2={afterY} stroke="oklch(0.62 0.13 190)" strokeWidth={1} />
+                    ) : null}
                     {t.has_error ? <rect x={X(t.created)} y={BAND_H - 2} width={w} height={2} fill="var(--color-danger)" /> : null}
                     {t.tool_calls > 0 ? (
                       <rect x={X(t.created)} y={BAND_H - 6} width={w} height={1} fill="oklch(0.2 0.05 250 / 0.55)" />
@@ -216,9 +240,7 @@ export default function SessionAnatomy({ id }: { id: string }) {
                   <span className="micro">{hoverEvent.type.toUpperCase()} @ {clock(hoverEvent.at)}</span>
                   <span className="tape text-ink">CTX {pct(hoverEvent.fill)}</span>
                 </div>
-                <div className="tape mt-1 leading-[1.45]">
-                  {describeEvent(hoverEvent, turns, fillAt, compactions)}
-                </div>
+                <div className="tape mt-1 leading-[1.45]">{describeEvent(hoverEvent)}</div>
               </div>
             )}
           </div>
@@ -231,24 +253,60 @@ export default function SessionAnatomy({ id }: { id: string }) {
                 {s.label}
               </span>
             ))}
+            <span className="tape text-ink-soft flex items-center gap-1">
+              <span className="w-3 h-[2px]" style={{ background: "oklch(0.62 0.13 190)" }} /> 回复后占用
+            </span>
             <span className="tape text-ink-soft flex items-center gap-1 ml-auto">
               <span className="w-2 h-2 hazard inline-block" /> ≥80% 过载
             </span>
           </div>
 
-          {overloadFailures.length >= 2 && (
+          {data.probe.failuresOver80 >= 2 && (
             <div className="mt-2 border border-danger px-2 py-1.5 flex items-center gap-2">
               <Crosshair size={12} />
               <span className="tape text-danger leading-[1.4]">
-                上下文过载：{overloadFailures.length} 次工具失败集中在填充率 ≥80% 区间 —— 工具调用质量已被上下文挤压拖累。
+                上下文过载：{data.probe.failuresOver80} 次工具失败集中在填充率 ≥80% 区间 —— 工具调用质量已被上下文挤压拖累。
               </span>
             </div>
           )}
 
+          <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 tabular-nums">
+            <Probe k="COMPACTION" v={data.probe.compactions} />
+            <Probe k="RETRY" v={data.probe.retries} tone={data.probe.retries >= 5 ? "danger" : undefined} />
+            <Probe k="LOOP" v={data.probe.loops} tone={data.probe.loops > 0 ? "danger" : undefined} />
+            <Probe k="FAIL ≥80%" v={data.probe.failuresOver80} tone={data.probe.failuresOver80 > 0 ? "danger" : undefined} />
+            <Probe k="AVG FILL" v={pct(data.probe.avgFill)} />
+            <Probe k="TK/行" v={data.probe.tokensPerLine ? Math.round(data.probe.tokensPerLine).toLocaleString() : "—"} />
+          </div>
+
           {/* ---------------- efficiency + timeline ---------------- */}
           <div className="grid grid-cols-[168px_minmax(0,1fr)] gap-3 mt-3">
-            <EfficiencyRing score={data.session.eff_score} output={turns.reduce((a, t) => a + t.output + t.reasoning, 0)} prompt={turns.reduce((a, t) => a + t.prompt_total, 0)} />
-            <TurnTimeline turns={turns} tools={data.tools ?? []} callId={callId} onPick={setCallId} />
+            <EfficiencyRing
+              score={data.session.eff_score}
+              output={turns.reduce((a, t) => a + t.output + t.reasoning, 0)}
+              prompt={turns.reduce((a, t) => a + t.prompt_total, 0)}
+            />
+            <div className="min-w-0">
+              <div className="flex items-baseline justify-between mb-1">
+                <span className="micro">TURNS · 轮次时间线</span>
+                <button
+                  type="button"
+                  onClick={() => setWantText((v) => !v)}
+                  className="tape hover:text-danger"
+                  title="正文体积大，默认不拉取"
+                >
+                  {wantText ? "收起正文" : "加载正文"}
+                </button>
+              </div>
+              <TurnTimeline
+                turns={turns}
+                tools={data.tools ?? []}
+                callId={callId}
+                onPick={setCallId}
+                userText={userText}
+                showText={wantText}
+              />
+            </div>
           </div>
 
           {/* ---------------- medical chart for one tool call ---------------- */}
@@ -270,6 +328,11 @@ export default function SessionAnatomy({ id }: { id: string }) {
                 <Metric k="DIFF" v={`${chart.tool.additions}+/${chart.tool.deletions}-`} />
                 <Metric k="轮次填充" v={pct(chart.turn?.fill ?? 0)} tone={(chart.turn?.fill ?? 0) > 0.8 ? "danger" : undefined} />
               </div>
+              {chart.tool.input_preview && (
+                <pre className="mt-1.5 tape text-ink-soft whitespace-pre-wrap break-all max-h-[90px] overflow-auto no-scrollbar border-t border-rule pt-1.5">
+                  {chart.tool.input_preview}
+                </pre>
+              )}
               {chart.tool.title && <div className="tape text-ink-soft mt-1.5 truncate">{chart.tool.title}</div>}
               {chart.tool.error && (
                 <pre className="mt-1.5 tape text-danger whitespace-pre-wrap break-all max-h-[120px] overflow-auto no-scrollbar border-t border-danger/30 pt-1.5">
@@ -285,14 +348,19 @@ export default function SessionAnatomy({ id }: { id: string }) {
           <div className="px-2 py-1.5 border-b border-rule micro">SUBAGENTS · 代理分叉</div>
           <TreeItem label={data.session.title ?? id} active onSelect={() => openSession(id)} meta={`${data.session.turns} T`} />
           {data.children.map((c) => (
+            <TreeItem key={c.id} label={c.title ?? c.id} meta={`${c.turns} T · ${money(c.cost)}`} onSelect={() => openSession(c.id)} />
+          ))}
+          {forksOf(data).map((f) => (
             <TreeItem
-              key={c.id}
-              label={c.title ?? c.id}
-              meta={`${c.turns} T · ${money(c.cost)}`}
-              onSelect={() => openSession(c.id)}
+              key={f.target_session}
+              label={f.title ?? f.target_session}
+              meta={`FORK · ${f.status}`}
+              onSelect={() => openSession(f.target_session)}
             />
           ))}
-          {!data.children.length && <div className="px-2 py-1.5 tape text-ink-faint">无子代理分叉</div>}
+          {!data.children.length && !forksOf(data).length && (
+            <div className="px-2 py-1.5 tape text-ink-faint">无子代理分叉</div>
+          )}
 
           <div className="px-2 py-1.5 border-y border-rule micro">PROBE LOG · 事件流水</div>
           <div className="px-2 py-1.5">
@@ -308,13 +376,12 @@ export default function SessionAnatomy({ id }: { id: string }) {
                   onMouseEnter={() => setHoverEvent(e)}
                   onMouseLeave={() => setHoverEvent(null)}
                 >
-                  <span
-                    className={`w-1.5 h-1.5 shrink-0 ${
-                      e.type === "failure" ? "bg-danger" : e.type === "compaction" ? "bg-warning" : e.type === "retry" ? "bg-danger/60" : "bg-ink-faint"
-                    }`}
-                  />
+                  <span className={`w-1.5 h-1.5 shrink-0 ${dotClass(e.type)}`} />
                   <span className="tape text-[9px] shrink-0">{clock(e.at)}</span>
-                  <span className="tape text-ink-soft truncate flex-1">{e.type}</span>
+                  <span className="tape text-ink-soft truncate flex-1">
+                    {e.type}
+                    {e.count > 1 ? ` ×${e.count}` : ""}
+                  </span>
                   <span className="tape text-[9px] tabular-nums shrink-0">{pct(e.fill)}</span>
                 </div>
               ))}
@@ -322,6 +389,29 @@ export default function SessionAnatomy({ id }: { id: string }) {
         </aside>
       </div>
     </div>
+  );
+}
+
+function dotClass(type: EventRow["type"]): string {
+  if (type === "failure" || type === "error") return "bg-danger";
+  if (type === "loop") return "bg-danger";
+  if (type === "retry") return "bg-danger/60";
+  if (type === "compaction") return "bg-warning";
+  return "bg-ink-faint";
+}
+
+/** `task`-tool forks that are outside the parent_id children list. */
+function forksOf(data: SessionPayload) {
+  const kids = new Set(data.children.map((c) => c.id));
+  return data.forks.filter((f) => f.target_session && !kids.has(f.target_session));
+}
+
+function Probe({ k, v, tone }: { k: string; v: number | string; tone?: "danger" }) {
+  return (
+    <span className="tape">
+      <span className="text-ink-faint">{k} </span>
+      <span className={tone === "danger" ? "text-danger" : "text-ink"}>{v}</span>
+    </span>
   );
 }
 
@@ -398,24 +488,29 @@ function TurnTimeline({
   tools,
   callId,
   onPick,
+  userText,
+  showText,
 }: {
   turns: TurnRow[];
   tools: ToolRow[];
   callId: string | null;
   onPick: (id: string) => void;
+  userText: Map<string, string>;
+  showText: boolean;
 }) {
   return (
     <div className="hairline bg-paper-raised overflow-y-auto no-scrollbar max-h-[260px]">
-      <div className="px-2 py-1.5 border-b border-rule micro sticky top-0 bg-paper-raised">TURNS · 轮次时间线</div>
       {turns.map((t) => {
         const ts = tools.filter((x) => x.turn_id === t.id);
+        const text = userText.get(t.id) ?? (showText ? t.text : null);
         return (
           <div key={t.id} className="px-2 py-1.5 border-b border-rule/60">
             <div className="flex items-baseline gap-2">
               <span className="tape text-ink-faint tabular-nums">{clock(t.created)}</span>
-              <span className="tape">{shortModel(t.model)}</span>
+              <span className="tape">{t.role === "user" ? "USER" : shortModel(t.model)}</span>
               <span className={`tape ml-auto tabular-nums ${t.fill > 0.8 ? "text-danger" : "text-ink-soft"}`}>CTX {pct(t.fill)}</span>
             </div>
+            <BudgetBar t={t} />
             <div className="flex flex-wrap gap-1 mt-1">
               {ts.map((x) => (
                 <button
@@ -435,9 +530,9 @@ function TurnTimeline({
                   {x.additions + x.deletions > 0 ? ` ${x.additions}+${x.deletions}-` : ""}
                 </button>
               ))}
-              {!ts.length && <span className="tape text-ink-faint">no tools · {t.finish ?? "—"}</span>}
+              {!ts.length && t.role !== "user" && <span className="tape text-ink-faint">no tools · {t.finish ?? "—"}</span>}
             </div>
-            {t.text ? <p className="tape text-ink-soft mt-1 line-clamp-2 leading-[1.4]">{t.text}</p> : null}
+            {text ? <p className="tape text-ink-soft mt-1 line-clamp-2 leading-[1.4]">{text}</p> : null}
           </div>
         );
       })}
@@ -445,61 +540,45 @@ function TurnTimeline({
   );
 }
 
-interface RetryRun {
-  from: number;
-  to: number;
-  count: number;
-  span: number;
+/** 3 px stacked bar: where this turn's context budget actually came from. */
+function BudgetBar({ t }: { t: TurnRow }) {
+  const segs = [
+    { v: t.cache_read, c: "oklch(0.78 0.06 240)", k: "缓存读" },
+    { v: t.input, c: "oklch(0.42 0.14 258)", k: "新输入" },
+    { v: t.output, c: "oklch(0.62 0.13 190)", k: "输出" },
+    { v: t.reasoning, c: "oklch(0.6 0.06 220)", k: "推理" },
+    { v: t.cache_write, c: "oklch(0.45 0.13 300)", k: "缓存写" },
+  ];
+  const total = segs.reduce((a, s) => a + s.v, 0);
+  if (total <= 0) return null;
+  return (
+    <div className="tokens mt-1" title={segs.filter((s) => s.v > 0).map((s) => `${s.k} ${compact(s.v)}`).join(" · ")}>
+      {segs.map((s) => (s.v > 0 ? <i key={s.k} style={{ width: `${(s.v / total) * 100}%`, background: s.c }} /> : null))}
+    </div>
+  );
 }
 
-/** Consecutive retries (same call within 2 min) collapse into one "stuck agent" bar. */
-function retryRuns(
-  retries: EventRow[],
-  X: (ts: number) => number,
-  render: (run: RetryRun) => React.ReactNode
-) {
-  const runs: RetryRun[] = [];
-  let t0 = 0;
-  let t1 = 0;
-  for (const e of [...retries].sort((a, b) => a.at - b.at)) {
-    const last = runs[runs.length - 1];
-    if (last && e.at - t1 < 120000) {
-      last.to = X(e.at);
-      last.count += 1;
-      t1 = e.at;
-      last.span = t1 - t0;
-    } else {
-      runs.push({ from: X(e.at), to: X(e.at), count: 1, span: 0 });
-      t0 = e.at;
-      t1 = e.at;
-    }
+function describeEvent(e: EventRow): string {
+  const d = detailOf(e) ?? {};
+  const span = e.end_at && e.end_at > e.at ? duration(e.end_at - e.at) : null;
+  switch (e.type) {
+    case "compaction":
+      return [
+        `上下文达 ${pct(e.fill)}，触发${d.reason === "auto" ? "自动" : "手动"}压缩。`,
+        d.before != null ? `压缩前 ${compact(d.before)} → ${d.after != null ? `压缩后 ${compact(d.after)}` : "压缩后未记录"}${d.delta != null ? `（Δ ${d.delta >= 0 ? "+" : ""}${compact(d.delta)}）` : ""}。` : "",
+        d.summary ? `摘要：${d.summary.slice(0, 90)}` : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+    case "retry":
+      return `${d.tool ?? "tool"} 在失败后重发同一调用${span ? `，间隔 ${span}` : ""}${d.title ? `：${d.title.slice(0, 70)}` : ""}`;
+    case "loop":
+      return `代理卡住 —— 相同调用连续 ${e.count} 次${span ? `，横跨 ${span}` : ""}：${(d.sig ?? "").slice(0, 70)}`;
+    case "failure":
+      return `${d.tool ?? "tool"} 在填充率 ${pct(e.fill)} 处失败：${(d.error ?? "").slice(0, 120)}`;
+    case "error":
+      return `提供方错误：${d.reason ?? ""} ${(d.error ?? "").slice(0, 90)}`;
+    default:
+      return `${e.type} @ ${pct(e.fill)} ${(d.summary ?? d.error ?? "").slice(0, 90)}`;
   }
-  return runs.map((r, i) => render(r));
-}
-
-function describeEvent(
-  e: EventRow,
-  turns: TurnRow[],
-  fillAt: (ts: number) => TurnRow | undefined,
-  compactions: EventRow[]
-): string {
-  const detail = (() => {
-    try {
-      return JSON.parse(e.detail ?? "{}");
-    } catch {
-      return {};
-    }
-  })();
-  const before = fillAt(e.at);
-  if (e.type === "compaction") {
-    const after = turns.find((t) => t.created > e.at);
-    const busy = before?.tool_calls ? "正在执行工具调用" : "等待续写";
-    return `上下文达 ${pct(e.fill)}，触发${detail.reason === "auto" ? "自动" : "手动"}压缩。${
-      after ? `压缩前 ${compact(before?.occupancy ?? 0)} → 压缩后 ${compact(after.occupancy)}。` : ""
-    }触发时${busy}。`;
-  }
-  if (e.type === "failure") return `${detail.tool ?? "tool"} 在填充率 ${pct(e.fill)} 处失败：${(detail.error ?? "").slice(0, 120)}`;
-  if (e.type === "retry") return `${detail.tool ?? "tool"} 重复调用（相同参数）— 代理在此打转。`;
-  if (e.type === "error") return `提供方错误：${detail.reason ?? ""} ${(detail.detail ?? "").slice(0, 90)}`;
-  return `${e.type} @ ${pct(e.fill)} ${(detail.detail ?? "").slice(0, 90)}`;
 }

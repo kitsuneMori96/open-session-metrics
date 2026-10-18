@@ -11,22 +11,43 @@ const H = 58;
 export default function FocusTrace({ window: win }: { window: TimeWindow }) {
   const { data } = useFocus(win);
 
-  const { path, last } = useMemo(() => {
+  const { path, last, guides } = useMemo(() => {
     const series = data?.series ?? [];
-    if (series.length < 2) return { path: "", last: null as null | { at: number; gap: number } };
+    const empty = { path: "", last: null as null | { at: number; gap: number }, guides: [] as { y: number; color: string; label: string }[] };
+    if (series.length < 2) return empty;
     const x = scaleLinear().domain([series[0].at, series[series.length - 1].at]).range([0, W]);
-    const y = scaleLog().domain([0.5, Math.max(60, data!.max)]).range([H - 4, 2]).clamp(true);
+    // One 9h absence otherwise flattens the whole trace, so cap the domain at p99.
+    const top = Math.max(120, data!.p99 || data!.max);
+    const y = scaleLog().domain([0.5, top]).range([H - 4, 2]).clamp(true);
     const gen = line<{ at: number; gap: number }>()
       .x((d) => x(d.at))
       .y((d) => y(Math.max(0.5, d.gap)));
-    return { path: gen(series) ?? "", last: series[series.length - 1] };
+    return {
+      path: gen(series) ?? "",
+      last: series[series.length - 1],
+      guides: [
+        { y: y(15), color: "var(--color-good)", label: "专注线 15s" },
+        { y: y(120), color: "var(--color-warning)", label: "打断线 2min" },
+      ],
+    };
   }, [data]);
 
   return (
     <div className="p-2">
       <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="block">
         <line x1="0" x2={W} y1={H - 4} y2={H - 4} stroke="oklch(0.2 0.05 250 / 0.3)" />
-        <line x1="0" x2={W} y1={15} y2={15} stroke="oklch(0.2 0.05 250 / 0.1)" strokeDasharray="2 3" />
+        {guides.map((g) => (
+          <line
+            key={g.label}
+            x1="0"
+            x2={W}
+            y1={g.y}
+            y2={g.y}
+            stroke={g.color}
+            strokeOpacity={0.5}
+            strokeDasharray="2 3"
+          />
+        ))}
         {path && (
           <path d={path} fill="none" stroke="var(--color-ink)" strokeWidth="1" className="trace-in" style={{ ["--len" as string]: 2400 }} />
         )}

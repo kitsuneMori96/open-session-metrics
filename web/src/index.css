@@ -111,6 +111,19 @@ body {
   letter-spacing: 0.08em;
 }
 
+/* stacked token-budget bar: one cell per part of a turn's context */
+.tokens {
+  display: flex;
+  height: 3px;
+  width: 100%;
+  overflow: hidden;
+  background: oklch(0.2 0.05 250 / 0.08);
+}
+.tokens > i {
+  display: block;
+  height: 100%;
+}
+
 /* hazard stripes for the >80 % context overload zone */
 .hazard {
   background-image: repeating-linear-gradient(
@@ -118,6 +131,36 @@ body {
     oklch(0.55 0.22 25 / 0.16) 0 4px,
     transparent 4px 8px
   );
+}
+
+/* fader knob for the what-if sandbox mixer */
+.knob {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 14px;
+  background: transparent;
+  cursor: ew-resize;
+}
+.knob::-webkit-slider-runnable-track {
+  height: 1px;
+  background: var(--color-rule-strong);
+}
+.knob::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 8px;
+  height: 12px;
+  margin-top: -6px;
+  background: var(--color-ink);
+}
+.knob::-moz-range-track {
+  height: 1px;
+  background: var(--color-rule-strong);
+}
+.knob::-moz-range-thumb {
+  width: 8px;
+  height: 12px;
+  border: 0;
+  background: var(--color-ink);
 }
 
 /* oscilloscope scanline that tracks the cursor */

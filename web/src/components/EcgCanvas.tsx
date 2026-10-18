@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { scaleLinear, scaleSqrt } from "d3-scale";
 import { useCockpit } from "../state/CockpitContext";
-import { useEcg, useSessions, DAY, type FlowPoint, type SessionRow } from "../lib/api";
+import {
+  useEcg,
+  useMarkers,
+  useSessions,
+  DAY,
+  type FlowPoint,
+  type MarkerRow,
+  type SessionRow,
+} from "../lib/api";
 import { clock, compact, dateShort, modelColor, money, shortModel } from "../lib/format";
 import { Spinner } from "./ui";
 
@@ -25,6 +33,7 @@ export default function EcgCanvas() {
   const { window, openSession } = useCockpit();
   const { data: ecg } = useEcg(window);
   const { data: sessions } = useSessions(window);
+  const { data: markers } = useMarkers(window);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 900, h: 460 });
   const [hover, setHover] = useState<Hover | null>(null);
@@ -56,6 +65,15 @@ export default function EcgCanvas() {
     [grouped]
   );
 
+  const laneMarkers = useMemo(() => {
+    const byLane = new Map<string, MarkerRow[]>();
+    for (const m of markers ?? []) {
+      if (!byLane.has(m.project)) byLane.set(m.project, []);
+      byLane.get(m.project)!.push(m);
+    }
+    return byLane;
+  }, [markers]);
+
   const plotW = Math.max(80, size.w - PAD_L - PAD_R);
   const plotH = Math.max(60, size.h - PAD_T - AXIS_H);
   const laneH = lanes.length ? Math.max(LANE_MIN_H, plotH / lanes.length) : plotH;
@@ -78,9 +96,14 @@ export default function EcgCanvas() {
   const dayTicks = useMemo(() => {
     const days = (window.to - window.from) / DAY;
     const step = days > 120 ? 14 : days > 60 ? 7 : days > 20 ? 3 : days > 8 ? 1 : 0.25;
+    const ms = step * DAY;
+    // Anchor on local midnight: UTC-aligned ticks made every label read "08:00".
+    const midnight = new Date(window.from);
+    midnight.setHours(0, 0, 0, 0);
     const out: number[] = [];
-    const start = Math.ceil(window.from / (step * DAY)) * step * DAY;
-    for (let t = start; t <= window.to; t += step * DAY) out.push(t);
+    let t = midnight.getTime();
+    while (t < window.from) t += ms;
+    for (; t <= window.to; t += ms) out.push(t);
     return out;
   }, [window.from, window.to]);
 
@@ -157,7 +180,7 @@ export default function EcgCanvas() {
                   y1={yOf(i, pts[j].tokens)}
                   x2={PAD_L + x(p.bucket)}
                   y2={yOf(i, p.tokens)}
-                  stroke={modelColor(p.dominant_model)}
+                  stroke={modelColor(p.model)}
                   strokeWidth={1}
                 />
               ))}
@@ -169,12 +192,12 @@ export default function EcgCanvas() {
                     cx={PAD_L + x(p.bucket)}
                     cy={yOf(i, p.tokens)}
                     r={2.2}
-                    fill={modelColor(p.dominant_model)}
+                    fill={modelColor(p.model)}
                     stroke="var(--color-paper)"
                     strokeWidth={0.7}
                   />
                 ))}
-              {pts.filter((p) => p.peak_fill > 0.85).map((p) => (
+              {pts.filter((p) => p.peak > 0.85).map((p) => (
                 <rect
                   key={`ov${lane}${p.bucket}`}
                   x={PAD_L + x(p.bucket) - 1.5}
@@ -184,6 +207,49 @@ export default function EcgCanvas() {
                   fill="oklch(0.55 0.22 25 / 0.5)"
                 />
               ))}
+              {/* event markers: compaction arrows, retry/loop bars, failure crosses */}
+              {(laneMarkers.get(lane) ?? []).map((m, k) => {
+                const mx = PAD_L + x(m.at);
+                if (mx < PAD_L || mx > size.w - PAD_R) return null;
+                if (m.type === "compaction") {
+                  return (
+                    <g key={`cm${lane}${k}`} transform={`translate(${mx},${laneTop(i)})`}>
+                      <line x1={0} x2={0} y1={0} y2={7} stroke="var(--color-warning)" strokeWidth={1} />
+                      <path d="M-2.6 6 L0 12 L2.6 6 Z" fill="var(--color-warning)">
+                        <title>{`上下文压缩 @ ${clock(m.at)}`}</title>
+                      </path>
+                    </g>
+                  );
+                }
+                if (m.type === "retry" || m.type === "loop") {
+                  const x2 = PAD_L + x(m.end_at ?? m.at);
+                  return (
+                    <g key={`rm${lane}${k}`}>
+                      <line
+                        x1={mx}
+                        x2={Math.max(mx + 2, x2)}
+                        y1={laneTop(i) + 4}
+                        y2={laneTop(i) + 4}
+                        stroke="var(--color-danger)"
+                        strokeWidth={m.type === "loop" ? 2.2 : 1}
+                        strokeOpacity={0.8}
+                      >
+                        <title>{`${m.type === "loop" ? "卡住循环" : "重试"} ×${m.count ?? 1} @ ${clock(m.at)}`}</title>
+                      </line>
+                    </g>
+                  );
+                }
+                if (m.type !== "failure") return null;
+                const fy = laneBase(i) - usableH * Math.min(1, m.fill);
+                return (
+                  <g key={`fm${lane}${k}`} transform={`translate(${mx},${fy})`}>
+                    <line x1={-2.6} y1={-2.6} x2={2.6} y2={2.6} stroke="var(--color-danger)" strokeWidth={1.2} />
+                    <line x1={-2.6} y1={2.6} x2={2.6} y2={-2.6} stroke="var(--color-danger)" strokeWidth={1.2}>
+                      <title>{`工具失败 @ ${clock(m.at)} · 上下文 ${(m.fill * 100).toFixed(0)}%`}</title>
+                    </line>
+                  </g>
+                );
+              })}
             </g>
           );
         })}
@@ -221,6 +287,12 @@ export default function EcgCanvas() {
         ))}
       </div>
 
+      <div className="absolute top-1 right-3 flex items-center gap-2 pointer-events-none">
+        <span className="micro" style={{ color: "var(--color-warning)" }}>▼ 压缩</span>
+        <span className="micro text-danger">— 重试 / 循环</span>
+        <span className="micro text-danger">✕ 工具失败</span>
+      </div>
+
       {hover && (
         <div
           className="absolute z-10 pointer-events-none hairline bg-paper-raised px-2 py-1.5 w-[272px]"
@@ -242,9 +314,12 @@ export default function EcgCanvas() {
                 <span className="tape text-flow ml-auto">{money(hover.point.cost)}</span>
               </div>
               <div className="mt-1 flex items-center gap-1.5">
-                <span className="w-2 h-2 inline-block" style={{ background: modelColor(hover.point.dominant_model) }} />
-                <span className="tape">{shortModel(hover.point.dominant_model)}</span>
-                <span className="tape text-ink-faint ml-auto">CTX {(hover.point.peak_fill * 100).toFixed(0)}%</span>
+                <span className="w-2 h-2 inline-block" style={{ background: modelColor(hover.point.model) }} />
+                <span className="tape">{shortModel(hover.point.model)}</span>
+                <span className="tape text-ink-faint ml-auto">CTX {(hover.point.peak * 100).toFixed(0)}%</span>
+              </div>
+              <div className="micro mt-1">
+                缓存读 {compact(hover.point.cache)} TK · {hover.point.sessions} 会话
               </div>
             </>
           ) : (

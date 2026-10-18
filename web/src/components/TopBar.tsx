@@ -13,8 +13,8 @@ export default function TopBar() {
     <header className="h-[50px] shrink-0 hairline-b bg-paper flex items-stretch">
       <div className="flex items-center gap-3 px-3 border-r border-rule">
         <div className="leading-none">
-          <div className="font-mono font-extralight text-[26px] tracking-[-0.03em]">HOLO</div>
-          <div className="micro -mt-[3px]">COCKPIT</div>
+          <div className="font-mono font-extralight text-[26px] tracking-[-0.03em]">SESSION</div>
+          <div className="micro -mt-[3px]">METRICS</div>
         </div>
         <div className="w-px h-7 bg-rule" />
         <div className="leading-none">
@@ -29,9 +29,15 @@ export default function TopBar() {
           </div>
         </div>
         <div className="leading-none">
-          <div className="micro">TOKENS</div>
+          <div className="micro">TOKENS GEN</div>
           <div className="font-mono font-extralight text-[26px] leading-[1.05] tabular-nums text-flow">
-            {compact(totals?.tokens ?? 0)}
+            {compact(totals?.generated ?? 0)}
+          </div>
+        </div>
+        <div className="leading-none">
+          <div className="micro">CACHE READ</div>
+          <div className="font-mono font-extralight text-[26px] leading-[1.05] tabular-nums text-ink-faint">
+            {compact(totals?.cache_read ?? 0)}
           </div>
         </div>
       </div>
