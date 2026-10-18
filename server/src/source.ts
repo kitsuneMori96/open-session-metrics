@@ -70,6 +70,8 @@ export interface SrcTool {
   inputPreview: string | null;
   /** child session id when this tool spawned a sub-agent (`task`/`subagent`) */
   targetSession: string | null;
+  /** absolute paths touched by this call — used to infer the real project lane */
+  paths: string[];
 }
 
 export interface SrcEvent {
@@ -102,6 +104,26 @@ export function projectName(directory: string | null | undefined): string {
   if (!trimmed || trimmed === "/") return "/";
   const parts = trimmed.split(/[\\/]/);
   return parts[parts.length - 1] || trimmed;
+}
+
+/** Absolute paths a tool call touched (explicit fields, diff file list, shell command tokens). */
+function pathsOf(input: any, files: any): string[] {
+  const out: string[] = [];
+  const push = (v: unknown) => {
+    if (typeof v === "string" && v.startsWith("/") && v.length > 1) out.push(v);
+  };
+  push(input?.path);
+  push(input?.filePath);
+  push(input?.file_path);
+  push(input?.notebookPath);
+  push(input?.notebook_path);
+  if (Array.isArray(input?.paths)) input.paths.forEach(push);
+  if (Array.isArray(files)) for (const f of files) push(typeof f === "string" ? f : f?.file ?? f?.path);
+  const cmd = input?.command;
+  if (typeof cmd === "string") {
+    for (const m of cmd.matchAll(/\/(?:home|Users|mnt|srv|opt|root|var|workspace)\/[^\s"'`;|&)]{2,}/g)) out.push(m[0]);
+  }
+  return out;
 }
 
 function fileStats(files: any): { additions: number; deletions: number; files: number } {
@@ -336,6 +358,7 @@ export class SourceReader {
             error: st.status === "error" ? (st.error?.message ?? "tool error") : null,
             sig: hashSig(item.name ?? "unknown", st.input),
             inputPreview,
+            paths: pathsOf(st.input, st.metadata?.files),
             targetSession: inputPreview ? SESSION_ID_RE.exec(inputPreview)?.[0] ?? null : null,
           });
         }
@@ -416,6 +439,7 @@ export class SourceReader {
             error: st.status === "error" ? (st.error ?? st.output ?? "tool error") : null,
             sig: hashSig(p.tool ?? "unknown", st.input),
             inputPreview,
+            paths: pathsOf(st.input, p.files),
             targetSession: inputPreview ? SESSION_ID_RE.exec(inputPreview)?.[0] ?? null : null,
           });
         }

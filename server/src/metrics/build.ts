@@ -52,6 +52,53 @@ interface ProbeEvent {
 }
 
 /**
+ * Most OpenCode sessions are launched from `/` or the home directory, so
+ * `directory` alone makes the ECG collapse into meaningless lanes. Recover the
+ * real project from the absolute paths the session's tools actually touched.
+ */
+const CONTAINERS = /\/(?:projects|repos|plugins|workspace|Code)\/([^/.][^/]*)\//;
+const HOME_LEVEL = /^\/(?:home|Users)\/([^/]+)\/([^/.][^/]*)\//;
+const ROOT_LEVEL = /^\/(?:tmp|srv|opt|data|work)\/([^/.][^/]*)\//;
+const IGNORED = new Set([
+  "home", "root", "users", "usr", "tmp", "var", "srv", "opt", "bin", "lib", "src", "dist",
+  "data", "log", "logs", "cache", "config", "appdata", "desktop", "documents", "downloads",
+  "program", "programs", "programdata", "node_modules", "versions", "share", "code",
+]);
+
+const isJunkLane = (project: string, accounts: Set<string>) =>
+  !project || project === "/" || project === "unknown" || accounts.has(project);
+
+export function inferProject(paths: string[], fallback: string, accounts: Set<string>): string {
+  const votes = new Map<string, number>();
+  const vote = (label: string | null | undefined, weight: number) => {
+    if (!label) return;
+    const l = label.toLowerCase();
+    if (l.startsWith(".") || l.length < 3 || IGNORED.has(l)) return;
+    votes.set(label, (votes.get(label) ?? 0) + weight);
+  };
+  for (const raw of paths) {
+    const p = raw.replace(/^\/mnt\/[a-zA-Z]\//, "/");
+    const container = p.match(CONTAINERS);
+    if (container) vote(container[1], 4);
+    else {
+      const home = p.match(HOME_LEVEL);
+      if (home) vote(home[2], 2);
+      else vote(p.match(ROOT_LEVEL)?.[1], 1);
+    }
+  }
+  const junk = isJunkLane(fallback, accounts);
+  let bestV = junk ? 0 : 2;
+  let best = junk ? "unknown" : fallback;
+  for (const [label, v] of votes) if (v > bestV) ((bestV = v), (best = label));
+  return best;
+}
+
+/** `kitsunemori` from `/home/kitsunemori` (also WSL-mounted `C:\Users\…`). */
+export function accountOf(path: string | null | undefined): string | null {
+  return (path ?? "").replace(/^\/mnt\/[a-zA-Z]\//, "/").match(/^\/(?:home|Users)\/([^/]+)$/)?.[1] ?? null;
+}
+
+/**
  * Re-materialize `sessionIds` (all sessions when omitted) into `db`.
  * - `mode: "full"` assumes an empty target file (tables are created, never dropped here).
  * - `mode: "incremental"` deletes and rewrites only those sessions, then
@@ -80,6 +127,38 @@ export async function build(
     for (const t of turnsRaw) if (t.role === "assistant" && t.model) wanted.add(catalogKey(t.provider, t.model));
     const catalog: Catalog = await loadCatalog(wanted);
     const patchFiles = src.patchFileCounts(targetIds);
+
+    // ---- ECG lanes: recover the project from the files each session touched ----
+    const pathsBySession = new Map<string, string[]>();
+    for (const t of turnsRaw) {
+      if (!t.tools.length) continue;
+      const arr = pathsBySession.get(t.sessionId) ?? [];
+      for (const tl of t.tools) arr.push(...tl.paths);
+      pathsBySession.set(t.sessionId, arr);
+    }
+    for (const [sid, info] of patchFiles) {
+      const arr = pathsBySession.get(sid) ?? [];
+      arr.push(...info.paths);
+      pathsBySession.set(sid, arr);
+    }
+    const accounts = new Set(
+      allSessions.map((s) => accountOf(s.directory)).filter((a): a is string => !!a)
+    );
+    for (const s of sessionById.values()) {
+      s.project = inferProject(pathsBySession.get(s.id) ?? [], s.project, accounts);
+    }
+    // Sub-agent sessions rarely touch files themselves — borrow the parent's lane.
+    for (let pass = 0; pass < 3; pass++) {
+      let changed = false;
+      for (const s of sessionById.values()) {
+        if (!isJunkLane(s.project, accounts)) continue;
+        const parent = s.parentId ? allById.get(s.parentId) : null;
+        if (parent && !isJunkLane(parent.project, accounts)) ((s.project = parent.project), (changed = true));
+      }
+      if (!changed) break;
+    }
+    // Sessions with no file evidence at all are scratch work, not a real project.
+    for (const s of sessionById.values()) if (isJunkLane(s.project, accounts)) s.project = "scratch";
 
     const info = (provider: string | null | undefined, model: string | null | undefined) =>
       catalog[catalogKey(provider, model)] ?? catalog[catalogKey("opencode", model)] ?? null;
