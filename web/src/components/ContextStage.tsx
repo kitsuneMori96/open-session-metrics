@@ -370,7 +370,7 @@ function LaneRow({
    * joining across it and inventing a straight line through time that did not exist.
    */
   const curve = useMemo(() => {
-    const pts = lane.days
+    const pts: { i: number; avg: number }[] = lane.days
       .filter((d) => d.fillAvg != null)
       .map((d) => ({ i: idxOf(d.day), avg: d.fillAvg as number }));
     const runs: (typeof pts)[] = [];
@@ -385,7 +385,7 @@ function LaneRow({
       prev = p.i;
     }
     if (run.length) runs.push(run);
-    return { pts, runs };
+    return { runs };
   }, [lane, idxOf]);
 
   const marks = useMemo(
