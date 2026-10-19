@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
-import { useAnalytics, type SessionRow } from "../lib/api";
+import { DEFAULT_PRESET, useAnalytics, type SessionRow } from "../lib/api";
 import { TOKEN_CLASSES, paletteFor } from "../lib/chart";
 import { dur, int, pct, pctInt, rate, shortModel, tok, usd, usdPerM } from "../lib/format";
 import { useSlice } from "../lib/slice";
@@ -165,7 +165,7 @@ export default function Overview() {
             format={split === "cost" ? (v) => usd(v) : tok}
             onWindow={setWindow}
             windowLabel={window.kind === "custom" ? label : undefined}
-            onClearWindow={() => setPreset("30d")}
+            onClearWindow={() => setPreset(DEFAULT_PRESET)}
             height={196}
             tipExtra={(b) => [
               { label: "cost", value: usd(b.cost) },

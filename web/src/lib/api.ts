@@ -30,7 +30,7 @@ export const DAY = 86_400_000;
  */
 export type WindowSpec = { kind: "preset"; id: PresetId } | { kind: "custom"; from: number; to: number };
 
-export const DEFAULT_PRESET: PresetId = "30d";
+export const DEFAULT_PRESET: PresetId = "24h";
 
 export const PRESETS = [
   { id: "24h", label: "24h", ms: DAY },
@@ -44,9 +44,12 @@ export type PresetId = (typeof PRESETS)[number]["id"];
 
 const presetOf = (id: string): (typeof PRESETS)[number] | undefined => PRESETS.find((p) => p.id === id);
 
+/** Resolved once so an unknown id in the URL falls back to the default, not to an index. */
+const DEFAULT = presetOf(DEFAULT_PRESET)!;
+
 export function resolveWindow(w: WindowSpec, now: number): { from: number; to: number } {
   if (w.kind === "custom") return { from: w.from, to: w.to };
-  const preset = presetOf(w.id) ?? PRESETS[2];
+  const preset = presetOf(w.id) ?? DEFAULT;
   return preset.ms > 0 ? { from: now - preset.ms, to: now } : { from: 0, to: now };
 }
 
