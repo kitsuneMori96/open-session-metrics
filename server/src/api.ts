@@ -6,18 +6,6 @@ import { getMeta, getMetaNumber } from "./metrics/schema";
 import { buildTrendBuckets } from "./metrics/trend";
 import type { BuildReport } from "./metrics/build";
 
-const DAY = 86400000;
-const HOUR = 3600000;
-
-/** Filter chips on the Overview screen, in the order the TUI cycles them with `f`. */
-export const RANGES = [
-  { id: "today", label: "today", ms: 0 },
-  { id: "7d", label: "last 7d", ms: 7 * DAY },
-  { id: "30d", label: "last 30d", ms: 30 * DAY },
-  { id: "90d", label: "last 90d", ms: 90 * DAY },
-  { id: "all", label: "all time", ms: 0 },
-] as const;
-
 export function createApp(deps: {
   db: () => DatabaseSync;
   refresh: (full: boolean) => Promise<BuildReport | undefined>;
