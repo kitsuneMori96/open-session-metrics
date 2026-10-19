@@ -269,6 +269,48 @@ export function useEcgOps(w: TimeWindow, project?: string | null) {
   });
 }
 
+/** One local day of one project, from `/api/ecg/daily`. `add`/`del` are incremental
+ * edit lines; `write` is full-file line count — two units that are never summed. */
+export interface DailyCell {
+  day: number;
+  add: number;
+  del: number;
+  write: number;
+  gen: number;
+  cache: number;
+  cost: number;
+  turns: number;
+  sessions: number;
+  tools: number;
+  errors: number;
+  peak: number;
+  compactions: number;
+  retries: number;
+  loops: number;
+}
+export interface DailyTotals {
+  add: number; del: number; write: number; gen: number; cache: number; cost: number;
+  turns: number; sessions: number; tools: number; errors: number;
+  compactions: number; retries: number; loops: number; activeDays: number;
+}
+export interface DailyLane {
+  project: string;
+  days: DailyCell[];
+  totals: DailyTotals;
+  /** last day with any activity — the recency key the lane order uses */
+  lastDay: number;
+  recent: number;
+}
+
+/** Daily/hourly roll-up feeding the wide-window stage (one row per project × bucket). */
+export function useEcgDaily(w: TimeWindow, bucket: "day" | "hour" = "day") {
+  return useQuery({
+    queryKey: ["ecg-daily", rangeKey(w), bucket],
+    queryFn: () => get<{ from: number; to: number; bucketMs: number; lanes: DailyLane[] }>(`/api/ecg/daily?${qs(w)}&bucket=${bucket}`),
+    staleTime: 60000,
+  });
+}
+
 /** ECG marker layer: compaction arrows, retry/loop bars, failure crosses. */
 export function useMarkers(w: TimeWindow, types = "compaction,retry,loop,failure") {
   return useQuery({

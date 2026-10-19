@@ -84,7 +84,10 @@ export default function TimeScrubber({
     return out;
   }, [lo, hi, span]);
 
-  const days = Math.max(1, Math.round((win.to - win.from) / DAY));
+  const spanMs = win.to - win.from;
+  const days = Math.max(1, Math.round(spanMs / DAY));
+  // Below a day the rounded day count would read "1D" for a one-hour drill-down.
+  const windowLabel = spanMs >= DAY ? `${days}D` : `${Math.max(1, Math.round(spanMs / (DAY / 24)))}H`;
 
   return (
     <div className="flex items-center gap-3 select-none">
@@ -162,7 +165,7 @@ export default function TimeScrubber({
       </div>
 
       <div className="tape text-ink tabular-nums whitespace-nowrap w-[112px]">
-        {days}D WINDOW
+        {windowLabel} WINDOW
       </div>
     </div>
   );

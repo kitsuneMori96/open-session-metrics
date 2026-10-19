@@ -39,6 +39,22 @@ async function main() {
   await check("status", "/api/status", (j) => (j.counts.sessions > 0 ? null : `no sessions materialized: ${JSON.stringify(j.counts)}`));
   await check("overview", `/api/overview?${qs}`, (j) => (j.byModel?.length ? null : "no model breakdown"));
   await check("ecg", `/api/ecg?${qs}`, (j) => (j.points?.length ? null : "empty ECG series"));
+  await check("ecg ops", `/api/ecg/ops?${qs}`, (j) =>
+    j.tools?.length && j.turns?.length ? null : `empty operation feed: ${JSON.stringify({ tools: j.tools?.length, turns: j.turns?.length })}`
+  );
+  await check("ecg daily", `/api/ecg/daily?${qs}`, (j) => {
+    if (!j.lanes?.length) return "no daily lanes";
+    if (!(j.bucketMs > 0)) return "missing bucket size";
+    const lane = j.lanes[0];
+    if (!lane.days?.length) return "lane has no buckets";
+    // output must exist: the whole point of the diff fix is that days stop reading as zero
+    const out = j.lanes.reduce((a: number, l: any) => a + l.totals.add + l.totals.write, 0);
+    if (!(out > 0)) return "every lane reports zero output";
+    return null;
+  });
+  await check("ecg daily (hour)", `/api/ecg/daily?${qs}&bucket=hour`, (j) =>
+    j.bucketMs === 3600000 && j.lanes?.length ? null : `hourly bucket not applied: ${j.bucketMs}`
+  );
   await check("sessions", `/api/sessions?${qs}`, (j) => (Array.isArray(j) && j.length ? null : "no sessions in window"));
   await check("heatmap", `/api/heatmap?${qs}`, (j) => (j.cells?.length ? null : "empty heatmap"));
   await check("focus", `/api/focus?${qs}`, (j) => (typeof j.p50 === "number" ? null : "no focus stats"));

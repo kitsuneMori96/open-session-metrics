@@ -324,6 +324,109 @@ export function createApp(deps: {
     res.json({ tools, turns, spans, truncated: tools.length >= LIMIT || turns.length >= LIMIT });
   });
 
+  /**
+   * Daily/hourly roll-up for the wide-window ECG: one row per (project, bucket).
+   *
+   * `bucket=day` (default) uses the local day; `bucket=hour` uses the local hour, so the
+   * same lane rendering covers 6 hours and 6 weeks and the zoom stays continuous.
+   *
+   * Output is deliberately split into two units that must never be added:
+   * `add`/`del` are incremental edits parsed from tool diffs, `write` is the line
+   * count of full-file writes. Buckets with no activity are simply absent, so a gap
+   * in the series means the project was idle — not that it scored zero.
+   */
+  app.get("/api/ecg/daily", (req, res) => {
+    const win = windowOf(req, res);
+    if (!win) return;
+    const { from, to } = win;
+    const hourly = String(req.query.bucket ?? "day") === "hour";
+    const bucketMs = hourly ? HOUR : DAY;
+    // `day`/`hour` are already local-wall-clock columns, so this bucket is local too.
+    const keyExpr = hourly ? "day + hour * 3600000" : "day";
+
+    const rows = q<any>(
+      `SELECT project, ${keyExpr} AS day,
+              COALESCE(SUM(additions),0) AS "add", COALESCE(SUM(deletions),0) AS "del",
+              COALESCE(SUM(write_lines),0) AS write,
+              COALESCE(SUM(output+reasoning),0) AS gen, COALESCE(SUM(cache_read),0) AS cache,
+              COALESCE(SUM(cost),0) AS cost,
+              COUNT(*) AS turns, COUNT(DISTINCT session_id) AS sessions,
+              COALESCE(SUM(tool_calls),0) AS tools, COALESCE(SUM(tool_errors),0) AS errors,
+              MAX(fill) AS peak
+       FROM turns WHERE role='assistant' AND created BETWEEN ? AND ?
+       GROUP BY project, day ORDER BY day`,
+      from,
+      to
+    );
+
+    // Probe counts are joined in from the event layer, bucketed to the local bucket the
+    // event happened on (events carry no bucket column of their own).
+    const probeRows = q<{ project: string; type: string; at: number }>(
+      `SELECT s.project, e.type, e.at FROM events e JOIN sessions s ON s.id = e.session_id
+       WHERE e.at BETWEEN ? AND ? AND e.type IN ('compaction','retry','loop')`,
+      from,
+      to
+    );
+    const probes = new Map<string, { compactions: number; retries: number; loops: number }>();
+    for (const p of probeRows) {
+      const d = new Date(p.at);
+      if (hourly) d.setMinutes(0, 0, 0);
+      else d.setHours(0, 0, 0, 0);
+      const key = `${p.project}|${d.getTime()}`;
+      const cell = probes.get(key) ?? { compactions: 0, retries: 0, loops: 0 };
+      if (p.type === "compaction") cell.compactions++;
+      else if (p.type === "retry") cell.retries++;
+      else cell.loops++;
+      probes.set(key, cell);
+    }
+
+    const lanes = new Map<string, {
+      project: string;
+      days: any[];
+      totals: Record<string, number>;
+    }>();
+    for (const r of rows) {
+      const project = String(r.project);
+      let lane = lanes.get(project);
+      if (!lane) {
+        lane = { project, days: [], totals: { add: 0, del: 0, write: 0, gen: 0, cache: 0, cost: 0, turns: 0, sessions: 0, tools: 0, errors: 0, compactions: 0, retries: 0, loops: 0, activeDays: 0 } };
+        lanes.set(project, lane);
+      }
+      const p = probes.get(`${project}|${r.day}`) ?? { compactions: 0, retries: 0, loops: 0 };
+      const day = {
+        day: Number(r.day),
+        add: Number(r.add), del: Number(r.del), write: Number(r.write),
+        gen: Number(r.gen), cache: Number(r.cache), cost: Number(r.cost),
+        turns: Number(r.turns), sessions: Number(r.sessions),
+        tools: Number(r.tools), errors: Number(r.errors),
+        peak: Number(r.peak ?? 0),
+        ...p,
+      };
+      lane.days.push(day);
+      for (const k of ["add", "del", "write", "gen", "cache", "cost", "turns", "tools", "errors", "compactions", "retries", "loops"] as const) {
+        lane.totals[k] += day[k];
+      }
+      lane.totals.sessions += day.sessions;
+      lane.totals.activeDays++;
+    }
+
+    // Lanes are ordered by recent activity: the last bucket the project did anything,
+    // then that recency band's output. Dead projects drift to the bottom instead of
+    // holding a lane while a live one is pushed into the overflow tally.
+    const span = to - from;
+    const recentCut = to - Math.max(3 * bucketMs, span * 0.25);
+    const out = [...lanes.values()].map((lane) => {
+      const last = lane.days.at(-1)?.day ?? 0;
+      const recent = lane.days.filter((d) => d.day >= recentCut).reduce((a, d) => a + d.add + d.write, 0);
+      return { ...lane, lastDay: last, recent };
+    });
+    // A lane that only ever opened a session (a few stray tokens, no diff) is noise.
+    const live = out.filter((l) => l.totals.gen >= 1000 || l.totals.add > 0 || l.totals.write > 0);
+    live.sort((a, b) => b.lastDay - a.lastDay || b.recent - a.recent || b.totals.add - a.totals.add);
+
+    res.json({ from, to, bucketMs, lanes: live });
+  });
+
   /** Marker layer for the ECG: compaction arrows, retry/loop bars, failure crosses. */
   app.get("/api/events", (req, res) => {
     const win = windowOf(req, res);

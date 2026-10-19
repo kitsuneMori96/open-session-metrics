@@ -8,7 +8,9 @@
 
 ## 功能
 
-- **时间序列视图**（`/api/ecg`）：按项目分泳道的 Token 流量曲线，配套时间轴可任意缩放窗口
+- **时间序列视图**（`/api/ecg`、`/api/ecg/ops`）：按项目分泳道的 Token 流量曲线；窗口收窄到半天以内时切换为操作级波形，每个工具调用/轮次是一个尖峰
+- **宽窗口分层视图**（`/api/ecg/daily`）：按项目分泳道，每条泳道分「产出 / 消耗 / 效率」三层带并共享时间轴，
+  用于看出「消耗冲高、产出没动」这类背离；泳道表头直接给出统计与结论
 - **会话明细**（`/api/session/:id`）：单个会话的轮次、工具调用、事件（压缩 / 失败 / 重试）与子代理树
 - **时间分布**（`/api/heatmap`、`/api/focus`）：按星期×小时的活动分布，以及工具调用间隔统计
 - **产出效率**（`/api/conversion`）：Token 消耗与代码改动行数的关系，用于识别低产出会话
@@ -64,6 +66,8 @@ pnpm dev              # API :8787 · Web :5174
 | `GET /api/status` | 物化状态、水位、各表行数 |
 | `GET /api/overview` | 窗口汇总：各类 Token 计数、按模型分组、代码改动数据覆盖率 |
 | `GET /api/ecg` | 按项目分泳道的 Token 时间序列（窗口过宽时自动合并时间桶，每泳道 ≤900 点） |
+| `GET /api/ecg/ops` | 操作级波形：每个工具调用（基线之上）与每轮助手输出（基线之下），`d` 为耗时即尖峰宽度 |
+| `GET /api/ecg/daily` | 项目 × 时间桶的分层汇总；`bucket=day`（默认）或 `hour` |
 | `GET /api/sessions` | 窗口内会话列表及各项统计 |
 | `GET /api/session/:id` | 会话明细：子代理树、轮次、工具调用、事件（正文需 `?include=text`） |
 | `GET /api/events` | 事件列表（压缩 / 失败 / 重试 / 循环 / 空闲 / 模型切换） |
@@ -85,15 +89,18 @@ pnpm dev              # API :8787 · Web :5174
   反映上下文压缩的实际触发条件；`fill_after` 为计入本轮输出后的占用。
 - **重试**（`retry`）：同一签名的工具调用在上一次失败后 15 分钟内再次出现。
   连续 ≥3 次同签名调用记为 `loop`。此前仅按签名去重，产生了大量误报（1345 → 28 条）。
-- **代码改动行数**：优先取会话汇总；缺失时回退读取历史 `part` 表中的 patch 记录。
+- **代码改动行数**：解析工具调用产生的 unified diff，只统计 hunk 内部的 `+` / `-` 行
+  （`Index:` / `---` / `+++` 等头部不计入）。整文件 `write` 按写入行数单独记为 `write_lines`：
+  它是一次覆盖而不是增量，两者量纲不同，任何时候都不相加。
+  早期实现只读 v1 `part` 表的 patch，v2 会话的改动因此全部漏算（2,928 → 20,639 行）。
   无改动数据的会话计入 `coverage` 分母，不参与回归拟合。
 
 ## 数据表
 
 | 表 | 粒度 | 主要字段 |
 | --- | --- | --- |
-| `turns` | 每轮 LLM 调用 | 各类 Token、成本、`fill` / `fill_after`、预计算的 `bucket` / `day` / `hour` |
-| `tools` | 每次工具调用 | 状态、耗时、改动行数、调用签名、`target_session`（task 子会话） |
+| `turns` | 每轮 LLM 调用 | 各类 Token、成本、`fill` / `fill_after`、改动增量与 `write_lines`、预计算的 `bucket` / `day` / `hour` |
+| `tools` | 每次工具调用 | 状态、耗时、改动与写入行数、调用签名、`target_session`（task 子会话） |
 | `events` | 每个事件 | 类型、`at` / `end_at`、`count`、`fill`、JSON 详情 |
 | `sessions` | 每会话 | 聚合统计：效率分、填充率、压缩/重试/循环次数、改动行数、父子关系 |
 | `flow` | 项目 × 5 分钟 | `tokens_gen`、`tokens_cache_read`、成本、主导模型 |
@@ -106,7 +113,7 @@ pnpm dev              # API :8787 · Web :5174
 ```bash
 pnpm dev                    # server + web
 pnpm typecheck              # 两个包 tsc --noEmit
-pnpm test                   # ETL 测试（离线 fixture，25 项断言，无需服务与网络）
+pnpm test                   # ETL 测试（离线 fixture，29 项断言，无需服务与网络）
 pnpm -F @osm/server test:smoke   # HTTP 冒烟测试（需服务在线）
 pnpm materialize            # 增量物化
 pnpm materialize --full     # 全量重建（写入临时文件后原子替换）
