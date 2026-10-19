@@ -255,8 +255,10 @@ export default function ContextStage() {
         </div>
       </div>
 
-      {/* Every lane is rendered; the body is the scroll container. */}
-      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
+      {/* Every lane is rendered; the body is the scroll container. `no-scrollbar` is the
+          app-wide scrollbar treatment — without it this list falls back to the 15px
+          browser default and looks like a different program next to the session rail. */}
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden no-scrollbar">
         {lanes.map((lane) => (
           <LaneRow
             key={lane.project}
