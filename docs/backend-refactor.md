@@ -4,7 +4,9 @@
 范围：**只动了 `server/`**，`web/` 一行未改，构建产物 `web/dist` 也不受影响。
 
 > 后续变更：本文件之后，界面改为对位 `opencode-top` 的三屏结构，接口随之重排为
-> `/api/top/*`（见 `docs/opencode-top-parity.md`）。下面的端点清单只描述当时的状态。
+> `/api/top/*`（见 `docs/opencode-top-parity.md`）；再之后前端重排为单页仪表盘，
+> 端点收敛为切片型的 `/api/top/{facets,analytics,tool}`（见第 7 节）。
+> 下面的端点清单只描述当时的状态。
 
 后端这次按 P0 优先级把物化管线和 API 口径整个过了一遍。对你影响最大的是：
 **几个端点的响应结构变了，而且非法参数不再静默返回零值**。下面是完整清单。
@@ -136,3 +138,47 @@
 
 前端如果因为 1.1–1.5 报错，先看这节和第 1 节；数值语义问题看第 3 节。
 有问题直接找我。
+
+---
+
+## 7. 2026-10-19：切片型分析接口
+
+前端改成单页仪表盘（一条全局切片 + 交叉过滤 + URL 深链）之后，为「一次请求拿到当前切片
+的全部面板数据」重排了接口：
+
+**新增**
+
+| 端点 | 说明 |
+| --- | --- |
+| `GET /api/top/facets` | 过滤器取值（项目 / 模型 / agent / 工具）+ 时间跨度 + 总行数 |
+| `GET /api/top/analytics?from&to&project&model&agent` | 当前切片的完整快照：totals、KPI 与上一等长窗口的对比、时间桶与模型堆叠、7×24 热力图、24 小时分布、效率百分位、模型 / 项目 / agent / 工具四张排行表、会话列表 |
+| `GET /api/top/tool?name=` | 单工具的调用时间桶、延迟直方图、agent / 项目分布、参数签名聚类、最近错误、写回行数 |
+
+`analytics` 里的 `totals.total` 仍是 input + output + cache_read + cache_write（不含
+reasoning）；`sessions[]` 另外给出 `workflow` / `depth` / `childCount`，让会话树不必在
+浏览器里重建。
+
+**移除**
+
+| 端点 / 模块 | 原因 |
+| --- | --- |
+| `GET /api/top/sessions` | 会话列表并入 `analytics`，同一份数据不再两次查询 |
+| `GET /api/top/tools` | 工具排行并入 `analytics`，详情走 `/api/top/tool` |
+| `GET /api/top/overview` | 由 `analytics` 取代（返回原始桶而不是预稀释的标签数组） |
+| `server/src/metrics/trend.ts` | 自适应分桶改为 `analytics.ts` 的 `pickGranularity` + `seriesOf` |
+
+`GET /api/top/session/:id/messages` 保留，`turns[]` 增补
+`project / occupancy / contextWindow / fill / fillAfter / additions / deletions /
+writeLines / hasError`，让会话详情不必再取一次列表。
+
+**口径变更（数值会变，别当成 bug）**：统计单位从「窗口内活跃过的根会话 + 全部后代」的
+祖先规则，改为「轮次自己的 `created` 在窗口内，且自己的 `project` / `model` / `agent`
+命中过滤器」。由此 model / agent 维度才可过滤，聚合才可加；代价是跨窗口的长会话会落在
+多个桶里。详见 `docs/opencode-top-parity.md`。
+
+**验证基线**（221 会话 / 25,212 轮 / 25,532 次工具调用）：
+
+- `pnpm typecheck` 两个包通过；离线 ETL 36 项断言全绿；HTTP 冒烟 9 项全绿
+- `facets` 38ms / 5.5KB · `analytics` 全历史 340ms / 230KB · 7 天 76ms / 22KB ·
+  3 天（小时桶）49ms / 13KB · `tool` 明细 71ms / 16KB
+

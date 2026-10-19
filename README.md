@@ -1,34 +1,69 @@
 # OpenCode Session Metrics
 
-将 OpenCode 的本机数据库（`~/.local/share/opencode/opencode.db`）物化为一张指标库，
+把 OpenCode 的本机数据库（`~/.local/share/opencode/opencode.db`）物化成一张指标库，
 再用一个 Web 面板回看自己的编码会话：跑了哪些会话、花了多少 Token、调用了哪些工具、
 每个工具失败过几次、钱花在哪个项目上。
 
-界面按 [`opencode-top`](docs/opencode-top-parity.md) 的三个屏一比一对齐
-（Sessions / Tools / Overview），数据口径也照抄它的实现；视觉换成这套项目的
-医用纸白 + 墨蓝 hairline 风格。
+功能范围对齐 [`opencode-top`](docs/opencode-top-parity.md)（Sessions / Tools / Overview
+三屏加正文面板），呈现方式按浏览器重排：**一个页面、一条全局切片、图表之间互相下钻**。
+窗口、过滤器、对比对象、散点坐标轴都写在 URL 里，链接可以直接发给别人或存进书签。
 
 数据只在本机流转，API 默认绑定 `127.0.0.1`。
 
 ## 功能
 
-三个屏，左上角 tab 或按键 `1` / `2` / `3` 切换。
+### 全局切片（SliceBar）
 
-- **Sessions**（`/api/top/sessions`）：左侧是会话树，根会话下挂着它的子代理会话，
-  显示标题、更新时间、Token、成本；右侧 `Tab` 在 **Stats** 与 **Messages** 之间切换。
-  - Stats：Token / 成本 / 时长 / 生成速度 / 轮次数、上下文占用条、按模型与按工具的用量、
-    AGENT CHAIN（子代理链，超过 5 个默认折叠，`c` 展开）
-  - Messages：该会话的助手轮次正文，逐条列出模型、输入输出 Token、耗时，
-    工具调用可展开看入参与回显（含退出码与截断标记），推理块折叠成一行预览
-  - `/` 搜索：左栏按标题/项目/首条提问过滤，同时对全库正文做检索并按命中数列出会话；
-    `n` / `N` 在命中之间跳，`f` 循环 all → errors → tools → text 过滤，`Enter` 展开/折叠
-- **Tools**（`/api/top/tools`）：每个工具的调用数、失败率、平均耗时，
-  以及它最近产生的 3 条错误；排序键 `calls` / `failures` / `avg-time`，`Tab` 切换
-- **Overview**（`/api/top/overview`）：时间范围（今天 / 7 天 / 30 天 / 90 天 / 全部）与项目过滤下的
-  汇总 Token 与花费、Token 趋势与会话趋势柱图、24 小时活跃分布、按 agent 的工具错误率、
-  工具调用排行、项目排行、最慢工具、模型排行；`t` 循环时间范围，`p` / `P` 循环项目
+顶端一条：`24h / 7d / 30d / 90d / 1y / all` 六个预设（默认 `30d`），加
+`project / model / agent` 三个维度过滤。切片是**符号化**的：选预设时 URL 里只记
+`range=7d`（永远是相对当前时间），只有手动框选图表才会写入绝对的 `from` / `to`。
+切片的每一次变化都直接改 URL，所有面板（KPI、图、表、正文）一起重算。
 
-底部状态栏给出当前屏的可用按键，右上角 `r` 触发一次增量物化。
+### 四个屏
+
+- **Overview**（`/overview`）：KPI（Token / 成本 / 轮次 / 工具 / 错误 / 会话 / 输出 /
+  增删行，各带与上一等长窗口的对比）、按模型堆叠的 Token 时间序列（可框选重新定窗口）、
+  7×24 活跃热力图、24 小时分布、会话散点（x/y 可选 token / cost / turns / duration /
+  output rate / context / errors / updated，对数轴可切）、项目 / 模型 / 工具 / agent 排行、
+  效率面板（缓存命中、生成速度、轮次耗时 p50/p90/p99、上下文填充、未完成数）、
+  最重会话列表（hover 时在散点里高亮同一个点）。
+  - 图表手势：**在时间序列上拖拽 = 重新定义窗口**；**点任意排行条 = 按该维度过滤**；
+    点散点 = 进该会话详情。
+- **Sessions**（`/sessions`）：全部会话一张可排序、可展开的表（根会话下挂子代理会话，
+  缩进显示层级）。列：标题 / 项目 / agent / 模型 / Token / 成本 / 轮次 / 工具调用 /
+  错误 / 时长 / 上下文占用 / 更新时间。点一行进详情。
+- **Session 详情**（`/sessions/:id`）：Token 明细、形状（轮次、工具调用、墙钟、生成速度、
+  上下文窗口与峰值）、工具用量、agent 链（父子/兄弟，可跳转）、逐轮 Token 时间线
+  （框选 = 只留这几轮，点一轮 = 聚焦该轮）、正文面板（见下）、每轮花费。
+- **Tools**（`/tools`、`/tools/:name`）：左侧工具表（调用数、失败数、p50 / p95 / max /
+  均值耗时、涉及会话与 agent 数，列可排序），右侧选中工具的调用时间桶、延迟直方图、
+  按 agent / 项目的分布、参数签名聚类、最近错误原文、写回的行数。
+- **Compare**（`/compare?a=&b=`）：任选两个会话并排：逐项差值表（Token / 成本 /
+  $ per Mtok / 轮次 / 工具 / 失败 / 墙钟 / 生成速度 / 峰值上下文 / 增删行，
+  右侧为相对左侧的百分比变化）、按轮次序号对齐的输出 Token 曲线、工具构成对比。
+
+### 正文面板（Session 详情）
+
+助手轮次逐条展开：轮次头（模型、agent、输入/输出、耗时、时刻、ctx 占用）、
+助手正文、推理块（折叠成一行预览）、每次工具调用一行（`✓ / ✗ / ◌` + 名称 + 标题 +
+耗时），展开后看入参与回显（回显最多 40 行）。工具栏给出 `rows 起–止/总`、
+过滤循环与命中数。
+
+### 键盘
+
+| 键 | 作用 |
+| --- | --- |
+| `1` `2` `3` `4` | Overview / Sessions / Tools / Compare |
+| `/` 或 `⌘K` | 命令面板：跳转、切窗口、套用过滤、检索全库正文并跳会话 |
+| `r` | 触发一次增量物化 |
+| `esc` | 关闭面板 / 复位焦点 |
+| `j` `k` `g` `G` | 正文面板里移动游标（虚拟滚动，只渲染可见行） |
+| `n` `N` | 跳到下一个 / 上一个命中 |
+| `f` | 过滤循环 `all → errors → tools → text` |
+| `Enter` | 展开 / 折叠当前行的工具调用或推理块 |
+| `e` | 只看游标所在的那一轮（正文面板内的轮次过滤） |
+
+底部状态栏给出当前屏可用的动作。
 
 ## 工作原理
 
@@ -48,12 +83,13 @@ opencode.db (只读)                    .data/metrics.db (查询用)
                                       └──────────────────────┘
 ```
 
-指标不从源库实时计算：请求打在物化好的指标库上。物化由源库水位驱动
-（`MAX(消息时间, 会话更新时间)`），只有源库出现新数据时才重建，且只重算受影响的会话。
-兼容源库 v1 与 v2 两代 schema。
+指标不从源库实时计算：图表要的每个数字（时间桶、模型堆叠、热力图、百分位、
+会话排行）都在服务端用 SQL 聚合好，一次请求返回当前切片的完整快照，
+浏览器只负责画。物化由源库水位驱动（`MAX(消息时间, 会话更新时间)`），
+只有源库出现新数据时才重建，且只重算受影响的会话。兼容源库 v1 与 v2 两代 schema。
 
 `opencode-top` 每次刷新都重新解析源库的 JSON 正文；本项目的约定相反，正文在物化时就落进
-`parts` 表，接口只读指标库。代价是库变大（正文占 105MB 里的绝大部分），换来的是
+`parts` 表，接口只读指标库。代价是库变大（正文占 102MB 里的绝大部分），换来的是
 查询不碰源库、面板可以在会话之间随便点。
 
 正文落库时有长度上限（text / reasoning 2000 字符、工具入参 1500、工具回显 3000），
@@ -83,24 +119,30 @@ pnpm dev              # API :8787 · Web :5174
 | 端点 | 说明 |
 | --- | --- |
 | `GET /api/status` | 物化状态、水位、各表行数 |
-| `GET /api/top/sessions` | 全部会话 + 每会话的模型/工具明细（左树与 Stats 面板的数据源） |
+| `GET /api/top/facets` | 过滤器取值：项目 / 模型 / agent / 工具，加时间跨度与总行数 |
+| `GET /api/top/analytics?from=&to=&project=&model=&agent=` | 当前切片的全部面板数据：totals、KPI 对比、时间桶与模型堆叠、热力图、效率百分位、四张排行表、会话列表 |
+| `GET /api/top/tool?name=` | 单个工具的调用桶、延迟直方图、agent/项目分布、参数签名、最近错误 |
 | `GET /api/top/session/:id/messages` | 单会话的助手轮次与内容流（唯一返回正文的端点） |
-| `GET /api/top/tools` | 全局工具聚合：调用数、成功/失败、平均耗时、最近错误 |
-| `GET /api/top/overview?from=&project=` | 区间/项目聚合：汇总 Token、趋势桶、24 小时分布、各类排行 |
 | `GET /api/top/search?q=` | 跨会话正文检索，返回命中会话与命中数 |
 | `POST /api/refresh` | 手动重建，`{full:true}` 为全量 |
 
-`from` 是 cutoff（epoch 毫秒，0 或缺省表示全部）。Overview 的区间口径与 `opencode-top` 一致：
-先按项目与 cutoff 选出根会话，再补上它们的全部后代会话，最后只统计 cutoff 之后的轮次——
-父会话静默时，挂在它下面的子会话也一并退出统计。
+`from` / `to` 是 epoch 毫秒；`from=0` 表示从最早的数据开始。非数字或 `from >= to` 返回 400。
+接口不做分页——指标库就在本机，`analytics` 一次给全量（全历史约 230KB / 340ms）。
 
 ## 指标定义
 
-- **Token 总量**（`tokens.total`）= input + output + cache_read + cache_write，**不含 reasoning**。
+- **Token 总量**（`total`）= input + output + cache_read + cache_write，**不含 reasoning**。
   推理 Token 单独给出。这套口径与 `opencode-top` 的 `TokenUsage.total` 相同。
+- **切片口径**（与 `opencode-top` 有意不同）：统计「自己的 `created` 落在窗口内，
+  且自己的 `project` / `model` / `agent` 命中过滤器」的助手轮次。原版的规则是
+  「先选出窗口内活跃过的根会话，再补上它们的全部后代，最后只统计 cutoff 之后的轮次」——
+  父会话静默时，挂在它下面的子会话会一并退出统计，而且按 model / agent 过滤在那种规则下
+  没有意义。这里的规则是可加的、可交叉过滤的，代价是「一个跨窗口的长会话」在按天看时
+  会出现在多个桶里。两套口径的差异见
+  [docs/opencode-top-parity.md](docs/opencode-top-parity.md)。
 - **上下文占用**（`context`）= input + cache_read + cache_write，对整会话求和后除以模型窗口。
   这是一个「上下文流量」指标而不是瞬时占用：长会话会数倍于一个窗口（面板在这种情况下
-  显示 `×N`）。原版就是这么算的，这里照抄。
+  显示 `×N`）。`fill` 是另一回事：发送时的 prompt_total / context_window，用于定位压缩触发点。
 - **生成速度**（`output_rate`）= 该会话每个助手轮次 `output / ((completed - created)/1000)` 的
   **中位数**，在物化时算好；耗时缺失（中途休眠导致 `completed` 写到数小时后）的轮次会拉低
   这个值，因此取中位数而不是均值。
@@ -109,7 +151,6 @@ pnpm dev              # API :8787 · Web :5174
 - **代码改动行数**：解析工具调用产生的 unified diff，只统计 hunk 内部的 `+` / `-` 行
   （`Index:` / `---` / `+++` 等头部不计入）。整文件 `write` 按写入行数单独记为 `write_lines`：
   它是一次覆盖而不是增量，两者量纲不同，任何时候都不相加。
-- **`fill`**：发送时的上下文占用（prompt_total / context_window），用于定位上下文压缩的触发点。
 
 ## 数据表
 
@@ -131,10 +172,14 @@ pnpm dev              # API :8787 · Web :5174
 pnpm dev                    # server + web
 pnpm typecheck              # 两个包 tsc --noEmit
 pnpm test                   # ETL 测试（离线 fixture，36 项断言，无需服务与网络）
-pnpm -F @osm/server test:smoke   # HTTP 冒烟测试（需服务在线，10 项）
+pnpm -F @osm/server test:smoke   # HTTP 冒烟测试（需服务在线，9 项）
 pnpm materialize            # 增量物化
 pnpm materialize --full     # 全量重建（写入临时文件后原子替换）
 ```
+
+前端图表用 `@visx/*`（d3 的无样式原语）与 `@tanstack/react-table` +
+`@tanstack/react-virtual` 自己拼装，没有引入组件库；配色、hairline、等宽微字都在这套
+仓库自己的样式里（`web/src/index.css`）。
 
 ### 环境变量
 
@@ -148,15 +193,19 @@ pnpm materialize --full     # 全量重建（写入临时文件后原子替换�
 
 ## 实测性能
 
-测试数据集：548MB 源库 · 221 会话 · 24,725 轮 · 25,018 次工具调用 · 51,107 条正文。
+测试数据集：559MB 源库 · 221 会话 · 25,212 轮 · 25,532 次工具调用 · 51,989 条正文。
 
 | 项目 | 数值 |
 | --- | --- |
 | 全量物化 | 5.7s（含正文落库） |
 | 增量物化 | 约 100ms |
-| 指标库体积 | 105MB（旧版不含正文时 28MB） |
-| 端点耗时 | sessions 70ms · overview 190ms（全量区间）· messages 34ms |
-| 会话正文载荷 | 单会话 0.1–2.4MB，按需加载 |
+| 指标库体积 | 102MB |
+| `analytics` 全历史 | 340ms / 230KB |
+| `analytics` 7 天 | 76ms / 22KB |
+| `analytics` 3 天（按小时分桶） | 49ms / 13KB |
+| `facets` | 38ms / 5.5KB |
+| `tool` 明细 | 71ms / 16KB |
+| 会话正文 | 0.1–2.4MB，按需加载 |
 
 ## 目录结构
 
@@ -170,15 +219,21 @@ server/src/
     ├── schema.ts         # 指标库表结构
     ├── build.ts          # 物化逻辑（轮次指标、正文、事件探针、聚合）
     ├── store.ts          # 增量编排、原子替换
-    ├── trend.ts          # 趋势分桶（小时 / 天 / 周自适应）
+    ├── analytics.ts      # 切片聚合：dashboard / toolDetail / facets
     └── catalog.ts        # 模型价目（缓存 + 手工覆盖）
 web/src/
-├── screens/              # Sessions / Tools / Overview 三个屏
-├── components/           # 会话树、Stats、Messages、柱图等
-└── lib/                  # API 客户端、格式化、工作流分组
+├── screens/              # Overview / Sessions / SessionDetail / Tools / Compare
+├── components/
+│   ├── Chrome.tsx        # 顶栏、切片条、状态栏
+│   ├── DataTable.tsx     # 虚拟化表格（排序、树形展开）
+│   ├── Transcript.tsx    # 虚拟化正文面板
+│   ├── Palette.tsx       # ⌘K 命令面板
+│   └── charts/           # 时间序列、排行条、热力图、散点
+└── lib/                  # API 客户端、切片状态、格式化、图表工具、正文行模型
 ```
 
 ## 相关文档
 
-- [docs/opencode-top-parity.md](docs/opencode-top-parity.md) — 与 `opencode-top` 的屏/字段对照表
+- [docs/opencode-top-parity.md](docs/opencode-top-parity.md) — 与 `opencode-top` 的功能对照，
+  以及两处有意的口径差异
 - [docs/backend-refactor.md](docs/backend-refactor.md) — 2026-10 后端重构的接口变更明细
