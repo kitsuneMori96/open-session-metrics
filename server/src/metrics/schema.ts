@@ -13,7 +13,7 @@ export function openMetrics(): DatabaseSync {
 }
 
 /** Fact tables are rebuilt per session; they may be dropped on a full rebuild only. */
-const FACT_TABLES = ["turns", "tools", "events", "sessions", "flow", "heat"];
+const FACT_TABLES = ["turns", "tools", "parts", "events", "sessions", "flow", "heat"];
 
 export const SCHEMA = /* sql */ `
 CREATE TABLE IF NOT EXISTS models (
@@ -51,6 +51,23 @@ CREATE TABLE IF NOT EXISTS tools (
 CREATE INDEX IF NOT EXISTS tools_session ON tools(session_id, started);
 CREATE INDEX IF NOT EXISTS tools_target ON tools(target_session);
 
+-- The ordered content stream of every assistant turn: the text it wrote, the
+-- reasoning it produced, and each tool call with its input and output. This is the
+-- one table that is a transcript rather than a metric, so bodies are capped (see
+-- PARTS_CAP in build.ts) — the UI renders at most 40 output lines and one input row
+-- per key, and the caps keep a 234 MB source from becoming a 234 MB copy.
+CREATE TABLE IF NOT EXISTS parts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL, turn_id TEXT NOT NULL, ordinal INTEGER,
+  kind TEXT NOT NULL,              -- text | reasoning | tool
+  text TEXT,                       -- body for text/reasoning
+  name TEXT, call_id TEXT, status TEXT, title TEXT,
+  input TEXT, output TEXT, exit_code INTEGER, truncated INTEGER,
+  started INTEGER, ended INTEGER, chars INTEGER
+);
+CREATE INDEX IF NOT EXISTS parts_turn ON parts(turn_id);
+CREATE INDEX IF NOT EXISTS parts_session ON parts(session_id, id);
+
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id TEXT, turn_id TEXT, type TEXT, at INTEGER, end_at INTEGER, count INTEGER,
@@ -68,7 +85,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   compactions INTEGER, retries INTEGER, loops INTEGER,
   additions INTEGER, deletions INTEGER, files_changed INTEGER,
   peak_fill REAL, avg_fill REAL, eff_score REAL, tokens_per_line REAL,
-  first_prompt TEXT, duration_ms INTEGER, dominant_model TEXT
+  first_prompt TEXT, duration_ms INTEGER, dominant_model TEXT, output_rate REAL
 );
 CREATE INDEX IF NOT EXISTS sessions_project ON sessions(project, created);
 CREATE INDEX IF NOT EXISTS sessions_parent ON sessions(parent_id);

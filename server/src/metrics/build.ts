@@ -23,6 +23,7 @@ export interface BuildReport {
   sessions: number;
   turns: number;
   tools: number;
+  parts: number;
   events: number;
   flow: number;
   heat: number;
@@ -228,6 +229,7 @@ export async function build(
 
     let turnCount = 0;
     let toolCount = 0;
+    let partCount = 0;
     let eventCount = 0;
     let sessionCount = 0;
 
@@ -236,6 +238,7 @@ export async function build(
       if (idList.length) {
         const ph = idList.map(() => "?").join(",");
         db.prepare(`DELETE FROM tools WHERE session_id IN (${ph})`).run(...idList);
+        db.prepare(`DELETE FROM parts WHERE session_id IN (${ph})`).run(...idList);
         db.prepare(`DELETE FROM events WHERE session_id IN (${ph})`).run(...idList);
         db.prepare(`DELETE FROM turns WHERE session_id IN (${ph})`).run(...idList);
         db.prepare(`DELETE FROM sessions WHERE id IN (${ph})`).run(...idList);
@@ -251,6 +254,10 @@ export async function build(
       const insTool = db.prepare(
         `INSERT INTO tools(session_id,turn_id,call_id,name,status,started,ended,dur_ms,title,output_chars,additions,deletions,files,write_lines,error,sig,input_preview,target_session)
          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      );
+      const insPart = db.prepare(
+        `INSERT INTO parts(session_id,turn_id,ordinal,kind,text,name,call_id,status,title,input,output,exit_code,truncated,started,ended,chars)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
       );
 
       for (const t of turns) {
@@ -287,6 +294,17 @@ export async function build(
             eventCount++;
           }
         }
+        // The transcript is written in content order; `ordinal` is what the messages
+        // panel walks, so a turn always reads back exactly as the model produced it.
+        for (let i = 0; i < t.parts.length; i++) {
+          const p = t.parts[i];
+          insPart.run(
+            t.sessionId, t.id, i, p.kind, p.text || null, p.name || null, p.callId || null,
+            p.status || null, p.title, p.input || null, p.output || null, p.exitCode,
+            p.truncated ? 1 : 0, p.started, p.ended, p.chars
+          );
+          partCount++;
+        }
       }
 
       for (const [sid, list] of eventsBySession) {
@@ -309,6 +327,7 @@ export async function build(
         "created", "updated", "t_input", "t_output", "t_reasoning", "t_cache_read", "t_cache_write", "cost",
         "turns", "tool_calls", "tool_errors", "compactions", "retries", "loops", "additions", "deletions", "files_changed",
         "peak_fill", "avg_fill", "eff_score", "tokens_per_line", "first_prompt", "duration_ms", "dominant_model",
+        "output_rate",
       ];
       const insSession = db.prepare(`INSERT INTO sessions(${sessionCols.join(",")}) VALUES(${sessionCols.map(() => "?").join(",")})`);
 
@@ -346,6 +365,17 @@ export async function build(
         let bestV = -1;
         for (const [k, v] of byModel) if (v > bestV) ((bestV = v), (dominant = k));
 
+        // Median generation speed, the same statistic the transcript header shows per
+        // turn: a mean would be dragged around by turns that waited on a tool.
+        const rates = ts
+          .map((t) => (t.output > 0 && t.completed && t.created && t.completed > t.created
+            ? t.output / ((t.completed - t.created) / 1000)
+            : 0))
+          .filter((r) => r > 0)
+          .sort((a, b) => a - b);
+        const mid = Math.floor(rates.length / 2);
+        const outputRate = rates.length === 0 ? 0 : rates.length % 2 !== 0 ? rates[mid] : (rates[mid - 1] + rates[mid]) / 2;
+
         const sessionEvents = eventsBySession.get(s.id) ?? [];
         const compactions = sessionEvents.filter((e) => e.type === "compaction").length;
         const retries = sessionEvents.filter((e) => e.type === "retry").length;
@@ -359,7 +389,7 @@ export async function build(
           ts.length, toolCalls, toolErrors, compactions, retries, loops,
           additions, deletions, filesChanged,
           peak, avg, eff, lines > 0 ? totalTokens / lines : null,
-          firstPromptBySession.get(s.id) ?? null, s.updated - s.created, dominant
+          firstPromptBySession.get(s.id) ?? null, s.updated - s.created, dominant, outputRate
         );
         sessionCount++;
       }
@@ -401,6 +431,7 @@ export async function build(
       sessions: sessionCount,
       turns: turnCount,
       tools: toolCount,
+      parts: partCount,
       events: eventCount,
       flow: flowRows,
       heat: heatRows,

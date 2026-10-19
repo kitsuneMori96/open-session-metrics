@@ -3,13 +3,20 @@ import cors from "cors";
 import type { DatabaseSync } from "node:sqlite";
 import { BUCKET_MS } from "./config";
 import { getMeta, getMetaNumber } from "./metrics/schema";
-import { catalogKey, readOverrides, writeOverride, type ModelInfo } from "./metrics/catalog";
+import { buildTrendBuckets } from "./metrics/trend";
 import type { BuildReport } from "./metrics/build";
 
 const DAY = 86400000;
 const HOUR = 3600000;
-/** Cap for one ECG lane; wider windows are coarsened server-side. */
-const MAX_POINTS = 900;
+
+/** Filter chips on the Overview screen, in the order the TUI cycles them with `f`. */
+export const RANGES = [
+  { id: "today", label: "today", ms: 0 },
+  { id: "7d", label: "last 7d", ms: 7 * DAY },
+  { id: "30d", label: "last 30d", ms: 30 * DAY },
+  { id: "90d", label: "last 90d", ms: 90 * DAY },
+  { id: "all", label: "all time", ms: 0 },
+] as const;
 
 export function createApp(deps: {
   db: () => DatabaseSync;
@@ -23,22 +30,13 @@ export function createApp(deps: {
   const one = <T,>(sql: string, ...args: unknown[]): T | undefined =>
     deps.db().prepare(sql).get(...(args as any[])) as T | undefined;
 
-  /** Window helper: rejects NaN/reversed ranges instead of silently returning zeros. */
-  const windowOf = (req: express.Request, res: express.Response): { from: number; to: number } | null => {
-    const now = Date.now();
-    const raw = { from: req.query.from, to: req.query.to };
-    const from = raw.from === undefined ? now - 30 * DAY : Number(raw.from);
-    const to = raw.to === undefined ? now : Number(raw.to);
-    if (!Number.isFinite(from) || !Number.isFinite(to)) {
-      res.status(400).json({ error: "from/to must be epoch milliseconds" });
-      return null;
-    }
-    if (from >= to) {
-      res.status(400).json({ error: "`from` must be earlier than `to`" });
-      return null;
-    }
-    return { from, to };
+  /** `?from=` is a cutoff in epoch ms; 0 or absent means all time. */
+  const cutoffOf = (req: express.Request): number => {
+    const raw = Number(req.query.from ?? 0);
+    return Number.isFinite(raw) && raw > 0 ? raw : 0;
   };
+  const projectOf = (req: express.Request): string | null =>
+    typeof req.query.project === "string" && req.query.project ? req.query.project : null;
 
   app.get("/api/status", (_req, res) => {
     const db = deps.db();
@@ -59,9 +57,8 @@ export function createApp(deps: {
         sessions: count("sessions"),
         turns: count("turns"),
         tools: count("tools"),
+        parts: count("parts"),
         events: count("events"),
-        flow: count("flow"),
-        heat: count("heat"),
         models: count("models"),
       },
     });
@@ -78,721 +75,398 @@ export function createApp(deps: {
   });
 
   /**
-   * Global totals for a window (header readouts + what-if sandbox).
-   * Token buckets are reported separately everywhere: `generated` is what the
-   * model produced (input+output+reasoning), `cache_*` is billed separately and is
-   * ~14x larger on this dataset — mixing them produces numbers that don't add up.
+   * Screen 1 payload. Every session with the aggregates the details panel and the
+   * agent tree need, so selecting a row never hits the network: the tree, the STATS
+   * block, the context bar, MODELS, TOOLS and the AGENT CHAIN all render from this.
+   * The transcript is the only thing loaded separately (it is big).
    */
-  app.get("/api/overview", (req, res) => {
-    const win = windowOf(req, res);
-    if (!win) return;
-    const { from, to } = win;
-    const flowTotals =
-      one<any>(
-        `SELECT COALESCE(SUM(tokens_gen),0) AS generated, COALESCE(SUM(tokens_cache_read),0) AS cache_read,
-                COALESCE(SUM(cost),0) AS cost
-         FROM flow WHERE bucket >= ? AND bucket <= ?`,
-        from,
-        to
-      ) ?? {};
-    const turnTotals =
-      one<any>(
-        `SELECT COALESCE(SUM(input),0) input, COALESCE(SUM(output),0) output,
-                COALESCE(SUM(reasoning),0) reasoning, COALESCE(SUM(cache_read),0) cache_read,
-                COALESCE(SUM(cache_write),0) cache_write, COALESCE(SUM(cost),0) cost,
-                COALESCE(SUM(additions),0) additions, COALESCE(SUM(deletions),0) deletions,
-                COUNT(*) turns, COALESCE(SUM(tool_errors),0) tool_errors
-         FROM turns WHERE role='assistant' AND created BETWEEN ? AND ?`,
-        from,
-        to
-      ) ?? {};
-    const byModel = q<any>(
-      `SELECT provider, model,
-              SUM(input) input, SUM(output) output, SUM(reasoning) reasoning,
-              SUM(cache_read) cache_read, SUM(cache_write) cache_write,
-              SUM(cost) cost, COUNT(*) turns
-       FROM turns WHERE role='assistant' AND created BETWEEN ? AND ?
-       GROUP BY provider, model ORDER BY (input+output) DESC`,
-      from,
-      to
-    );
-    const coverage =
-      one<any>(
-        `SELECT COUNT(*) total, COALESCE(SUM(CASE WHEN additions+deletions > 0 THEN 1 ELSE 0 END),0) with_diff,
-                COALESCE(SUM(CASE WHEN cost > 0 THEN 1 ELSE 0 END),0) with_cost
-         FROM sessions WHERE created BETWEEN ? AND ?`,
-        from,
-        to
-      ) ?? {};
-    const sessions =
-      one<{ c: number }>(`SELECT COUNT(*) c FROM sessions WHERE created BETWEEN ? AND ?`, from, to)?.c ?? 0;
-    res.json({
-      range: { from, to },
-      totals: { ...turnTotals, generated: Number(flowTotals.generated ?? 0), flowCost: Number(flowTotals.cost ?? 0), sessions },
-      byModel,
-      coverage,
-    });
-  });
-
-  /** System 1 — the ECG: one lane per project, waveform = token flow per bucket. */
-  app.get("/api/ecg", (req, res) => {
-    const win = windowOf(req, res);
-    if (!win) return;
-    const { from, to } = win;
-    const step = Math.max(BUCKET_MS, Math.ceil((to - from) / MAX_POINTS / BUCKET_MS) * BUCKET_MS);
-    const rows = q<any>(
-      `SELECT project, bucket, tokens_gen, tokens_cache_read, cost, sessions, dominant_model, peak_fill
-       FROM flow WHERE bucket >= ? AND bucket <= ? ORDER BY bucket`,
-      from,
-      to
+  app.get("/api/top/sessions", (req, res) => {
+    const project = projectOf(req);
+    const sessions = q<any>(
+      `SELECT s.id, s.parent_id, s.project, s.title, s.agent, s.model, s.provider, s.created, s.updated,
+              s.t_input, s.t_output, s.t_reasoning, s.t_cache_read, s.t_cache_write,
+              s.cost, s.turns, s.tool_calls, s.tool_errors, s.first_prompt, s.output_rate,
+              s.peak_fill, s.avg_fill,
+              (SELECT MAX(COALESCE(t.completed, t.created)) - MIN(t.created)
+                 FROM turns t WHERE t.session_id = s.id) AS span_ms,
+              (SELECT MAX(t.context_window) FROM turns t
+                 WHERE t.session_id = s.id AND t.role = 'assistant') AS ctx_window
+       FROM sessions s ${project ? "WHERE s.project = ?" : ""} ORDER BY s.updated DESC`,
+      ...(project ? [project] : [])
     );
 
-    // coarsen + pick the dominant model per merged cell (no correlated subquery)
-    const cells = new Map<string, {
-      project: string; bucket: number; gen: number; cache: number; cost: number; sessions: number; peak: number;
-      models: Map<string, number>;
-    }>();
-    for (const r of rows) {
-      const bucket = Math.floor(Number(r.bucket) / step) * step;
-      const key = `${r.project}|${bucket}`;
-      let c = cells.get(key);
-      if (!c) {
-        c = { project: r.project, bucket, gen: 0, cache: 0, cost: 0, sessions: 0, peak: 0, models: new Map() };
-        cells.set(key, c);
-      }
-      c.gen += Number(r.tokens_gen ?? 0);
-      c.cache += Number(r.tokens_cache_read ?? 0);
-      c.cost += Number(r.cost ?? 0);
-      c.sessions = Math.max(c.sessions, Number(r.sessions ?? 0));
-      c.peak = Math.max(c.peak, Number(r.peak_fill ?? 0));
-      c.models.set(r.dominant_model ?? "unknown", (c.models.get(r.dominant_model ?? "unknown") ?? 0) + Number(r.tokens_gen ?? 0));
+    const bySessionModels = new Map<string, any[]>();
+    for (const r of q<any>(
+      `SELECT session_id, model, COUNT(*) calls, SUM(input+output+reasoning+cache_read+cache_write) tokens
+       FROM turns WHERE role='assistant' GROUP BY session_id, model`
+    )) {
+      const list = bySessionModels.get(r.session_id) ?? [];
+      list.push({ id: r.model ?? "unknown", calls: r.calls, tokens: r.tokens });
+      bySessionModels.set(r.session_id, list);
     }
-    const points = [...cells.values()]
-      .sort((a, b) => a.bucket - b.bucket)
-      .map((c) => {
-        let dominant = "unknown";
-        let best = -1;
-        for (const [k, v] of c.models) if (v > best) ((best = v), (dominant = k));
+    for (const list of bySessionModels.values()) list.sort((a, b) => b.tokens - a.tokens);
+
+    const bySessionTools = new Map<string, any[]>();
+    for (const r of q<any>(
+      `SELECT session_id, name, COUNT(*) calls,
+              SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) successes,
+              SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) failures,
+              SUM(COALESCE(dur_ms,0)) ms
+       FROM tools GROUP BY session_id, name`
+    )) {
+      const list = bySessionTools.get(r.session_id) ?? [];
+      list.push({
+        name: r.name,
+        calls: r.calls,
+        successes: r.successes,
+        failures: r.failures,
+        avgMs: r.calls > 0 ? r.ms / r.calls : 0,
+      });
+      bySessionTools.set(r.session_id, list);
+    }
+    for (const list of bySessionTools.values()) list.sort((a, b) => b.calls - a.calls);
+
+    res.json({
+      generatedAt: Date.now(),
+      sessions: sessions.map((s) => {
+        const input = Number(s.t_input ?? 0);
+        const cacheRead = Number(s.t_cache_read ?? 0);
+        const cacheWrite = Number(s.t_cache_write ?? 0);
+        // Context pressure is measured the way the TUI measures it: what the provider
+        // had to re-read plus what it wrote, over the model's window. Output is not
+        // resident context, and reasoning is billed separately from it.
+        const contextUsage = input + cacheRead + cacheWrite;
+        const contextWindow = Number(s.ctx_window ?? 0) || 128000;
         return {
-          project: c.project, bucket: c.bucket, tokens: c.gen, cache: c.cache,
-          cost: c.cost, sessions: c.sessions, peak: c.peak, model: dominant,
+          id: s.id,
+          parentId: s.parent_id ?? null,
+          project: s.project ?? "—",
+          title: s.title ?? null,
+          agent: s.agent ?? null,
+          model: s.model ?? null,
+          provider: s.provider ?? null,
+          created: Number(s.created ?? 0),
+          updated: Number(s.updated ?? 0),
+          tokens: {
+            input,
+            output: Number(s.t_output ?? 0),
+            reasoning: Number(s.t_reasoning ?? 0),
+            cacheRead,
+            cacheWrite,
+            total: input + Number(s.t_output ?? 0) + cacheRead + cacheWrite,
+          },
+          cost: Number(s.cost ?? 0),
+          calls: Number(s.turns ?? 0),
+          durationMs: Number(s.span_ms ?? 0),
+          outputRate: Number(s.output_rate ?? 0),
+          contextUsage,
+          contextWindow,
+          contextPct: contextWindow > 0 ? contextUsage / contextWindow : 0,
+          peakFill: Number(s.peak_fill ?? 0),
+          avgFill: Number(s.avg_fill ?? 0),
+          firstPrompt: s.first_prompt ?? null,
+          models: bySessionModels.get(s.id) ?? [],
+          tools: bySessionModels.has(s.id) ? bySessionTools.get(s.id) ?? [] : [],
         };
-      });
-    const projects = [...new Set(points.map((p) => p.project))];
-    res.json({ step, from, to, projects, points });
+      }),
+    });
   });
 
-  /** Sessions overlapping the window, for peak hover/click probes. */
-  app.get("/api/sessions", (req, res) => {
-    const win = windowOf(req, res);
-    if (!win) return;
-    const { from, to } = win;
-    const project = req.query.project as string | undefined;
-    const rows = q<any>(
-      `SELECT id, project, directory, title, created, updated, duration_ms, cost,
-              t_input+t_output+t_reasoning+t_cache_read+t_cache_write AS tokens,
-              turns, tool_calls, tool_errors, compactions, retries, loops,
-              additions, deletions, files_changed, peak_fill, avg_fill, eff_score,
-              dominant_model, first_prompt, parent_id, depth
-       FROM sessions WHERE created <= ? AND updated >= ? AND (? IS NULL OR project = ?)
-       ORDER BY created DESC LIMIT 4000`,
-      to,
-      from,
-      project ?? null,
-      project ?? null
-    );
-    res.json(rows);
-  });
-
-  /** System 2 — dissection view for one session and its whole sub-agent tree. */
-  app.get("/api/session/:id", (req, res) => {
-    const id = String(req.params.id);
-    const session = one<any>("SELECT * FROM sessions WHERE id = ?", id);
-    if (!session) return res.status(404).json({ error: "session not found" });
-
-    const subtree = q<{ id: string }>(
-      `WITH RECURSIVE sub(id) AS (
-         SELECT id FROM sessions WHERE id = ?
-         UNION
-         SELECT s.id FROM sessions s JOIN sub ON s.parent_id = sub.id
-       ) SELECT id FROM sub`,
-      id
-    ).map((r) => r.id);
-
-    // `task` tool calls that spawned children outside the parent_id tree
-    const forks = q<any>(
-      `SELECT t.turn_id, t.started, t.target_session, t.title, t.status
-       FROM tools t WHERE t.session_id = ? AND t.target_session IS NOT NULL ORDER BY t.started`,
+  /**
+   * Screen 1, right panel in "Messages" mode: one session's assistant turns in order,
+   * each with its content parts. This is the only endpoint that returns bodies, and it
+   * is fetched per session on demand.
+   */
+  app.get("/api/top/session/:id/messages", (req, res) => {
+    const id = req.params.id;
+    const session = one<any>(
+      `SELECT id, parent_id, project, title, agent, model, provider, created, updated,
+              t_input, t_output, t_reasoning, t_cache_read, t_cache_write, cost, turns, first_prompt
+       FROM sessions WHERE id = ?`,
       id
     );
-    for (const f of forks) if (f.target_session && !subtree.includes(f.target_session)) subtree.push(f.target_session);
+    if (!session) return res.status(404).json({ error: "unknown session" });
 
-    const ph = subtree.map(() => "?").join(",");
-    const includeText = req.query.include === "text";
     const turns = q<any>(
-      `SELECT t.id, t.session_id, t.seq, t.created, t.completed, t.dur_ms, t.role, t.provider, t.model,
-              t.agent, t.input, t.output, t.reasoning, t.cache_read, t.cache_write, t.cost,
-              t.prompt_total, t.occupancy, t.context_window, t.fill, t.fill_after, t.finish,
-              t.has_error, t.tool_calls, t.tool_errors, t.additions, t.deletions
-              ${includeText ? ", t.text" : ""}
-       FROM turns t WHERE t.session_id IN (${ph}) ORDER BY t.created ASC`,
-      ...subtree
-    );
-    const tools = q<any>(
-      `SELECT * FROM tools WHERE session_id IN (${ph}) ORDER BY started ASC`,
-      ...subtree
-    );
-    const events = q<any>(
-      `SELECT * FROM events WHERE session_id IN (${ph}) ORDER BY at ASC`,
-      ...subtree
-    );
-    const prompts = q<any>(
-      `SELECT id, session_id, created, text FROM turns WHERE session_id IN (${ph}) AND role='user' ORDER BY created ASC`,
-      ...subtree
-    );
-    const children = q<any>(
-      `SELECT id, project, title, created, updated, cost, turns, tool_calls, tool_errors, peak_fill, eff_score, dominant_model
-       FROM sessions WHERE parent_id = ? ORDER BY created ASC`,
+      `SELECT id, seq, model, provider, agent, created, completed, input, output, reasoning,
+              cache_read, cache_write, cost, dur_ms, finish, tool_calls, tool_errors
+       FROM turns WHERE session_id = ? AND role = 'assistant'
+       ORDER BY created ASC, seq ASC`,
       id
     );
+    const parts = q<any>(
+      `SELECT turn_id, ordinal, kind, text, name, call_id, status, title, input, output,
+              exit_code, truncated, started, ended, chars
+       FROM parts WHERE session_id = ? ORDER BY turn_id, ordinal, id`,
+      id
+    );
+    const byTurn = new Map<string, any[]>();
+    for (const p of parts) {
+      const list = byTurn.get(p.turn_id) ?? [];
+      list.push({
+        kind: p.kind,
+        ordinal: Number(p.ordinal ?? 0),
+        text: p.text ?? "",
+        name: p.name ?? "",
+        callId: p.call_id ?? "",
+        status: p.status ?? "",
+        title: p.title ?? null,
+        input: p.input ?? "",
+        output: p.output ?? "",
+        exitCode: p.exit_code ?? null,
+        truncated: Number(p.truncated ?? 0) === 1,
+        started: p.started ?? null,
+        ended: p.ended ?? null,
+        chars: Number(p.chars ?? 0),
+      });
+      byTurn.set(p.turn_id, list);
+    }
 
-    const failuresOver80 = events.filter((e: any) => e.type === "failure" && Number(e.fill) >= 0.8).length;
-    const compactions = events.filter((e: any) => e.type === "compaction").length;
-    const retries = events.filter((e: any) => e.type === "retry").length;
-    const loops = events.filter((e: any) => e.type === "loop").length;
-    const total = session.t_input + session.t_output + session.t_reasoning + session.t_cache_read + session.t_cache_write;
     res.json({
-      session,
-      subtree,
-      forks,
-      turns,
-      tools,
-      events,
-      prompts,
-      children,
-      probe: {
-        failuresOver80,
-        compactions,
-        retries,
-        loops,
-        peakFill: session.peak_fill,
-        avgFill: session.avg_fill,
-        // 有效输出 / 上下文总 Token
-        effScore: session.eff_score,
-        tokensPerLine: session.tokens_per_line,
-        diffLines: session.additions + session.deletions,
-        tokens: total,
+      session: {
+        id: session.id,
+        parentId: session.parent_id ?? null,
+        project: session.project ?? "—",
+        title: session.title ?? null,
+        agent: session.agent ?? null,
+        model: session.model ?? null,
+        provider: session.provider ?? null,
+        created: Number(session.created ?? 0),
+        updated: Number(session.updated ?? 0),
+        cost: Number(session.cost ?? 0),
+        firstPrompt: session.first_prompt ?? null,
       },
+      turns: turns.map((t) => ({
+        id: t.id,
+        model: t.model ?? "",
+        provider: t.provider ?? null,
+        agent: t.agent ?? null,
+        created: Number(t.created ?? 0),
+        completed: t.completed == null ? null : Number(t.completed),
+        tokens: {
+          input: Number(t.input ?? 0),
+          output: Number(t.output ?? 0),
+          reasoning: Number(t.reasoning ?? 0),
+          cacheRead: Number(t.cache_read ?? 0),
+          cacheWrite: Number(t.cache_write ?? 0),
+        },
+        cost: Number(t.cost ?? 0),
+        durMs: Number(t.dur_ms ?? 0),
+        finish: t.finish ?? null,
+        tools: Number(t.tool_calls ?? 0),
+        errors: Number(t.tool_errors ?? 0),
+        parts: byTurn.get(t.id) ?? [],
+      })),
     });
   });
 
   /**
-   * Operation-level ECG feed: one entry per tool call (above the baseline) and
-   * per assistant turn (below it). `d` is the operation's duration — the spike's
-   * width — and `out`/`r` drive its amplitude. Served separately from the
-   * bucketed `/api/ecg` because this is the render-heavy endpoint.
+   * Screen 2 payload: tool usage aggregated across every session, with the newest
+   * error messages per tool.
    */
-  app.get("/api/ecg/ops", (req, res) => {
-    const win = windowOf(req, res);
-    if (!win) return;
-    const { from, to } = win;
-    const project = req.query.project ? String(req.query.project) : null;
-    const LIMIT = 20000;
-
-    const tools = q<any>(
-      `SELECT t.name, t.status, t.started AS at, COALESCE(t.dur_ms,0) AS d, COALESCE(t.output_chars,0) AS out,
-              COALESCE(t.additions,0) AS "add", COALESCE(t.deletions,0) AS "del", t.session_id AS sid, s.project
-       FROM tools t JOIN sessions s ON s.id = t.session_id
-       WHERE t.started BETWEEN ? AND ? AND (? IS NULL OR s.project = ?)
-       ORDER BY t.started LIMIT ${LIMIT}`,
-      from, to, project, project
+  app.get("/api/top/tools", (_req, res) => {
+    const rows = q<any>(
+      `SELECT name, COUNT(*) calls,
+              SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) successes,
+              SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) failures,
+              SUM(COALESCE(dur_ms,0)) total_ms
+       FROM tools GROUP BY name ORDER BY calls DESC`
     );
-    const turns = q<any>(
-      `SELECT m.created AS at, COALESCE(m.dur_ms,0) AS d, COALESCE(m.output,0) AS out, COALESCE(m.reasoning,0) AS r,
-              COALESCE(m.fill,0) AS fill, m.session_id AS sid, s.project, m.model, COALESCE(m.has_error,0) AS err
-       FROM turns m JOIN sessions s ON s.id = m.session_id
-       WHERE m.role='assistant' AND m.created BETWEEN ? AND ? AND (? IS NULL OR s.project = ?)
-       ORDER BY m.created LIMIT ${LIMIT}`,
-      from, to, project, project
-    );
-    const spans = q<any>(
-      `SELECT t.target_session AS child, t.started AS "from", COALESCE(t.ended, t.started) AS "to", t.session_id AS parent, s.project
-       FROM tools t JOIN sessions s ON s.id = t.session_id
-       WHERE t.target_session IS NOT NULL AND t.started BETWEEN ? AND ? AND (? IS NULL OR s.project = ?)`,
-      from, to, project, project
-    );
-    res.json({ tools, turns, spans, truncated: tools.length >= LIMIT || turns.length >= LIMIT });
+    const recentByTool = new Map<string, string[]>();
+    for (const r of q<any>(
+      `SELECT name, error FROM tools
+       WHERE status='error' AND error IS NOT NULL AND error <> ''
+       ORDER BY COALESCE(ended, started, 0) DESC`
+    )) {
+      const list = recentByTool.get(r.name) ?? [];
+      if (list.length < 3) list.push(String(r.error).slice(0, 200));
+      recentByTool.set(r.name, list);
+    }
+    res.json({
+      tools: rows.map((r) => ({
+        name: r.name,
+        calls: Number(r.calls),
+        successes: Number(r.successes),
+        failures: Number(r.failures),
+        totalDurationMs: Number(r.total_ms ?? 0),
+        avgDurationMs: r.calls > 0 ? Number(r.total_ms ?? 0) / Number(r.calls) : 0,
+        recentErrors: recentByTool.get(r.name) ?? [],
+      })),
+    });
   });
 
   /**
-   * Daily/hourly roll-up for the wide-window ECG: one row per (project, bucket).
+   * Screen 3 payload: aggregate stats over a time range/project.
    *
-   * `bucket=day` (default) uses the local day; `bucket=hour` uses the local hour, so the
-   * same lane rendering covers 6 hours and 6 weeks and the zoom stays continuous.
-   *
-   * Output is deliberately split into two units that must never be added:
-   * `add`/`del` are incremental edits parsed from tool diffs, `write` is the line
-   * count of full-file writes. Buckets with no activity are simply absent, so a gap
-   * in the series means the project was idle — not that it scored zero.
+   * The TUI keeps whole workflows and skips *interactions* before the cutoff, so a
+   * sub-agent whose parent went quiet is dropped along with the parent. We reproduce
+   * that: roots are selected first (by project and cutoff), then their descendants.
    */
-  app.get("/api/ecg/daily", (req, res) => {
-    const win = windowOf(req, res);
-    if (!win) return;
-    const { from, to } = win;
-    const hourly = String(req.query.bucket ?? "day") === "hour";
-    const bucketMs = hourly ? HOUR : DAY;
-    // `day`/`hour` are already local-wall-clock columns, so this bucket is local too.
-    // The expression is repeated in GROUP BY/ORDER BY on purpose: SQLite resolves a bare
-    // name to the *table column* before the result alias, so `GROUP BY day` would collapse
-    // the hourly rows back into one row per day.
-    const keyExpr = hourly ? "day + hour * 3600000" : "day";
-
-    const rows = q<any>(
-      `SELECT project, ${keyExpr} AS bucket,
-              COALESCE(SUM(additions),0) AS "add", COALESCE(SUM(deletions),0) AS "del",
-              COALESCE(SUM(write_lines),0) AS write,
-              COALESCE(SUM(output+reasoning),0) AS gen, COALESCE(SUM(cache_read),0) AS cache,
-              COALESCE(SUM(cost),0) AS cost,
-              COUNT(*) AS turns, COUNT(DISTINCT session_id) AS sessions,
-              COALESCE(SUM(tool_calls),0) AS tools, COALESCE(SUM(tool_errors),0) AS errors,
-              AVG(NULLIF(fill,0)) AS fillAvg, MAX(NULLIF(fill,0)) AS peak
-       FROM turns WHERE role='assistant' AND created BETWEEN ? AND ?
-       GROUP BY project, ${keyExpr} ORDER BY ${keyExpr}`,
-      from,
-      to
-    );
-
-    // Probe counts are joined in from the event layer, bucketed to the local bucket the
-    // event happened on (events carry no bucket column of their own).
-    const probeRows = q<{ project: string; type: string; at: number }>(
-      `SELECT s.project, e.type, e.at FROM events e JOIN sessions s ON s.id = e.session_id
-       WHERE e.at BETWEEN ? AND ? AND e.type IN ('compaction','retry','loop','failure')`,
-      from,
-      to
-    );
-    const probes = new Map<string, { compactions: number; retries: number; loops: number; failures: number }>();
-    for (const p of probeRows) {
-      const d = new Date(p.at);
-      if (hourly) d.setMinutes(0, 0, 0);
-      else d.setHours(0, 0, 0, 0);
-      const key = `${p.project}|${d.getTime()}`;
-      const cell = probes.get(key) ?? { compactions: 0, retries: 0, loops: 0, failures: 0 };
-      if (p.type === "compaction") cell.compactions++;
-      else if (p.type === "retry") cell.retries++;
-      else if (p.type === "failure") cell.failures++;
-      else cell.loops++;
-      probes.set(key, cell);
-    }
-
-    const lanes = new Map<string, {
-      project: string;
-      days: any[];
-      totals: Record<string, number>;
-    }>();
-    for (const r of rows) {
-      const project = String(r.project);
-      let lane = lanes.get(project);
-      if (!lane) {
-        lane = { project, days: [], totals: { add: 0, del: 0, write: 0, gen: 0, cache: 0, cost: 0, turns: 0, sessions: 0, tools: 0, errors: 0, compactions: 0, retries: 0, loops: 0, failures: 0, activeDays: 0 } };
-        lanes.set(project, lane);
-      }
-      const p = probes.get(`${project}|${r.bucket}`) ?? { compactions: 0, retries: 0, loops: 0, failures: 0 };
-      const day = {
-        day: Number(r.bucket),
-        add: Number(r.add), del: Number(r.del), write: Number(r.write),
-        gen: Number(r.gen), cache: Number(r.cache), cost: Number(r.cost),
-        turns: Number(r.turns), sessions: Number(r.sessions),
-        tools: Number(r.tools), errors: Number(r.errors),
-        fillAvg: r.fillAvg == null ? null : Number(r.fillAvg),
-        peak: r.peak == null ? null : Number(r.peak),
-        ...p,
-      };
-      lane.days.push(day);
-      for (const k of ["add", "del", "write", "gen", "cache", "cost", "turns", "tools", "errors", "compactions", "retries", "loops", "failures"] as const) {
-        lane.totals[k] += day[k];
-      }
-      lane.totals.sessions += day.sessions;
-      lane.totals.activeDays++;
-    }
-
-    // Lanes are ordered by recent activity: the last bucket the project did anything,
-    // then that recency band's output. Dead projects drift to the bottom instead of
-    // holding a lane while a live one is pushed into the overflow tally.
-    const span = to - from;
-    const recentCut = to - Math.max(3 * bucketMs, span * 0.25);
-    const out = [...lanes.values()].map((lane) => {
-      const last = lane.days.at(-1)?.day ?? 0;
-      const recent = lane.days.filter((d) => d.day >= recentCut).reduce((a, d) => a + d.add + d.write, 0);
-      return { ...lane, lastDay: last, recent };
-    });
-    // A lane that only ever opened a session (a few stray tokens, no diff) is noise.
-    const live = out.filter((l) => l.totals.gen >= 1000 || l.totals.add > 0 || l.totals.write > 0);
-    live.sort((a, b) => b.lastDay - a.lastDay || b.recent - a.recent || b.totals.add - a.totals.add);
-
-    res.json({ from, to, bucketMs, lanes: live });
-  });
-
-  /** Marker layer for the ECG: compaction arrows, retry/loop bars, failure crosses. */
-  app.get("/api/events", (req, res) => {
-    const win = windowOf(req, res);
-    if (!win) return;
-    const { from, to } = win;
-    const raw = req.query.type ? String(req.query.type).split(",") : null;
-    const allowed = new Set(["compaction", "retry", "loop", "failure", "idle", "switch", "error"]);
-    const types = raw?.filter((t) => allowed.has(t)) ?? null;
-    const rows = q<any>(
-      `SELECT e.session_id, e.type, e.at, e.end_at, e.count, e.fill, e.detail, s.project
-       FROM events e JOIN sessions s ON s.id = e.session_id
-       WHERE e.at BETWEEN ? AND ?${types ? ` AND e.type IN (${types.map(() => "?").join(",")})` : ""}
-       ORDER BY e.at LIMIT 6000`,
-      from,
-      to,
-      ...(types ?? [])
-    );
-    res.json(rows);
-  });
-
-  /** System 3 — circadian spectrogram (day × hour), re-sliced by the scrubber. */
-  app.get("/api/heatmap", (req, res) => {
-    const win = windowOf(req, res);
-    if (!win) return;
-    const { from, to } = win;
-    const fromDay = localDayStart(from);
-    const rows = q<any>(
-      `SELECT day, hour, SUM(tokens_gen) gen, SUM(tokens_cache_read) cache_read,
-              SUM(cost) cost, SUM(turns) turns
-       FROM heat WHERE day >= ? AND day <= ? GROUP BY day, hour ORDER BY day, hour`,
-      fromDay,
-      to
-    );
-
-    const spectrogram = rows.map((r: any) => ({
-      day: Number(r.day),
-      hour: Number(r.hour),
-      gen: Number(r.gen ?? 0),
-      cache: Number(r.cache_read ?? 0),
-      cost: Number(r.cost ?? 0),
-      turns: Number(r.turns ?? 0),
-    }));
-    const matrix = new Map<string, { dow: number; hour: number; gen: number; cache: number; cost: number; turns: number }>();
-    for (const c of spectrogram) {
-      const d = new Date(c.day);
-      const dow = (d.getDay() + 6) % 7; // Mon=0
-      const key = `${dow}|${c.hour}`;
-      const cell = matrix.get(key) ?? { dow, hour: c.hour, gen: 0, cache: 0, cost: 0, turns: 0 };
-      cell.gen += c.gen;
-      cell.cache += c.cache;
-      cell.cost += c.cost;
-      cell.turns += c.turns;
-      matrix.set(key, cell);
-    }
-    const cells = [...matrix.values()].sort((a, b) => a.dow - b.dow || a.hour - b.hour);
-    const all = cells.reduce((a, c) => a + c.gen, 0);
-    const cacheAll = cells.reduce((a, c) => a + c.cache, 0);
-    const night = cells.filter((c) => c.hour >= 22 || c.hour < 2).reduce((a, c) => a + c.gen, 0);
-    const peak = [...cells].sort((a, b) => b.gen - a.gen)[0] ?? null;
-    const byHour = new Array<number>(24).fill(0);
-    for (const c of cells) byHour[c.hour] += c.gen;
-    const topHour = byHour.indexOf(Math.max(...byHour));
-    res.json({
-      days: Math.max(1, Math.round((to - fromDay) / DAY)),
-      fromDay,
-      cells,
-      spectrogram,
-      totalTokens: all,
-      totalCacheRead: cacheAll,
-      nightShare: all ? night / all : 0,
-      peak,
-      topHour,
-      insight: all
-        ? `${String(topHour).padStart(2, "0")}:00 是生成量最高的小时，占 ${(byHour[topHour] / all * 100).toFixed(1)}%；22:00–02:00 合计 ${((night / all) * 100).toFixed(1)}%`
-        : null,
-    });
-  });
-
-  /** Attention focus: gaps between consecutive tool calls in the window. */
-  app.get("/api/focus", (req, res) => {
-    const win = windowOf(req, res);
-    if (!win) return;
-    const { from, to } = win;
-    const rows = q<any>(
-      `SELECT started, name, dur_ms, session_id FROM tools
-       WHERE started BETWEEN ? AND ? ORDER BY session_id, started`,
-      from,
-      to
-    );
-    const gaps: { at: number; gap: number; session: string; tool: string }[] = [];
-    let prevSession: string | null = null;
-    let prev: number | null = null;
-    for (const r of rows) {
-      if (prevSession === r.session_id && prev != null) {
-        const gap = Math.max(0, r.started - prev);
-        if (gap > 0 && gap < 10 * 60 * 60 * 1000) {
-          gaps.push({ at: r.started, gap: gap / 1000, session: r.session_id, tool: r.name });
-        }
-      }
-      prev = r.started;
-      prevSession = r.session_id;
-    }
-    const sorted = gaps.map((g) => g.gap).sort((a, b) => a - b);
-    const pct = (p: number) => (sorted.length ? sorted[Math.floor(sorted.length * p)] : 0);
-    const buckets = new Map<number, number>();
-    for (const g of gaps) {
-      const k = Math.min(6, Math.floor(Math.log10(Math.max(g.gap, 0.1))));
-      buckets.set(k, (buckets.get(k) ?? 0) + 1);
-    }
-    const flow = q<any>(
-      `SELECT bucket, SUM(tokens_gen) tokens FROM flow WHERE bucket BETWEEN ? AND ? GROUP BY bucket ORDER BY bucket`,
-      from,
-      to
-    );
-    res.json({
-      count: gaps.length,
-      p50: pct(0.5),
-      p90: pct(0.9),
-      p99: pct(0.99),
-      max: sorted.at(-1) ?? 0,
-      deepFocusShare: gaps.length ? gaps.filter((g) => g.gap < 15).length / gaps.length : 0,
-      interruptionShare: gaps.length ? gaps.filter((g) => g.gap > 120).length / gaps.length : 0,
-      histogram: [...buckets.entries()].map(([k, c]) => ({ seconds: Math.pow(10, k), count: c })),
-      series: gaps.slice(-1500),
-      flow: flow.map((f: any) => ({ bucket: Number(f.bucket), tokens: Number(f.tokens ?? 0) })),
-    });
-  });
-
-  /**
-   * System 4 — token → diff lines. Sessions with no diff data are counted in
-   * `coverage` instead of being silently dropped (the scatter is only honest if
-   * the denominator is visible).
-   */
-  app.get("/api/conversion", (req, res) => {
-    const win = windowOf(req, res);
-    if (!win) return;
-    const { from, to } = win;
-    const rows = q<any>(
-      `SELECT id session, project, title, cost, created, dominant_model,
-              t_input+t_output+t_reasoning+t_cache_read+t_cache_write AS tokens,
-              additions+deletions AS lines, files_changed, eff_score, peak_fill, turns
-       FROM sessions WHERE created BETWEEN ? AND ? ORDER BY created DESC LIMIT 2000`,
-      from,
-      to
-    );
-    const pts = rows.filter((r: any) => Number(r.tokens) > 0);
-    const withDiff = pts.filter((r: any) => Number(r.lines) > 0);
-    const coverage = { total: pts.length, withDiff: withDiff.length };
-
-    const mean = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
-    let regression: { slope: number; intercept: number } | null = null;
-    let scored = pts.map((r: any) => ({ ...r, expected_lines: null as number | null, ratio: null as number | null }));
-
-    if (withDiff.length >= 3) {
-      const mx = mean(withDiff.map((r: any) => Math.log10(Math.max(r.tokens, 1))));
-      const my = mean(withDiff.map((r: any) => Math.log10(Math.max(r.lines, 1))));
-      let num = 0;
-      let den = 0;
-      for (const r of withDiff as any[]) {
-        const x = Math.log10(Math.max(r.tokens, 1));
-        const y = Math.log10(Math.max(r.lines, 1));
-        num += (x - mx) * (y - my);
-        den += (x - mx) ** 2;
-      }
-      const slope = den ? num / den : 0;
-      const intercept = my - slope * mx;
-      regression = { slope, intercept };
-      scored = pts.map((r: any) => {
-        const expected = Math.pow(10, slope * Math.log10(Math.max(r.tokens, 1)) + intercept);
-        return { ...r, expected_lines: expected, ratio: Number(r.lines) > 0 ? r.lines / expected : 0 };
-      });
-    }
-
-    // "注水会话": well above the median spend, far below the expected output
-    const tokenVals = pts.map((r: any) => Number(r.tokens)).sort((a, b) => a - b);
-    const p75 = tokenVals.length ? tokenVals[Math.floor(tokenVals.length * 0.75)] : 0;
-    const padded = scored
-      .filter((r: any) => r.ratio != null && r.ratio < 0.25 && r.tokens >= Math.max(p75, 50000))
-      .sort((a: any, b: any) => b.tokens - a.tokens)
-      .slice(0, 20);
-    const totalTokens = pts.reduce((a: number, r: any) => a + Number(r.tokens), 0);
-    const totalLines = withDiff.reduce((a: number, r: any) => a + Number(r.lines), 0);
-    res.json({
-      points: scored,
-      regression,
-      linesPer10k: totalTokens > 0 ? totalLines / (totalTokens / 10000) : 0,
-      padded,
-      coverage,
-    });
-  });
-
-  /** Catalog + per-model totals used by the what-if sandbox. */
-  app.get("/api/models", (_req, res) => {
-    const overrides = readOverrides();
-    const models = q<any>(`SELECT * FROM models ORDER BY id`).map((m: any) => {
-      const ov = overrides[m.id];
-      return {
-        id: m.id,
-        provider: m.provider,
-        label: ov?.label ?? m.label,
-        context: ov?.context ?? m.context,
-        cost_input: ov?.costInput ?? m.cost_input,
-        cost_output: ov?.costOutput ?? m.cost_output,
-        cost_cache_read: ov?.costCacheRead ?? m.cost_cache_read,
-        cost_cache_write: ov?.costCacheWrite ?? m.cost_cache_write,
-        source: ov ? "override" : m.source,
-        overridden: Boolean(ov),
-      };
-    });
-    const usage = q<any>(
-      `SELECT provider, model,
-              SUM(input) input, SUM(output) output, SUM(reasoning) reasoning,
-              SUM(cache_read) cache_read, SUM(cache_write) cache_write,
-              SUM(cost) cost, COUNT(*) turns
-       FROM turns WHERE role='assistant' GROUP BY provider, model ORDER BY (input+output) DESC`
-    );
-    res.json({ models, usage });
-  });
-
-  /** Manual price/context override (free-tier models price as 0 on models.dev). */
-  app.put("/api/models/:key", (req, res) => {
-    const key = String(req.params.key);
-    if (!key.includes("/")) return res.status(400).json({ error: "key must be `provider/model`" });
-    const body = req.body ?? {};
-    const patch: Partial<ModelInfo> = {};
-    const numFields: (keyof ModelInfo)[] = ["costInput", "costOutput", "costCacheRead", "costCacheWrite", "context"];
-    for (const f of numFields) {
-      const v = body[f] ?? body[String(f).replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)];
-      if (v !== undefined) {
-        const n = Number(v);
-        if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: `${f} must be a non-negative number` });
-        (patch as any)[f] = n;
-      }
-    }
-    if (body.label !== undefined) patch.label = String(body.label).slice(0, 120);
-    const next = writeOverride(key, patch);
-    res.json({ ok: true, model: next, note: "run POST /api/refresh {full:true} to reprice historical turns" });
-  });
-
-  /**
-   * System 4 — what-if sandbox: recompute the window's bill under model swaps and
-   * a cache-hit improvement, from the per-turn token buckets.
-   */
-  app.post("/api/sandbox", (req, res) => {
-    const body = req.body ?? {};
+  app.get("/api/top/overview", (req, res) => {
     const now = Date.now();
-    const from = Number(body.from ?? now - 30 * DAY);
-    const to = Number(body.to ?? now);
-    if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) {
-      return res.status(400).json({ error: "invalid window" });
-    }
-    const swaps = Array.isArray(body.swaps) ? body.swaps : [];
-    const cacheReadGain = clamp(Number(body.cacheReadGain ?? 0), -1, 1);
+    const cutoff = cutoffOf(req);
+    const project = projectOf(req);
 
-    const rows = q<any>(
-      `SELECT provider, model, SUM(input) input, SUM(output) output, SUM(reasoning) reasoning,
-              SUM(cache_read) cache_read, SUM(cache_write) cache_write, SUM(cost) cost
-       FROM turns WHERE role='assistant' AND created BETWEEN ? AND ?
-       GROUP BY provider, model`,
-      from,
-      to
+    const meta = q<any>(`SELECT id, parent_id, project, created, updated FROM sessions`);
+    const roots = meta.filter((s) => !s.parent_id || !meta.some((p) => p.id === s.parent_id));
+    const projects = [...new Set(roots.map((r) => String(r.project ?? "—")))].sort();
+
+    const chosen = roots.filter(
+      (r) => (!project || String(r.project ?? "—") === project) && (cutoff === 0 || Number(r.updated ?? 0) >= cutoff)
     );
-
-    const overrides = readOverrides();
-    const toInfo = (row: any, ov: any): ModelInfo | null => {
-      if (!row && !ov) return null;
-      return {
-        id: row?.id ?? ov?.id, provider: row?.provider ?? ov?.provider, label: ov?.label ?? row?.label,
-        context: ov?.context ?? row?.context ?? 128000,
-        costInput: ov?.costInput ?? row?.cost_input ?? 0,
-        costOutput: ov?.costOutput ?? row?.cost_output ?? 0,
-        costCacheRead: ov?.costCacheRead ?? row?.cost_cache_read ?? 0,
-        costCacheWrite: ov?.costCacheWrite ?? row?.cost_cache_write ?? 0,
-        source: ov ? "override" : row?.source ?? "cache",
-      };
-    };
-    const priceOf = (provider: string | null, model: string | null): ModelInfo | null => {
-      const key = catalogKey(provider, model);
-      return toInfo(one<any>("SELECT * FROM models WHERE id = ?", key), overrides[key]);
-    };
-    const priceById = (id: string): ModelInfo | null =>
-      toInfo(one<any>("SELECT * FROM models WHERE id = ?", id), overrides[id]);
-
-    const byKey: any[] = [];
-    let currentCost = 0;
-    let projectedCost = 0;
-    for (const r of rows) {
-      const key = catalogKey(r.provider, r.model);
-      const base = { input: Number(r.input), output: Number(r.output), reasoning: Number(r.reasoning), cacheRead: Number(r.cache_read), cacheWrite: Number(r.cache_write) };
-      const srcPrice = priceOf(r.provider, r.model) ?? zeroPrice();
-      const swap = swaps.find((s: any) => s?.from === key) ?? swaps.find((s: any) => s?.from === r.model);
-      const targetPrice = swap?.price ? toPrice(swap.price) : swap?.to ? priceById(swap.to) ?? srcPrice : srcPrice;
-
-      const moved = Math.min(base.input * Math.max(0, cacheReadGain), base.input);
-      const projectedTokens = {
-        input: base.input - moved,
-        output: base.output,
-        reasoning: base.reasoning,
-        cacheRead: base.cacheRead + moved,
-        cacheWrite: base.cacheWrite,
-      };
-      const cur = costOf(base, srcPrice);
-      const proj = costOf(projectedTokens, targetPrice);
-      currentCost += cur;
-      projectedCost += proj;
-      byKey.push({
-        key,
-        label: srcPrice.label,
-        tokens: base,
-        current: cur,
-        projected: proj,
-        delta: proj - cur,
-        price: { input: srcPrice.costInput, output: srcPrice.costOutput, cacheRead: srcPrice.costCacheRead, cacheWrite: srcPrice.costCacheWrite },
-        target: swap?.to ?? null,
-        pricedFrom: srcPrice.source,
-      });
+    const activeIds = new Set<string>(chosen.map((r) => String(r.id)));
+    // Descendants are attached by walking parent links once; 200 sessions is small.
+    for (let pass = 0; pass < 8; pass++) {
+      for (const s of meta) {
+        if (s.parent_id && activeIds.has(String(s.parent_id))) activeIds.add(String(s.id));
+      }
     }
+    const ids = [...activeIds];
+    const ph = ids.map(() => "?").join(",");
+    const turnWhere = ids.length ? `t.session_id IN (${ph}) AND t.created >= ?` : null;
+
+    const turns = turnWhere
+      ? q<any>(
+          `SELECT t.id, t.session_id, t.project, t.agent, t.model, t.created, t.input, t.output,
+                  t.reasoning, t.cache_read, t.cache_write, t.cost
+           FROM turns t WHERE t.role='assistant' AND ${turnWhere}`,
+          ...ids,
+          cutoff
+        )
+      : [];
+    const toolRows = turnWhere
+      ? q<any>(
+          `SELECT COALESCE(t.agent,'main') agent, tl.name, tl.status, COALESCE(tl.dur_ms,0) dur_ms
+           FROM tools tl JOIN turns t ON t.id = tl.turn_id WHERE ${turnWhere}`,
+          ...ids,
+          cutoff
+        )
+      : [];
+
+    const totals = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+    const models = new Map<string, { id: string; calls: number; tokens: number; cost: number }>();
+    const projBreak = new Map<string, { project: string; sessions: number; cost: number }>();
+    const agentErrors = new Map<string, { agent: string; calls: number; errors: number }>();
+    const toolCounts = new Map<string, { name: string; calls: number; errors: number; totalDurationMs: number }>();
+    const tokenPoints: [number, number][] = [];
+    const hourly = new Array(24).fill(0);
+    const activeSessions = new Set<string>();
+
+    for (const t of turns) {
+      const input = Number(t.input ?? 0);
+      const output = Number(t.output ?? 0);
+      const reasoning = Number(t.reasoning ?? 0);
+      const cacheRead = Number(t.cache_read ?? 0);
+      const cacheWrite = Number(t.cache_write ?? 0);
+      const cost = Number(t.cost ?? 0);
+      // `total` deliberately excludes reasoning: it is what the provider billed as
+      // context traffic, and the TUI's own TokenUsage.total draws the same line.
+      const total = input + output + cacheRead + cacheWrite;
+
+      totals.input += input;
+      totals.output += output;
+      totals.reasoning += reasoning;
+      totals.cacheRead += cacheRead;
+      totals.cacheWrite += cacheWrite;
+      totals.cost += cost;
+
+      const modelId = String(t.model ?? "unknown");
+      const mEntry = models.get(modelId) ?? { id: modelId, calls: 0, tokens: 0, cost: 0 };
+      mEntry.calls++;
+      mEntry.tokens += total;
+      mEntry.cost += cost;
+      models.set(modelId, mEntry);
+
+      const proj = String(t.project ?? "—");
+      const pEntry = projBreak.get(proj) ?? { project: proj, sessions: 0, cost: 0 };
+      pEntry.cost += cost;
+      projBreak.set(proj, pEntry);
+
+      activeSessions.add(String(t.session_id));
+      const ts = Number(t.created ?? 0);
+      if (ts) {
+        hourly[new Date(ts).getHours()]++;
+        tokenPoints.push([ts, total]);
+      }
+    }
+
+    for (const r of toolRows) {
+      const name = String(r.name);
+      const isError = r.status === "error";
+      const tEntry = toolCounts.get(name) ?? { name, calls: 0, errors: 0, totalDurationMs: 0 };
+      tEntry.calls++;
+      if (isError) tEntry.errors++;
+      tEntry.totalDurationMs += Number(r.dur_ms ?? 0);
+      toolCounts.set(name, tEntry);
+
+      const agent = String(r.agent ?? "main");
+      const aEntry = agentErrors.get(agent) ?? { agent, calls: 0, errors: 0 };
+      aEntry.calls++;
+      if (isError) aEntry.errors++;
+      agentErrors.set(agent, aEntry);
+    }
+
+    // A session counts once it has an interaction inside the window, whatever the
+    // wall-clock span of its row says.
+    for (const s of meta) {
+      if (!activeSessions.has(String(s.id))) continue;
+      const proj = String(s.project ?? "—");
+      const pEntry = projBreak.get(proj) ?? { project: proj, sessions: 0, cost: 0 };
+      pEntry.sessions++;
+      projBreak.set(proj, pEntry);
+    }
+
+    const sessionPoints: [number, number][] = meta
+      .filter((s) => activeSessions.has(String(s.id)))
+      .map((s) => [Number(s.updated ?? s.created ?? 0), 1] as [number, number]);
 
     res.json({
-      range: { from, to },
-      assumptions: { cacheReadGain, swaps: swaps.map((s: any) => ({ from: s?.from, to: s?.to })) },
-      current: currentCost,
-      projected: projectedCost,
-      delta: projectedCost - currentCost,
-      deltaPct: currentCost > 0 ? (projectedCost - currentCost) / currentCost : 0,
-      byModel: byKey.sort((a, b) => b.current - a.current),
+      generatedAt: now,
+      range: { from: cutoff, to: now, project },
+      projects,
+      activity: { roots: { shown: chosen.length, total: roots.length } },
+      totals: { ...totals, total: totals.input + totals.output + totals.cacheRead + totals.cacheWrite },
+      models: [...models.values()].sort((a, b) => b.calls - a.calls),
+      projectsBreakdown: [...projBreak.values()].sort((a, b) => b.sessions - a.sessions),
+      agentErrors: [...agentErrors.values()].sort((a, b) => b.calls - a.calls),
+      tools: [...toolCounts.values()].sort((a, b) => b.calls - a.calls),
+      tokenTrend: buildTrendBuckets(tokenPoints, cutoff, now),
+      sessionTrend: buildTrendBuckets(sessionPoints, cutoff, now),
+      hourly,
     });
   });
 
-  app.use("/api", (_req, res) => res.status(404).json({ error: "not found" }));
-  app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    console.error(err);
-    res.status(500).json({ error: (err as Error).message });
+  /**
+   * Cross-session search, the web equivalent of `/` + `n`/`N` in the TUI: it answers
+   * "which sessions mention this" without shipping every transcript to the browser.
+   */
+  app.get("/api/top/search", (req, res) => {
+    const raw = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    if (raw.length < 2) return res.json({ query: raw, hits: [] });
+    const like = `%${raw.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    const rows = q<any>(
+      `SELECT s.id, s.title, s.project, s.updated,
+              (SELECT COUNT(*) FROM parts p WHERE p.session_id = s.id
+                 AND (p.text LIKE ? ESCAPE '\\' OR p.name LIKE ? ESCAPE '\\'
+                      OR p.title LIKE ? ESCAPE '\\' OR p.input LIKE ? ESCAPE '\\'
+                      OR p.output LIKE ? ESCAPE '\\')) hits
+       FROM sessions s
+       WHERE s.id IN (SELECT session_id FROM parts WHERE text LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\'
+                        OR title LIKE ? ESCAPE '\\' OR input LIKE ? ESCAPE '\\' OR output LIKE ? ESCAPE '\\')
+       ORDER BY s.updated DESC LIMIT 40`,
+      like, like, like, like, like, like, like, like, like, like
+    );
+    res.json({
+      query: raw,
+      hits: rows.map((r) => ({
+        id: r.id,
+        title: r.title ?? null,
+        project: r.project ?? "—",
+        updated: Number(r.updated ?? 0),
+        hits: Number(r.hits ?? 0),
+      })),
+    });
   });
 
   return app;
-}
-
-const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Number.isFinite(v) ? v : 0));
-
-function costOf(t: { input: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number }, p: ModelInfo): number {
-  return (t.input * p.costInput + (t.output + t.reasoning) * p.costOutput + t.cacheRead * p.costCacheRead + t.cacheWrite * p.costCacheWrite) / 1e6;
-}
-
-function zeroPrice(): ModelInfo {
-  return { id: "unknown", provider: "unknown", label: "unknown", context: 128000, costInput: 0, costOutput: 0, costCacheRead: 0, costCacheWrite: 0, source: "fallback" };
-}
-
-function toPrice(p: any): ModelInfo {
-  return {
-    id: "custom", provider: "custom", label: "custom", context: 128000,
-    costInput: Number(p.input ?? p.costInput ?? 0),
-    costOutput: Number(p.output ?? p.costOutput ?? 0),
-    costCacheRead: Number(p.cacheRead ?? p.costCacheRead ?? 0),
-    costCacheWrite: Number(p.cacheWrite ?? p.costCacheWrite ?? 0),
-    source: "override",
-  };
-}
-
-function localDayStart(ts: number): number {
-  const d = new Date(ts);
-  d.setHours(0, 0, 0, 0);
-  return d.getTime();
 }

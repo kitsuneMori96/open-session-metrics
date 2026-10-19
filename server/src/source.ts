@@ -44,6 +44,8 @@ export interface SrcTurn {
   finish: string | null;
   text: string;
   tools: SrcTool[];
+  /** ordered content of the turn, for the transcript view (assistant turns only) */
+  parts: SrcPart[];
   prompt: string | null;
   /** per-turn diff stats collected from tool metadata (set by the reader) */
   _add?: number;
@@ -51,6 +53,28 @@ export interface SrcTurn {
   _files?: number;
   /** per-turn full-file `write` output, counted in lines (a different unit than a diff) */
   _write?: number;
+}
+
+/**
+ * One item of a turn's content array, flattened. `text` holds the body of text and
+ * reasoning parts; a tool part carries its call fields instead.
+ */
+export interface SrcPart {
+  kind: "text" | "reasoning" | "tool";
+  text: string;
+  name: string;
+  callId: string;
+  status: string;
+  title: string | null;
+  /** raw JSON of the tool input, truncated (see PART_CAP) */
+  input: string;
+  output: string;
+  exitCode: number | null;
+  truncated: boolean;
+  started: number | null;
+  ended: number | null;
+  /** characters the full body had before truncation — shown as "(Nc)" for reasoning */
+  chars: number;
 }
 
 export interface SrcTool {
@@ -92,6 +116,34 @@ export interface SrcEvent {
 }
 
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+
+/**
+ * Body caps for the transcript table. Text and reasoning are rendered in full
+ * (wrapped) in the messages panel, tool input as one row per key, and tool output
+ * cut to 40 lines — nothing past these lengths can ever be displayed, and the caps
+ * are what keep a 234 MB source from becoming a 234 MB copy of itself.
+ */
+export const PART_CAP = { text: 2000, reasoning: 2000, input: 1500, output: 3000 } as const;
+
+/** A text/reasoning part; `chars` keeps the pre-truncation length for the "(Nc)" hint. */
+function bodyPart(kind: "text" | "reasoning", body: string): SrcPart {
+  const trimmed = body.trim();
+  return {
+    kind,
+    text: trimmed.slice(0, kind === "reasoning" ? PART_CAP.reasoning : PART_CAP.text),
+    name: "",
+    callId: "",
+    status: "",
+    title: null,
+    input: "",
+    output: "",
+    exitCode: null,
+    truncated: trimmed.length > (kind === "reasoning" ? PART_CAP.reasoning : PART_CAP.text),
+    started: null,
+    ended: null,
+    chars: trimmed.length,
+  };
+}
 
 function parse(json: string): any {
   try {
@@ -373,6 +425,7 @@ export class SourceReader {
       const isUser = type === "user";
       const content = Array.isArray(d.content) ? d.content : [];
       const tools: SrcTool[] = [];
+      const parts: SrcPart[] = [];
       let text = "";
       let additions = 0;
       let deletions = 0;
@@ -380,7 +433,17 @@ export class SourceReader {
       let writeLines = 0;
 
       for (const item of content) {
-        if (item?.type === "text") text += item.text ?? "";
+        if (item?.type === "text") {
+          const body = item.text ?? "";
+          text += body;
+          if (!isUser && body.trim()) parts.push(bodyPart("text", body));
+          continue;
+        }
+        if (item?.type === "reasoning") {
+          const body = item.text ?? "";
+          if (!isUser && body.trim()) parts.push(bodyPart("reasoning", body));
+          continue;
+        }
         if (item?.type === "tool") {
           const st = item.state ?? {};
           const name = item.name ?? "unknown";
@@ -422,6 +485,23 @@ export class SourceReader {
             paths: pathsOf(st.input, st.metadata?.files),
             targetSession: inputPreview ? SESSION_ID_RE.exec(inputPreview)?.[0] ?? null : null,
           });
+          if (!isUser) {
+            parts.push({
+              kind: "tool",
+              text: "",
+              name,
+              callId: item.id ?? "",
+              status: st.status ?? "pending",
+              title: st.title ?? null,
+              input: (st.input ? JSON.stringify(st.input) : "").slice(0, PART_CAP.input),
+              output: (typeof outputText === "string" ? outputText : "").slice(0, PART_CAP.output),
+              exitCode: st.metadata?.exit ?? st.metadata?.exitCode ?? null,
+              truncated: st.metadata?.truncated ?? false,
+              started,
+              ended,
+              chars: typeof outputText === "string" ? outputText.length : 0,
+            });
+          }
         }
       }
 
@@ -433,7 +513,7 @@ export class SourceReader {
           id: row.id, sessionId: row.session_id, seq: num(row.seq), created, completed,
           role: "user", provider: null, model: d.model?.id ?? null, variant: null, agent: d.agent ?? null,
           input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0,
-          finish: null, text: d.text ?? text, tools: [], prompt: (d.text ?? text).slice(0, 400),
+          finish: null, text: d.text ?? text, tools: [], parts: [], prompt: (d.text ?? text).slice(0, 400),
         });
         continue;
       }
@@ -446,7 +526,7 @@ export class SourceReader {
         input: num(tk.input), output: num(tk.output), reasoning: num(tk.reasoning),
         cacheRead: num(tk.cache?.read), cacheWrite: num(tk.cache?.write), cost: num(d.cost),
         finish: d.finish ?? d.rawFinish ?? null,
-        text, tools,
+        text, tools, parts,
         prompt: null,
         _add: additions,
         _del: deletions,
@@ -480,14 +560,26 @@ export class SourceReader {
     for (const row of msgs) {
       const d = parse(row.data);
       if (!d) continue;
-      const parts = partsByMsg.get(row.id) ?? [];
+      const rawParts = partsByMsg.get(row.id) ?? [];
       const role: string = d.role ?? "assistant";
+      const isAssistant = role === "assistant";
       const tools: SrcTool[] = [];
+      const parts: SrcPart[] = [];
       let text = "";
       let files = 0;
       let writeLines = 0;
-      for (const p of parts) {
-        if (p.type === "text") text += p.text ?? "";
+      for (const p of rawParts) {
+        if (p.type === "text") {
+          const body = p.text ?? "";
+          text += body;
+          if (isAssistant && body.trim()) parts.push(bodyPart("text", body));
+          continue;
+        }
+        if (p.type === "reasoning") {
+          const body = p.text ?? "";
+          if (isAssistant && body.trim()) parts.push(bodyPart("reasoning", body));
+          continue;
+        }
         if (p.type === "tool") {
           const st = p.state ?? {};
           const name = p.tool ?? "unknown";
@@ -514,6 +606,18 @@ export class SourceReader {
             paths: pathsOf(st.input, p.files),
             targetSession: inputPreview ? SESSION_ID_RE.exec(inputPreview)?.[0] ?? null : null,
           });
+          if (isAssistant) {
+            const outText = typeof st.output === "string" ? st.output : "";
+            parts.push({
+              kind: "tool", text: "", name, callId: p.callID ?? "",
+              status: st.status ?? "pending", title: st.title ?? null,
+              input: (st.input ? JSON.stringify(st.input) : "").slice(0, PART_CAP.input),
+              output: outText.slice(0, PART_CAP.output),
+              exitCode: st.metadata?.exit ?? st.metadata?.exitCode ?? null,
+              truncated: st.metadata?.truncated ?? false,
+              started, ended, chars: outText.length,
+            });
+          }
         }
       }
       const tk = d.tokens ?? {};
@@ -525,7 +629,7 @@ export class SourceReader {
         input: tk.input ?? d.usage?.input_tokens ?? 0, output: tk.output ?? d.usage?.output_tokens ?? 0,
         reasoning: tk.reasoning ?? 0, cacheRead: tk.cache?.read ?? d.usage?.cache_read_input_tokens ?? 0,
         cacheWrite: tk.cache?.write ?? d.usage?.cache_write_input_tokens ?? 0, cost: num(d.cost),
-        finish: d.finish ?? d.stop_reason ?? null, text, tools,
+        finish: d.finish ?? d.stop_reason ?? null, text, tools, parts: isAssistant ? parts : [],
         prompt: role === "user" ? text.slice(0, 400) : null,
         _add: tools.reduce((a, t) => a + t.additions, 0),
         _del: tools.reduce((a, t) => a + t.deletions, 0),

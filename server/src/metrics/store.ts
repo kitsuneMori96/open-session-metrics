@@ -121,7 +121,7 @@ async function incrementalRebuild(): Promise<BuildReport> {
     return {
       mode: "incremental",
       schema: getMeta(db, "sourceSchema") ?? "v2",
-      sessions: 0, turns: 0, tools: 0, events: 0, flow: 0, heat: 0,
+      sessions: 0, turns: 0, tools: 0, parts: 0, events: 0, flow: 0, heat: 0,
       models: 0, ms: 0,
     };
   }

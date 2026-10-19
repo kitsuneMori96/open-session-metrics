@@ -27,13 +27,13 @@ async function doMaterialize({ force = false, full = false }: { force?: boolean;
   if (!existsSync(METRICS_DB) || full) {
     console.log(`[osm] ${full ? "full rebuild requested" : "no metrics.db yet"} — materializing…`);
     const r = await rebuild({ full: true });
-    console.log(`[osm] built: ${r.sessions} sessions / ${r.turns} turns / ${r.tools} tools in ${r.ms}ms`);
+    console.log(`[osm] built: ${r.sessions} sessions / ${r.turns} turns / ${r.tools} tools / ${r.parts} parts in ${r.ms}ms`);
     return r;
   }
   if (!force && !sourceChanged()) return undefined;
   const r = await rebuild();
   console.log(
-    `[osm] ${r.mode} sync: ${r.sessions} sessions / ${r.turns} turns / ${r.events} events / ${r.flow} flow cells in ${r.ms}ms`
+    `[osm] ${r.mode} sync: ${r.sessions} sessions / ${r.turns} turns / ${r.parts} parts / ${r.events} events in ${r.ms}ms`
   );
   return r;
 }

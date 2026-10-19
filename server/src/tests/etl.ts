@@ -64,6 +64,8 @@ function seed() {
     tokens: { input: 1000, output: 500, reasoning: 100, cache: { read: 50000, write: 0 } },
     finish: "tool-calls",
     content: [
+      { type: "reasoning", text: "先确认索引现在的定义" },
+      { type: "text", text: "我先看一下索引定义。" },
       { type: "tool", id: "c1", name: "read", state: { status: "completed", input: { filePath: "/b.ts" }, time: { start: T0 + MIN, end: T0 + MIN + 1000 } } },
       { type: "tool", id: "c2", name: "bash", state: { status: "completed", input: { command: "ls" }, time: { start: T0 + MIN + 1000, end: T0 + MIN + 2000 } } },
     ],
@@ -230,6 +232,22 @@ async function main() {
   const writeTool = one("SELECT * FROM tools WHERE name='write'");
   ok("tool row keeps write lines separate from additions", writeTool.write_lines === 3 && writeTool.additions === 0,
     JSON.stringify({ w: writeTool.write_lines, a: writeTool.additions }));
+
+  // ---- transcript parts: what the messages panel walks ----
+  const allParts = rows("SELECT * FROM parts ORDER BY id");
+  ok("transcript parts materialize", allParts.length > 0, `got ${allParts.length}`);
+  const partKinds = new Set(allParts.map((p) => p.kind));
+  ok("parts keep all three content kinds", partKinds.has("tool") && partKinds.has("text") && partKinds.has("reasoning"),
+    [...partKinds].join(","));
+  const firstTurn = one("SELECT id FROM turns WHERE session_id='ses_parent' AND role='assistant' ORDER BY created LIMIT 1");
+  const firstTurnParts = rows("SELECT * FROM parts WHERE turn_id=? ORDER BY ordinal", firstTurn.id);
+  ok("a turn's parts keep their content order", firstTurnParts.map((p) => p.kind).join(",") === "reasoning,text,tool,tool",
+    firstTurnParts.map((p) => p.kind).join(","));
+  const failPart = one("SELECT * FROM parts WHERE kind='tool' AND name='bash' AND status='error'");
+  ok("a failed tool part carries its output", /exit 1/.test(failPart?.output ?? ""), JSON.stringify(failPart));
+  const editPart = one("SELECT * FROM parts WHERE kind='tool' AND name='edit' AND input LIKE '%oldString%'");
+  ok("a tool part keeps its input JSON", !!editPart, JSON.stringify(editPart));
+  ok("session records a median output rate", s1.output_rate > 0, `got ${s1.output_rate}`);
 
   const flow = rows("SELECT * FROM flow WHERE project='/tmp/demo' OR project='demo'");
   ok("ECG flow cells exist", flow.length > 0, `got ${flow.length}`);
