@@ -4,7 +4,7 @@ import TopBar from "./components/TopBar";
 import LeftRail from "./components/LeftRail";
 import RightRail from "./components/RightRail";
 import EcgCanvas from "./components/EcgCanvas";
-import DailyStage from "./components/DailyStage";
+import ContextStage from "./components/ContextStage";
 import SessionAnatomy from "./components/SessionAnatomy";
 import TrayDrawer from "./components/TrayDrawer";
 
@@ -16,7 +16,7 @@ function Stage() {
   // (spikes are the right glyph for individual operations); anything wider rolls up into
   // bucketed bands, which switch from hours to days on their own as the window grows.
   const wide = win.to - win.from > 12 * HOUR_MS;
-  const stage = mode === "anatomy" && sessionId ? `anatomy-${sessionId}` : wide ? "daily" : "ecg";
+  const stage = mode === "anatomy" && sessionId ? `anatomy-${sessionId}` : wide ? "context" : "ecg";
   return (
     <div className="h-full flex flex-col bg-paper text-ink overflow-hidden relative">
       <TopBar />
@@ -32,7 +32,7 @@ function Stage() {
               transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
               className="absolute inset-0"
             >
-              {mode === "anatomy" && sessionId ? <SessionAnatomy id={sessionId} /> : wide ? <DailyStage /> : <EcgCanvas />}
+              {mode === "anatomy" && sessionId ? <SessionAnatomy id={sessionId} /> : wide ? <ContextStage /> : <EcgCanvas />}
             </motion.div>
           </AnimatePresence>
         </main>

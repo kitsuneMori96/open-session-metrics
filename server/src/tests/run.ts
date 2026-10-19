@@ -52,9 +52,18 @@ async function main() {
     if (!(out > 0)) return "every lane reports zero output";
     return null;
   });
-  await check("ecg daily (hour)", `/api/ecg/daily?${qs}&bucket=hour`, (j) =>
-    j.bucketMs === 3600000 && j.lanes?.length ? null : `hourly bucket not applied: ${j.bucketMs}`
-  );
+  await check("ecg daily (hour)", `/api/ecg/daily?from=${to - 3 * DAY}&to=${to}&bucket=hour`, (j) => {
+    if (j.bucketMs !== 3600000) return `hourly bucket not applied: ${j.bucketMs}`;
+    if (!j.lanes?.length) return "no hourly lanes";
+    const buckets = j.lanes.reduce((a: number, l: any) => a + l.days.length, 0);
+    // Guards the SQL trap this endpoint already fell into once: `GROUP BY day` resolves to
+    // the table column, not the result alias, silently collapsing every hour into one row.
+    if (!(buckets > j.lanes.length)) return `hourly buckets collapsed: ${buckets} buckets / ${j.lanes.length} lanes`;
+    const cell = j.lanes[0].days[0];
+    if (cell.fillAvg == null) return "no context occupancy on an hourly bucket";
+    if (!(cell.fillAvg > 0 && cell.fillAvg <= 1)) return `occupancy out of range: ${cell.fillAvg}`;
+    return null;
+  });
   await check("sessions", `/api/sessions?${qs}`, (j) => (Array.isArray(j) && j.length ? null : "no sessions in window"));
   await check("heatmap", `/api/heatmap?${qs}`, (j) => (j.cells?.length ? null : "empty heatmap"));
   await check("focus", `/api/focus?${qs}`, (j) => (typeof j.p50 === "number" ? null : "no focus stats"));

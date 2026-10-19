@@ -283,15 +283,19 @@ export interface DailyCell {
   sessions: number;
   tools: number;
   errors: number;
-  peak: number;
+  /** mean context occupancy across the bucket's turns, null when no turn reported one */
+  fillAvg: number | null;
+  /** highest occupancy reached in the bucket — where the ceiling got hit */
+  peak: number | null;
   compactions: number;
   retries: number;
   loops: number;
+  failures: number;
 }
 export interface DailyTotals {
   add: number; del: number; write: number; gen: number; cache: number; cost: number;
   turns: number; sessions: number; tools: number; errors: number;
-  compactions: number; retries: number; loops: number; activeDays: number;
+  compactions: number; retries: number; loops: number; failures: number; activeDays: number;
 }
 export interface DailyLane {
   project: string;

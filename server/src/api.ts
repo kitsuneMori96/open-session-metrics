@@ -342,19 +342,22 @@ export function createApp(deps: {
     const hourly = String(req.query.bucket ?? "day") === "hour";
     const bucketMs = hourly ? HOUR : DAY;
     // `day`/`hour` are already local-wall-clock columns, so this bucket is local too.
+    // The expression is repeated in GROUP BY/ORDER BY on purpose: SQLite resolves a bare
+    // name to the *table column* before the result alias, so `GROUP BY day` would collapse
+    // the hourly rows back into one row per day.
     const keyExpr = hourly ? "day + hour * 3600000" : "day";
 
     const rows = q<any>(
-      `SELECT project, ${keyExpr} AS day,
+      `SELECT project, ${keyExpr} AS bucket,
               COALESCE(SUM(additions),0) AS "add", COALESCE(SUM(deletions),0) AS "del",
               COALESCE(SUM(write_lines),0) AS write,
               COALESCE(SUM(output+reasoning),0) AS gen, COALESCE(SUM(cache_read),0) AS cache,
               COALESCE(SUM(cost),0) AS cost,
               COUNT(*) AS turns, COUNT(DISTINCT session_id) AS sessions,
               COALESCE(SUM(tool_calls),0) AS tools, COALESCE(SUM(tool_errors),0) AS errors,
-              MAX(fill) AS peak
+              AVG(NULLIF(fill,0)) AS fillAvg, MAX(NULLIF(fill,0)) AS peak
        FROM turns WHERE role='assistant' AND created BETWEEN ? AND ?
-       GROUP BY project, day ORDER BY day`,
+       GROUP BY project, ${keyExpr} ORDER BY ${keyExpr}`,
       from,
       to
     );
@@ -363,19 +366,20 @@ export function createApp(deps: {
     // event happened on (events carry no bucket column of their own).
     const probeRows = q<{ project: string; type: string; at: number }>(
       `SELECT s.project, e.type, e.at FROM events e JOIN sessions s ON s.id = e.session_id
-       WHERE e.at BETWEEN ? AND ? AND e.type IN ('compaction','retry','loop')`,
+       WHERE e.at BETWEEN ? AND ? AND e.type IN ('compaction','retry','loop','failure')`,
       from,
       to
     );
-    const probes = new Map<string, { compactions: number; retries: number; loops: number }>();
+    const probes = new Map<string, { compactions: number; retries: number; loops: number; failures: number }>();
     for (const p of probeRows) {
       const d = new Date(p.at);
       if (hourly) d.setMinutes(0, 0, 0);
       else d.setHours(0, 0, 0, 0);
       const key = `${p.project}|${d.getTime()}`;
-      const cell = probes.get(key) ?? { compactions: 0, retries: 0, loops: 0 };
+      const cell = probes.get(key) ?? { compactions: 0, retries: 0, loops: 0, failures: 0 };
       if (p.type === "compaction") cell.compactions++;
       else if (p.type === "retry") cell.retries++;
+      else if (p.type === "failure") cell.failures++;
       else cell.loops++;
       probes.set(key, cell);
     }
@@ -389,21 +393,22 @@ export function createApp(deps: {
       const project = String(r.project);
       let lane = lanes.get(project);
       if (!lane) {
-        lane = { project, days: [], totals: { add: 0, del: 0, write: 0, gen: 0, cache: 0, cost: 0, turns: 0, sessions: 0, tools: 0, errors: 0, compactions: 0, retries: 0, loops: 0, activeDays: 0 } };
+        lane = { project, days: [], totals: { add: 0, del: 0, write: 0, gen: 0, cache: 0, cost: 0, turns: 0, sessions: 0, tools: 0, errors: 0, compactions: 0, retries: 0, loops: 0, failures: 0, activeDays: 0 } };
         lanes.set(project, lane);
       }
-      const p = probes.get(`${project}|${r.day}`) ?? { compactions: 0, retries: 0, loops: 0 };
+      const p = probes.get(`${project}|${r.bucket}`) ?? { compactions: 0, retries: 0, loops: 0, failures: 0 };
       const day = {
-        day: Number(r.day),
+        day: Number(r.bucket),
         add: Number(r.add), del: Number(r.del), write: Number(r.write),
         gen: Number(r.gen), cache: Number(r.cache), cost: Number(r.cost),
         turns: Number(r.turns), sessions: Number(r.sessions),
         tools: Number(r.tools), errors: Number(r.errors),
-        peak: Number(r.peak ?? 0),
+        fillAvg: r.fillAvg == null ? null : Number(r.fillAvg),
+        peak: r.peak == null ? null : Number(r.peak),
         ...p,
       };
       lane.days.push(day);
-      for (const k of ["add", "del", "write", "gen", "cache", "cost", "turns", "tools", "errors", "compactions", "retries", "loops"] as const) {
+      for (const k of ["add", "del", "write", "gen", "cache", "cost", "turns", "tools", "errors", "compactions", "retries", "loops", "failures"] as const) {
         lane.totals[k] += day[k];
       }
       lane.totals.sessions += day.sessions;
