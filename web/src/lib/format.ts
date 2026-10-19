@@ -43,11 +43,6 @@ export const durTool = (ms: number): string => {
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
-export const clock = (ts: number): string => {
-  const d = new Date(ts);
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-};
-
 export const clockSec = (ts: number): string => {
   const d = new Date(ts);
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
@@ -57,11 +52,6 @@ export const clockSec = (ts: number): string => {
 export const stamp = (ts: number): string => {
   const d = new Date(ts);
   return `${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-};
-
-export const dayStamp = (ts: number): string => {
-  const d = new Date(ts);
-  return `${pad(d.getMonth() + 1)}/${pad(d.getDate())}`;
 };
 
 /** Dominant-model colour, kept in sync with the --color-m-* theme tokens. */
