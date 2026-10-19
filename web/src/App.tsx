@@ -24,6 +24,8 @@ export default function App() {
     try {
       await refresh(false);
       await qc.invalidateQueries();
+    } catch {
+      // The panel keeps showing the last good snapshot; the tab bar stops spinning.
     } finally {
       setRefreshing(false);
     }
