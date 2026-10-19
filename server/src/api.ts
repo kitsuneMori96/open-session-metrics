@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { BUCKET_MS } from "./config";
 import { getMeta, getMetaNumber } from "./metrics/schema";
 import { buildTrendBuckets } from "./metrics/trend";
+import { dashboard, facets, toolDetail, type Slice } from "./metrics/analytics";
 import type { BuildReport } from "./metrics/build";
 
 export function createApp(deps: {
@@ -25,6 +26,23 @@ export function createApp(deps: {
   };
   const projectOf = (req: express.Request): string | null =>
     typeof req.query.project === "string" && req.query.project ? req.query.project : null;
+
+  const str = (req: express.Request, key: string): string | null => {
+    const raw = req.query[key];
+    return typeof raw === "string" && raw ? raw : null;
+  };
+
+  /** The window + cross-filter a dashboard view is rendered against. */
+  const sliceOf = (req: express.Request): Slice => {
+    const rawTo = Number(req.query.to ?? 0);
+    return {
+      from: cutoffOf(req),
+      to: Number.isFinite(rawTo) && rawTo > 0 ? rawTo : Date.now() + 1,
+      project: projectOf(req),
+      model: str(req, "model"),
+      agent: str(req, "agent"),
+    };
+  };
 
   app.get("/api/status", (_req, res) => {
     const db = deps.db();
@@ -177,7 +195,8 @@ export function createApp(deps: {
 
     const turns = q<any>(
       `SELECT id, seq, model, provider, agent, created, completed, input, output, reasoning,
-              cache_read, cache_write, cost, dur_ms, finish, tool_calls, tool_errors
+              cache_read, cache_write, cost, dur_ms, finish, tool_calls, tool_errors,
+              project, occupancy, context_window, fill, fill_after, additions, deletions, write_lines, has_error
        FROM turns WHERE session_id = ? AND role = 'assistant'
        ORDER BY created ASC, seq ASC`,
       id
@@ -243,6 +262,17 @@ export function createApp(deps: {
         finish: t.finish ?? null,
         tools: Number(t.tool_calls ?? 0),
         errors: Number(t.tool_errors ?? 0),
+        // Turn-level context readings: the transcript timeline plots these, and the
+        // Stats panel needs the model window the fill ratio was measured against.
+        project: t.project ?? "—",
+        occupancy: Number(t.occupancy ?? 0),
+        contextWindow: Number(t.context_window ?? 0),
+        fill: Number(t.fill ?? 0),
+        fillAfter: Number(t.fill_after ?? 0),
+        additions: Number(t.additions ?? 0),
+        deletions: Number(t.deletions ?? 0),
+        writeLines: Number(t.write_lines ?? 0),
+        hasError: Number(t.has_error ?? 0) === 1,
         parts: byTurn.get(t.id) ?? [],
       })),
     });
@@ -422,6 +452,33 @@ export function createApp(deps: {
       sessionTrend: buildTrendBuckets(sessionPoints, cutoff, now),
       hourly,
     });
+  });
+
+  /**
+   * Everything the dashboard's filter bar needs to describe the corpus, in one call:
+   * the project / model / agent dimensions with their sizes, plus the data extent so a
+   * relative window ("last 30 days") can be anchored to what actually exists.
+   */
+  app.get("/api/top/facets", (_req, res) => {
+    res.json(facets(deps.db()));
+  });
+
+  /**
+   * The Overview payload. Unlike `/api/top/overview` this returns raw buckets rather
+   * than a pre-thinned label array, so the browser can draw a real time axis, brush a
+   * sub-range and stack the series by model without another round trip.
+   */
+  app.get("/api/top/analytics", (req, res) => {
+    res.json(dashboard(deps.db(), sliceOf(req)));
+  });
+
+  /** Per-tool forensics: volume, latency distribution, error signatures, call sites. */
+  app.get("/api/top/tool", (req, res) => {
+    const name = str(req, "name");
+    if (!name) return res.status(400).json({ error: "name is required" });
+    const detail = toolDetail(deps.db(), sliceOf(req), name);
+    if (!detail.totals || detail.totals.calls === 0) return res.status(404).json({ error: "no calls for that tool in this window" });
+    res.json(detail);
   });
 
   /**

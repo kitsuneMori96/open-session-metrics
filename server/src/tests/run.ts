@@ -40,18 +40,81 @@ async function main() {
     j.counts.parts > 0 ? null : `no parts materialized (transcript would be empty): ${j.counts.parts}`
   );
 
-  const sessions = await check("top sessions", "/api/top/sessions", (j) => {
-    if (!j.sessions?.length) return "no sessions";
-    const billed = j.sessions.filter((s: any) => s.tokens.total > 0);
-    if (!billed.length) return "every session reports zero tokens";
-    const withCtx = billed.filter((s: any) => s.contextPct > 0 && s.contextPct <= 1);
-    if (!withCtx.length) return "no session has a sane context ratio";
-    if (!j.sessions.some((s: any) => s.tools?.length)) return "no session has tool usage";
+  // The facet list is what the slice bar and the search palette are built from, so every
+  // dimension has to come back non-empty and every value has to be usable as a filter.
+  const facets = await check("facets", "/api/top/facets", (j) => {
+    if (!j.projects?.length) return "no projects";
+    if (!j.models?.length) return "no models";
+    if (!j.agents?.length) return "no agents";
+    if (!j.tools?.length) return "no tools";
+    if (!(j.extent?.from > 0 && j.extent.to > j.extent.from)) return `bad extent: ${JSON.stringify(j.extent)}`;
+    if (!(j.counts.sessions > 0 && j.counts.turns > 0)) return `bad counts: ${JSON.stringify(j.counts)}`;
     return null;
   });
 
-  // The messages panel is the reason `parts` exists: assert a real transcript comes back.
-  const busiest = (sessions?.sessions ?? []).filter((s: any) => s.calls > 3).sort((a: any, b: any) => b.calls - a.calls)[0];
+  // One grouped scan feeds the series, the model stack, the heatmap and the hourly
+  // profile; if any of those arrays disagrees with `buckets`, the dashboard draws a lie.
+  const all = await check("analytics (all time)", "/api/top/analytics?from=0", (j) => {
+    if (!(j.totals.turns > 0)) return "no assistant turns";
+    if (!(j.totals.total > 0)) return "zero tokens";
+    if (j.totals.total !== j.totals.input + j.totals.output + j.totals.cacheRead + j.totals.cacheWrite)
+      return "totals.total is not the sum of its classes";
+    const buckets = j.series?.buckets ?? [];
+    if (!buckets.length) return "empty series";
+    const summed = buckets.reduce((a: number, b: any) => a + b.total, 0);
+    if (summed !== j.totals.total) return `series total ${summed} != totals ${j.totals.total}`;
+    const turns = buckets.reduce((a: number, b: any) => a + b.turns, 0);
+    if (turns !== j.totals.turns) return `series turns ${turns} != totals ${j.totals.turns}`;
+    if (j.series.modelTokens.some((row: number[]) => row.length !== buckets.length))
+      return "the model stack is not one row per bucket";
+    if (j.series.heat.length !== 7 || j.series.heat.some((row: any[]) => row.length !== 24)) return "heat is not 7x24";
+    if (j.series.hourly.length !== 24) return `hourly profile: ${j.series.hourly.length}`;
+    if (!(j.efficiency.cacheHit > 0 && j.efficiency.cacheHit <= 1)) return `cache hit: ${j.efficiency.cacheHit}`;
+    if (!j.sessions?.length) return "no sessions";
+    if (j.sessions.some((s: any) => s.tokens !== s.input + s.output + s.cacheRead + s.cacheWrite))
+      return "a session's token total does not add up";
+    if (!j.kpis || !j.models?.length || !j.tools?.length || !j.agents?.length) return "an overview table is empty";
+    return null;
+  });
+
+  // A filter has to actually narrow the same slice the unfiltered call returned.
+  const picked = facets?.agents?.[0]?.agent;
+  if (picked) {
+    await check(`analytics (agent=${picked})`, `/api/top/analytics?from=0&agent=${encodeURIComponent(picked)}`, (j) => {
+      if (!(j.totals.turns > 0)) return "the filtered slice is empty";
+      if (j.totals.turns >= all?.totals?.turns) return `filter did not narrow: ${j.totals.turns} of ${all?.totals?.turns}`;
+      if (j.agents.some((a: any) => a.agent !== picked)) return "an agent filter leaked another agent";
+      if (j.agents[0].turns !== j.totals.turns) return "the agent table disagrees with the totals";
+      return null;
+    });
+  } else {
+    failures++;
+    console.log("FAIL analytics (agent filter): no agent facet to filter by");
+  }
+
+  // A brushed window that covers a shorter span must ask the server for finer buckets.
+  await check("analytics granularity", `/api/top/analytics?from=${now - 3 * DAY}&to=${now}`, (j) =>
+    j.series.gran === "hour" ? null : `a 3-day window should bucket hourly, got ${j.series.gran}`
+  );
+
+  // Latency is reported as percentiles precisely so p95 and max can differ from the mean.
+  const busiestTool = facets?.tools?.[0]?.name ?? "bash";
+  await check("tool detail", `/api/top/tool?name=${encodeURIComponent(busiestTool)}`, (j) => {
+    if (!j.totals?.calls) return "no calls";
+    if (!(j.totals.p50Ms > 0)) return "no median latency";
+    if (!(j.totals.p95Ms >= j.totals.p50Ms)) return "p95 below p50";
+    if (!(j.totals.maxMs >= j.totals.p95Ms)) return "max below p95";
+    if (!j.latency?.length) return "no latency distribution";
+    if (j.latency.reduce((a: number, b: any) => a + b.count, 0) !== j.totals.calls)
+      return "the latency histogram does not account for every call";
+    if (j.buckets.reduce((a: number, b: any) => a + b.calls, 0) !== j.totals.calls)
+      return "the time buckets do not account for every call";
+    if (!j.agents?.length || !j.projects?.length) return "missing the agent or project split";
+    return null;
+  });
+
+  // The transcript endpoint is the reason `parts` exists: assert a real one comes back.
+  const busiest = [...(all?.sessions ?? [])].sort((a: any, b: any) => b.tools - a.tools)[0];
   if (busiest) {
     await check("session transcript", `/api/top/session/${busiest.id}/messages`, (j) => {
       if (!j.session) return "missing session";
@@ -65,43 +128,17 @@ async function main() {
       if (!kinds.has("text")) return "no assistant text parts";
       const ordered = j.turns.every((t: any, i: number) => i === 0 || t.created >= j.turns[i - 1].created);
       if (!ordered) return "turns are not in chronological order";
+      // The per-turn timeline the session page draws needs a context reading per turn.
+      if (!j.turns.some((t: any) => t.contextWindow > 0 && t.occupancy > 0)) return "no context occupancy per turn";
       return null;
     });
   } else {
     failures++;
-    console.log("FAIL session transcript: no session with more than 3 turns");
+    console.log("FAIL session transcript: no session with tool calls");
   }
 
-  const tools = await check("top tools", "/api/top/tools", (j) => {
-    if (!j.tools?.length) return "no tools";
-    const total = j.tools.reduce((a: number, t: any) => a + t.calls, 0);
-    if (!(total > 0)) return "zero tool calls";
-    const bad = j.tools.find((t: any) => t.successes + t.failures > t.calls);
-    if (bad) return `${bad.name} reports more outcomes than calls`;
-    return null;
-  });
-
-  await check("top overview (all time)", "/api/top/overview", (j) => {
-    if (!j.totals.total) return "zero total tokens";
-    if (!j.models?.length) return "no model breakdown";
-    if (!(j.tokenTrend?.values?.length > 0)) return "empty token trend";
-    if (!(j.sessionTrend?.values?.length > 0)) return "empty session trend";
-    if (j.hourly?.length !== 24) return `hourly buckets: ${j.hourly?.length}`;
-    if (!(j.activity?.roots?.shown > 0)) return "no active roots";
-    if (j.activity.shown > j.activity.total) return "shown exceeds total";
-    return null;
-  });
-
-  await check("top overview (today)", "/api/top/overview?from=" + new Date().setHours(0, 0, 0, 0), (j) =>
-    j.tokenTrend?.mode === "hour" ? null : `today should bucket hourly, got ${j.tokenTrend?.mode}`
-  );
-
-  await check("top overview (window)", `/api/top/overview?from=${now - 7 * DAY}`, (j) =>
-    j.tokenTrend?.mode === "day" && j.tokenTrend.values.length <= 8 ? null : `7d trend: ${j.tokenTrend?.mode}/${j.tokenTrend?.values.length}`
-  );
-
-  const query = tools?.tools?.[0]?.name ?? "edit";
-  await check("top search", `/api/top/search?q=${encodeURIComponent(query)}`, (j) => {
+  const query = facets?.tools?.[0]?.name ?? "edit";
+  await check("search", `/api/top/search?q=${encodeURIComponent(query)}`, (j) => {
     if (j.query !== query) return `query echo mismatch: ${j.query}`;
     if (!j.hits?.length) return `no session mentions "${query}"`;
     return null;
