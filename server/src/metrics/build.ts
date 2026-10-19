@@ -245,12 +245,12 @@ export async function build(
         "id", "session_id", "project", "seq", "created", "completed", "dur_ms", "role", "provider", "model",
         "variant", "agent", "input", "output", "reasoning", "cache_read", "cache_write", "cost", "prompt_total",
         "occupancy", "context_window", "fill", "fill_after", "bucket", "day", "hour", "finish",
-        "has_error", "tool_calls", "tool_errors", "additions", "deletions", "text",
+        "has_error", "tool_calls", "tool_errors", "additions", "deletions", "write_lines", "text",
       ];
       const insTurn = db.prepare(`INSERT INTO turns(${turnCols.join(",")}) VALUES(${turnCols.map(() => "?").join(",")})`);
       const insTool = db.prepare(
-        `INSERT INTO tools(session_id,turn_id,call_id,name,status,started,ended,dur_ms,title,output_chars,additions,deletions,files,error,sig,input_preview,target_session)
-         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        `INSERT INTO tools(session_id,turn_id,call_id,name,status,started,ended,dur_ms,title,output_chars,additions,deletions,files,write_lines,error,sig,input_preview,target_session)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
       );
 
       for (const t of turns) {
@@ -263,7 +263,7 @@ export async function build(
           t.input, t.output, t.reasoning, t.cacheRead, t.cacheWrite, t.costComputed,
           t.promptTotal, t.occupancy, t.contextWindow, t.fill, t.fillAfter, t.bucket, t.day, t.hour, t.finish,
           t.tools.some((x: SrcTool) => x.status === "error") ? 1 : 0, t.tools.length,
-          t.tools.filter((x: SrcTool) => x.status === "error").length, t._add ?? 0, t._del ?? 0,
+          t.tools.filter((x: SrcTool) => x.status === "error").length, t._add ?? 0, t._del ?? 0, t._write ?? 0,
           (t.text ?? "").slice(0, 2000)
         );
         turnCount++;
@@ -273,7 +273,7 @@ export async function build(
           insTool.run(
             tool.sessionId, t.id, tool.callId, tool.name, tool.status, tool.started, tool.ended,
             tool.started && tool.ended ? Math.max(0, tool.ended - tool.started) : null,
-            tool.title, tool.outputChars, tool.additions, tool.deletions, tool.files,
+            tool.title, tool.outputChars, tool.additions, tool.deletions, tool.files, tool.writeLines,
             tool.error ? tool.error.slice(0, 2000) : null, tool.sig, tool.inputPreview, tool.targetSession
           );
           toolCount++;
@@ -321,8 +321,12 @@ export async function build(
         const tCacheRead = s.tCacheRead || sum((t) => t.cacheRead);
         const tCacheWrite = s.tCacheWrite || sum((t) => t.cacheWrite);
         const promptTotal = tInput + tCacheRead + tCacheWrite;
-        const additions = s.additions || sum((t) => t._add ?? 0);
-        const deletions = s.deletions || sum((t) => t._del ?? 0);
+        // Prefer the per-turn diffs we now parse from tool metadata; the v2 session
+        // summary only counts part of the stream, so it is a fallback, not the source.
+        const turnAdd = sum((t) => t._add ?? 0);
+        const turnDel = sum((t) => t._del ?? 0);
+        const additions = turnAdd || s.additions;
+        const deletions = turnDel || s.deletions;
         const toolCalls = ts.reduce((a, t) => a + t.tools.length, 0);
         const toolErrors = ts.reduce((a, t) => a + t.tools.filter((x) => x.status === "error").length, 0);
         const patches = patchFiles.get(s.id);

@@ -98,23 +98,40 @@ export default function EcgCanvas() {
       push({ ...t, kind: "tool", amp: Math.max(1, t.out || (t.add ?? 0) + (t.del ?? 0) || 1) });
     }
     for (const t of data?.turns ?? []) {
-      push({ ...t, kind: "turn", amp: Math.max(1, (t.out ?? 0) + (t.r ?? 0)) });
+      // A turn that generated nothing has no amplitude to plot, yet its recorded span can
+      // be hours (a session that slept mid-turn). Drawn as a flat bar it reads as activity
+      // along the baseline, so it is left out of the waveform entirely.
+      const amp = (t.out ?? 0) + (t.r ?? 0);
+      if (amp <= 0) continue;
+      push({ ...t, kind: "turn", amp });
     }
     for (const list of byLane.values()) list.sort((a, b) => a.at - b.at);
     return byLane;
   }, [data]);
 
-  const lanes = useMemo(
-    () =>
-      [...laneOps.entries()]
-        .map(([project, ops]) => ({
-          project,
-          total: ops.reduce((a, o) => a + (o.kind === "turn" ? o.amp : 0), 0),
-          tools: ops.reduce((a, o) => a + (o.kind === "tool" ? 1 : 0), 0),
-        }))
-        .sort((a, b) => b.total - a.total),
-    [laneOps]
-  );
+  const lanes = useMemo(() => {
+    // Rank by recent activity, not all-time volume: a project that stopped three
+    // weeks ago should not hold a lane while a live one is pushed into the tally.
+    // The cut is the later of the last quarter of the window and the last 3 days.
+    const cutoff = win.to - Math.max(3 * DAY, (win.to - win.from) * 0.25);
+    return [...laneOps.entries()]
+      .map(([project, ops]) => {
+        let total = 0;
+        let recent = 0;
+        let tools = 0;
+        for (const o of ops) {
+          if (o.kind === "turn") {
+            total += o.amp;
+            if (o.at >= cutoff) recent += o.amp;
+          } else {
+            tools++;
+            if (o.at >= cutoff) recent += 1;
+          }
+        }
+        return { project, total, recent, tools };
+      })
+      .sort((a, b) => b.recent - a.recent || b.total - a.total);
+  }, [laneOps, win.from, win.to]);
 
   const spansByLane = useMemo(() => {
     const m = new Map<string, EcgSpan[]>();

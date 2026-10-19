@@ -118,6 +118,45 @@ function seed() {
     content: [{ type: "tool", id: "f2", name: "bash", state: { status: "completed", input: { command: "npm run build" }, time: { start: atRetry, end: atRetry + 4000 } } }],
   });
 
+  // turn 5: the v2-native shape — the diff lives in `metadata.filediff.patch`, and a
+  // full-file `write` carries its body in `input.content` (counted as lines, not a diff).
+  const atPatch = T0 + 10 * MIN;
+  msg("ses_parent", "assistant", atPatch, {
+    time: { created: atPatch, completed: atPatch + 4000 },
+    model: { id: "model-a", providerID: "demo" },
+    tokens: { input: 500, output: 150, reasoning: 0, cache: { read: 2000, write: 0 } },
+    finish: "tool-calls",
+    content: [
+      {
+        type: "tool", id: "v1", name: "edit",
+        state: {
+          status: "completed",
+          input: { filePath: "/b.ts", oldString: "old line", newString: "new line" },
+          metadata: {
+            filediff: {
+              file: "/b.ts",
+              patch: [
+                "Index: /b.ts",
+                "===================================================================",
+                "--- /b.ts",
+                "+++ /b.ts",
+                "@@ -1,4 +1,6 @@",
+                " context",
+                "-old line",
+                "-old line 2",
+                "+new line",
+                "+new line 2",
+                "+extra",
+                "+extra2",
+              ].join("\n"),
+            },
+          },
+        },
+      },
+      { type: "tool", id: "v2", name: "write", state: { status: "completed", input: { filePath: "/c.ts", content: "a\nb\nc" } } },
+    ],
+  });
+
   // child session: a task spawn + one healthy turn
   msg("ses_child", "user", T0 + 5 * MIN, { time: { created: T0 + 5 * MIN }, text: "子任务" });
   msg("ses_child", "assistant", T0 + 6 * MIN, {
@@ -144,6 +183,11 @@ async function main() {
 
   const rows = (sql: string, ...a: any[]) => db.prepare(sql).all(...a) as any[];
   const one = (sql: string, ...a: any[]) => db.prepare(sql).get(...a) as any;
+
+  // A layout change must force a full rebuild: `CREATE TABLE IF NOT EXISTS` cannot add a
+  // column, so silently incremental-building into an old file would throw on insert.
+  const { SCHEMA_SIG } = await import("../metrics/schema");
+  ok("schema signature is recorded", one("SELECT value FROM meta WHERE key='schemaSig'")?.value === SCHEMA_SIG);
 
   const src = new SourceReader(process.env.OSM_SOURCE_DB!);
   const srcCompactions = src.events().filter((e) => e.type === "compaction").length;
@@ -172,8 +216,20 @@ async function main() {
   const s1 = one("SELECT * FROM sessions WHERE id='ses_parent'");
   ok("session aggregates retries/loops/compactions", s1.retries === 1 && s1.loops === 1 && s1.compactions === 1,
     JSON.stringify({ retries: s1.retries, loops: s1.loops, compactions: s1.compactions }));
-  ok("per-turn diff stats are picked up", s1.additions === 12 && s1.deletions === 3, JSON.stringify({ a: s1.additions, d: s1.deletions }));
+  const legacyEdit = one("SELECT additions, deletions FROM tools WHERE call_id='c3'");
+  ok("legacy `metadata.files` diffs still parse", legacyEdit.additions === 12 && legacyEdit.deletions === 3, JSON.stringify(legacyEdit));
   ok("first prompt is captured", /重构/.test(s1.first_prompt ?? ""));
+
+  // ---- v2 patch shape (the bug that made every output metric read as zero) ----
+  const patchedTurn = one("SELECT additions, deletions, write_lines FROM turns WHERE id=(SELECT turn_id FROM tools WHERE call_id='v1')");
+  ok("unified diff in metadata.filediff.patch yields additions/deletions", patchedTurn.additions === 4 && patchedTurn.deletions === 2,
+    JSON.stringify(patchedTurn));
+  ok("full-file write is counted in lines, never as a diff", patchedTurn.write_lines === 3, JSON.stringify(patchedTurn));
+  ok("v2 edit/write sum into the session without double counting", s1.additions === 16 && s1.deletions === 5,
+    JSON.stringify({ a: s1.additions, d: s1.deletions }));
+  const writeTool = one("SELECT * FROM tools WHERE name='write'");
+  ok("tool row keeps write lines separate from additions", writeTool.write_lines === 3 && writeTool.additions === 0,
+    JSON.stringify({ w: writeTool.write_lines, a: writeTool.additions }));
 
   const flow = rows("SELECT * FROM flow WHERE project='/tmp/demo' OR project='demo'");
   ok("ECG flow cells exist", flow.length > 0, `got ${flow.length}`);
@@ -220,10 +276,10 @@ async function main() {
   ok("incremental rebuild is fast", incReport.ms < 1500, `${incReport.ms}ms`);
   const child = one("SELECT turns FROM sessions WHERE id='ses_child'");
   ok("incremental rebuild updated the child turns", child.turns === 2, `got ${child.turns}`);
-  ok("no duplicate turns after incremental", rows("SELECT COUNT(*) c FROM turns")[0].c === 11, `got ${rows("SELECT COUNT(*) c FROM turns")[0].c}`);
+  ok("no duplicate turns after incremental", rows("SELECT COUNT(*) c FROM turns")[0].c === 12, `got ${rows("SELECT COUNT(*) c FROM turns")[0].c}`);
 
   const heatAfter = rows("SELECT SUM(turns) t FROM heat")[0].t;
-  ok("heat aggregates the new turn", heatAfter === 9, `got ${heatAfter}`);
+  ok("heat aggregates the new turn", heatAfter === 10, `got ${heatAfter}`);
 
   console.log(failures ? `\n${failures} check(s) failed` : "\nall ETL checks passed");
   rmSync(dir, { recursive: true, force: true });

@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { existsSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { DATA_DIR, METRICS_DB, SOURCE_DB } from "../config";
 import { build, type BuildReport } from "./build";
-import { openMetrics, getMeta, getMetaNumber, setMeta } from "./schema";
+import { openMetrics, getMeta, getMetaNumber, setMeta, SCHEMA_SIG } from "./schema";
 import { SourceReader } from "../source";
 
 const NEXT = METRICS_DB + ".next";
@@ -72,9 +72,19 @@ export function sourceChanged(): boolean {
  */
 export async function rebuild(opts: { full?: boolean } = {}): Promise<BuildReport> {
   mkdirSync(DATA_DIR, { recursive: true });
-  const full = opts.full ?? !existsSync(METRICS_DB);
-  if (full) return fullRebuild();
+  // `full: false` is an explicit request for the incremental path, so the schema check
+  // cannot be expressed as a `??` default — a layout change always wins.
+  if (opts.full === true || !existsSync(METRICS_DB) || schemaStale()) return fullRebuild();
   return incrementalRebuild();
+}
+
+/** True when the metrics db was written by a build with a different table layout. */
+function schemaStale(): boolean {
+  try {
+    return getMeta(current(), "schemaSig") !== SCHEMA_SIG;
+  } catch {
+    return true;
+  }
 }
 
 async function fullRebuild(): Promise<BuildReport> {

@@ -49,6 +49,8 @@ export interface SrcTurn {
   _add?: number;
   _del?: number;
   _files?: number;
+  /** per-turn full-file `write` output, counted in lines (a different unit than a diff) */
+  _write?: number;
 }
 
 export interface SrcTool {
@@ -64,6 +66,8 @@ export interface SrcTool {
   additions: number;
   deletions: number;
   files: number;
+  /** lines in a full-file `write`; NOT an incremental diff, so it never mixes with additions */
+  writeLines: number;
   error: string | null;
   sig: string;
   /** first bytes of the JSON input — enough to recognise a `task` tool's target session */
@@ -137,6 +141,49 @@ function fileStats(files: any): { additions: number; deletions: number; files: n
     d += num(f?.deletions);
   }
   return { additions: a, deletions: d, files: files.length };
+}
+
+/**
+ * additions/deletions from a unified diff.
+ *
+ * Hunk-header bookkeeping matters: `Index:` / `===` / `---` / `+++` lines precede
+ * the first `@@`, so we only count inside a hunk body. That keeps a removed line
+ * whose own text begins with `-` (rendered `--- foo`) from being read as a header.
+ */
+function diffStats(patch: unknown): { additions: number; deletions: number } {
+  if (typeof patch !== "string" || !patch) return { additions: 0, deletions: 0 };
+  let additions = 0;
+  let deletions = 0;
+  let inHunk = false;
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("@@")) {
+      inHunk = true;
+      continue;
+    }
+    if (!inHunk) continue;
+    if (line.startsWith("+")) additions++;
+    else if (line.startsWith("-")) deletions++;
+  }
+  return { additions, deletions };
+}
+
+/** Lines in a full-file write. Semantically a file size, not an increment. */
+function contentLines(content: unknown): number {
+  if (typeof content !== "string" || !content) return 0;
+  return content.split("\n").length;
+}
+
+/** The unified diff a v2 tool call produced, if any (`filediff` is the structured form). */
+function patchOf(metadata: any): unknown {
+  return metadata?.filediff?.patch ?? metadata?.diff ?? null;
+}
+
+/** The single file a v2 edit/write call touched. */
+function touchedFile(metadata: any, input: any): string | null {
+  const f = metadata?.filediff?.file;
+  if (typeof f === "string" && f) return f;
+  const g = input?.filePath ?? input?.file_path ?? input?.path;
+  return typeof g === "string" && g ? g : null;
 }
 
 function hashSig(name: string, input: unknown): string {
@@ -330,15 +377,26 @@ export class SourceReader {
       let additions = 0;
       let deletions = 0;
       let files = 0;
+      let writeLines = 0;
 
       for (const item of content) {
         if (item?.type === "text") text += item.text ?? "";
         if (item?.type === "tool") {
           const st = item.state ?? {};
-          const fs = fileStats(st.metadata?.files);
-          additions += fs.additions;
-          deletions += fs.deletions;
-          files += fs.files;
+          const name = item.name ?? "unknown";
+          // v1 kept a `files:[{additions,deletions}]` list; v2 stores the raw patch and
+          // omits that list, which is why the diff signal used to read as zero.
+          const legacy = fileStats(st.metadata?.files);
+          const diff = diffStats(patchOf(st.metadata));
+          const touched = touchedFile(st.metadata, st.input);
+          const toolAdd = Math.max(diff.additions, legacy.additions);
+          const toolDel = Math.max(diff.deletions, legacy.deletions);
+          const toolFiles = Math.max(legacy.files, touched ? 1 : 0);
+          const toolWrite = name === "write" ? contentLines(st.input?.content) : 0;
+          additions += toolAdd;
+          deletions += toolDel;
+          files += toolFiles;
+          writeLines += toolWrite;
           const outputText =
             st.error?.message ?? st.metadata?.output ?? st.output ?? (st.content ?? []).map((c: any) => c?.text ?? "").join("\n");
           const started = item.time?.created ?? st.time?.start ?? st.time?.created ?? null;
@@ -348,17 +406,18 @@ export class SourceReader {
             turnId: row.id,
             sessionId: row.session_id,
             callId: item.id ?? "",
-            name: item.name ?? "unknown",
+            name,
             status: st.status ?? "pending",
             started,
             ended,
             title: st.title ?? null,
             outputChars: typeof outputText === "string" ? outputText.length : 0,
-            additions: fs.additions,
-            deletions: fs.deletions,
-            files: fs.files,
+            additions: toolAdd,
+            deletions: toolDel,
+            files: toolFiles,
+            writeLines: toolWrite,
             error: st.status === "error" ? (st.error?.message ?? "tool error") : null,
-            sig: hashSig(item.name ?? "unknown", st.input),
+            sig: hashSig(name, st.input),
             inputPreview,
             paths: pathsOf(st.input, st.metadata?.files),
             targetSession: inputPreview ? SESSION_ID_RE.exec(inputPreview)?.[0] ?? null : null,
@@ -392,6 +451,7 @@ export class SourceReader {
         _add: additions,
         _del: deletions,
         _files: files,
+        _write: writeLines,
       });
     }
     return out;
@@ -425,21 +485,31 @@ export class SourceReader {
       const tools: SrcTool[] = [];
       let text = "";
       let files = 0;
+      let writeLines = 0;
       for (const p of parts) {
         if (p.type === "text") text += p.text ?? "";
         if (p.type === "tool") {
           const st = p.state ?? {};
+          const name = p.tool ?? "unknown";
+          // Legacy parts also carry the unified diff in `metadata`, so both schemas
+          // funnel through the same parser instead of only the v1 `patch` records.
+          const diff = diffStats(patchOf(st.metadata));
+          const touched = touchedFile(st.metadata, st.input);
           const started = st.time?.start ?? p.time?.start ?? null;
           const ended = st.time?.end ?? p.time?.end ?? null;
           const inputPreview = st.input ? JSON.stringify(st.input).slice(0, 400) : null;
-          files += Array.isArray(p.files) ? p.files.length : 0;
+          const toolFiles = Math.max(Array.isArray(p.files) ? p.files.length : 0, touched ? 1 : 0);
+          const toolWrite = name === "write" ? contentLines(st.input?.content) : 0;
+          files += toolFiles;
+          writeLines += toolWrite;
           tools.push({
             turnId: row.id, sessionId: row.session_id, callId: p.callID ?? "",
-            name: p.tool ?? "unknown", status: st.status ?? "pending", started, ended,
+            name, status: st.status ?? "pending", started, ended,
             title: st.title ?? null, outputChars: (st.output ?? "").length,
-            additions: 0, deletions: 0, files: Array.isArray(p.files) ? p.files.length : 0,
+            additions: diff.additions, deletions: diff.deletions, files: toolFiles,
+            writeLines: toolWrite,
             error: st.status === "error" ? (st.error ?? st.output ?? "tool error") : null,
-            sig: hashSig(p.tool ?? "unknown", st.input),
+            sig: hashSig(name, st.input),
             inputPreview,
             paths: pathsOf(st.input, p.files),
             targetSession: inputPreview ? SESSION_ID_RE.exec(inputPreview)?.[0] ?? null : null,
@@ -457,7 +527,10 @@ export class SourceReader {
         cacheWrite: tk.cache?.write ?? d.usage?.cache_write_input_tokens ?? 0, cost: num(d.cost),
         finish: d.finish ?? d.stop_reason ?? null, text, tools,
         prompt: role === "user" ? text.slice(0, 400) : null,
-        _add: 0, _del: 0, _files: files,
+        _add: tools.reduce((a, t) => a + t.additions, 0),
+        _del: tools.reduce((a, t) => a + t.deletions, 0),
+        _files: files,
+        _write: writeLines,
       } as SrcTurn);
     }
     return out;

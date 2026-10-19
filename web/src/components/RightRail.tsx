@@ -11,7 +11,7 @@ export default function RightRail() {
   const { window, sessionId, openSession } = useCockpit();
   const { data: sessions } = useSessions(window);
   const { data: conv } = useConversion(window);
-  const [sort, setSort] = useState<Sort>("fill");
+  const [sort, setSort] = useState<Sort>("recent");
   const [query, setQuery] = useState("");
 
   const ranked = useMemo(() => {
@@ -19,8 +19,9 @@ export default function RightRail() {
     const list = (sessions ?? []).filter(
       (s) => !term || (s.title ?? "").toLowerCase().includes(term) || (s.first_prompt ?? "").toLowerCase().includes(term)
     );
+    // "recent" means last activity, not creation — a long-running session is still live.
     const key = (s: (typeof list)[number]) =>
-      sort === "tokens" ? s.cost : sort === "fill" ? s.peak_fill : sort === "eff" ? -s.eff_score : s.created;
+      sort === "tokens" ? s.cost : sort === "fill" ? s.peak_fill : sort === "eff" ? -s.eff_score : s.updated;
     return [...list].sort((a, b) => key(b) - key(a)).slice(0, 60);
   }, [sessions, sort, query]);
 
@@ -32,7 +33,7 @@ export default function RightRail() {
         title={`SESSIONS · 会话解剖入口 (${sessions?.length ?? 0})`}
         right={
           <div className="flex gap-1">
-            {(["fill", "tokens", "eff", "recent"] as Sort[]).map((s) => (
+            {(["recent", "fill", "eff", "tokens"] as Sort[]).map((s) => (
               <Chip key={s} active={sort === s} onClick={() => setSort(s)}>
                 {s === "fill" ? "过载" : s === "tokens" ? "花费" : s === "eff" ? "空转" : "最新"}
               </Chip>

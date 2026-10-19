@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS turns (
   fill REAL, fill_after REAL,
   bucket INTEGER, day INTEGER, hour INTEGER,
   finish TEXT, has_error INTEGER, tool_calls INTEGER, tool_errors INTEGER,
-  additions INTEGER, deletions INTEGER, text TEXT
+  additions INTEGER, deletions INTEGER, write_lines INTEGER, text TEXT
 );
 CREATE INDEX IF NOT EXISTS turns_session ON turns(session_id);
 CREATE INDEX IF NOT EXISTS turns_project_time ON turns(project, created);
@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS tools (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id TEXT, turn_id TEXT, call_id TEXT, name TEXT, status TEXT,
   started INTEGER, ended INTEGER, dur_ms INTEGER,
-  title TEXT, output_chars INTEGER, additions INTEGER, deletions INTEGER, files INTEGER,
+  title TEXT, output_chars INTEGER, additions INTEGER, deletions INTEGER, files INTEGER, write_lines INTEGER,
   error TEXT, sig TEXT, input_preview TEXT, target_session TEXT
 );
 CREATE INDEX IF NOT EXISTS tools_session ON tools(session_id, started);
@@ -101,6 +101,24 @@ export function initSchema(db: DatabaseSync, opts: { drop?: boolean } = {}) {
     for (const t of FACT_TABLES) db.exec(`DROP TABLE IF EXISTS ${t}`);
   }
   db.exec(SCHEMA);
+  setMeta(db, "schemaSig", SCHEMA_SIG);
+}
+
+/**
+ * Short signature of the DDL above. `CREATE TABLE IF NOT EXISTS` cannot add a column
+ * to an existing table, so an incremental build against a database written by an older
+ * version would fail on the new column. The signature lets the rebuild detect that and
+ * fall back to a full rebuild instead.
+ */
+export const SCHEMA_SIG = fingerprint(SCHEMA);
+
+function fingerprint(text: string): string {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(36);
 }
 
 export function setMeta(db: DatabaseSync, key: string, value: string) {
