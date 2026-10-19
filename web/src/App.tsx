@@ -1,52 +1,64 @@
-import { AnimatePresence, motion } from "motion/react";
-import { CockpitProvider, useCockpit } from "./state/CockpitContext";
-import TopBar from "./components/TopBar";
-import LeftRail from "./components/LeftRail";
-import RightRail from "./components/RightRail";
-import EcgCanvas from "./components/EcgCanvas";
-import ContextStage from "./components/ContextStage";
-import SessionAnatomy from "./components/SessionAnatomy";
-import TrayDrawer from "./components/TrayDrawer";
+import { useCallback, useState, type ReactNode } from "react";
+import clsx from "clsx";
+import { useQueryClient } from "@tanstack/react-query";
+import { refresh, useStatus } from "./lib/api";
+import { useKeys } from "./lib/useKeys";
+import TabBar, { type ScreenId } from "./components/TabBar";
+import SessionsScreen from "./screens/SessionsScreen";
+import ToolsScreen from "./screens/ToolsScreen";
+import OverviewScreen from "./screens/OverviewScreen";
 
-const HOUR_MS = 3_600_000;
-
-function Stage() {
-  const { mode, sessionId, trayOpen, window: win } = useCockpit();
-  // The stage follows the zoom level: up to half a day the waveform is still readable
-  // (spikes are the right glyph for individual operations); anything wider rolls up into
-  // bucketed bands, which switch from hours to days on their own as the window grows.
-  const wide = win.to - win.from > 12 * HOUR_MS;
-  const stage = mode === "anatomy" && sessionId ? `anatomy-${sessionId}` : wide ? "context" : "ecg";
-  return (
-    <div className="h-full flex flex-col bg-paper text-ink overflow-hidden relative">
-      <TopBar />
-      <div className="flex-1 grid min-h-0" style={{ gridTemplateColumns: "280px minmax(0,1fr) 360px" }}>
-        <LeftRail />
-        <main className="relative min-w-0 overflow-hidden">
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.div
-              key={stage}
-              initial={{ opacity: 0, scale: 0.985 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 1.01 }}
-              transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-              className="absolute inset-0"
-            >
-              {mode === "anatomy" && sessionId ? <SessionAnatomy id={sessionId} /> : wide ? <ContextStage /> : <EcgCanvas />}
-            </motion.div>
-          </AnimatePresence>
-        </main>
-        <RightRail />
-      </div>
-      <AnimatePresence>{trayOpen && <TrayDrawer key="tray" />}</AnimatePresence>
-    </div>
-  );
-}
-
+/**
+ * Three screens behind a tab bar: Sessions, Tools, Overview. All three stay mounted so
+ * a selection, a scroll position or a filter survives a tab switch — the same way the
+ * TUI keeps every screen in memory behind a key press.
+ */
 export default function App() {
+  const [screen, setScreen] = useState<ScreenId>("sessions");
+  const [refreshing, setRefreshing] = useState(false);
+  const status = useStatus();
+  const qc = useQueryClient();
+
+  const doRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await refresh(false);
+      await qc.invalidateQueries();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [qc]);
+
+  useKeys((e) => {
+    if (e.key === "1") return setScreen("sessions");
+    if (e.key === "2") return setScreen("tools");
+    if (e.key === "3") return setScreen("overview");
+    if (e.key === "r") return void doRefresh();
+    return;
+  });
+
+  const panels: { id: ScreenId; node: ReactNode }[] = [
+    { id: "sessions", node: <SessionsScreen active={screen === "sessions"} /> },
+    { id: "tools", node: <ToolsScreen active={screen === "tools"} /> },
+    { id: "overview", node: <OverviewScreen active={screen === "overview"} /> },
+  ];
+
   return (
-    <CockpitProvider>
-      <Stage />
-    </CockpitProvider>
+    <div className="grid-paper flex h-full flex-col overflow-hidden bg-paper text-ink">
+      <TabBar
+        screen={screen}
+        onScreen={setScreen}
+        status={status.data}
+        onRefresh={() => void doRefresh()}
+        refreshing={refreshing}
+      />
+      <main className="flex min-h-0 flex-1 flex-col">
+        {panels.map((p) => (
+          <div key={p.id} className={clsx("min-h-0 flex-1", screen === p.id ? "flex flex-col" : "hidden")}>
+            {p.node}
+          </div>
+        ))}
+      </main>
+    </div>
   );
 }

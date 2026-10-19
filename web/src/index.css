@@ -42,8 +42,6 @@
 
   --font-mono: "JetBrains Mono", ui-monospace, "DejaVu Sans Mono", monospace;
   --font-sans: "Inter Grot", "Helvetica Neue", Arial, sans-serif;
-
-  --radius-none: 0px;
 }
 
 * {
@@ -86,18 +84,17 @@ body {
 .hairline-b {
   border-bottom: 1px solid var(--color-rule);
 }
+.hairline-t {
+  border-top: 1px solid var(--color-rule);
+}
 .hairline-r {
   border-right: 1px solid var(--color-rule);
 }
-
-/* huge, thin instrument numerals */
-.readout {
-  font-family: var(--font-mono);
-  font-weight: 200;
-  font-size: 48px;
-  line-height: 0.9;
-  letter-spacing: -0.03em;
+.hairline-l {
+  border-left: 1px solid var(--color-rule);
 }
+
+/* the TUI's uppercase tracked label */
 .micro {
   font-family: var(--font-mono);
   font-size: 9px;
@@ -105,121 +102,26 @@ body {
   text-transform: uppercase;
   color: var(--color-ink-soft);
 }
+/* the TUI's body data face */
 .tape {
   font-family: var(--font-mono);
   font-size: 10px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.02em;
+  line-height: 1.5;
 }
 
-/* stacked token-budget bar: one cell per part of a turn's context */
-.tokens {
-  display: flex;
-  height: 3px;
-  width: 100%;
-  overflow: hidden;
-  background: oklch(0.2 0.05 250 / 0.08);
-}
-.tokens > i {
-  display: block;
-  height: 100%;
+/* search hit inside the transcript */
+.mark {
+  background-color: oklch(0.68 0.17 70 / 0.3);
+  color: var(--color-ink);
+  font-weight: 600;
 }
 
-/* hazard stripes for the >80 % context overload zone */
-.hazard {
-  background-image: repeating-linear-gradient(
-    -45deg,
-    oklch(0.55 0.22 25 / 0.16) 0 4px,
-    transparent 4px 8px
-  );
-}
-
-/* fader knob for the what-if sandbox mixer */
-.knob {
-  -webkit-appearance: none;
-  appearance: none;
-  height: 14px;
-  background: transparent;
-  cursor: ew-resize;
-}
-.knob::-webkit-slider-runnable-track {
-  height: 1px;
-  background: var(--color-rule-strong);
-}
-.knob::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 8px;
-  height: 12px;
-  margin-top: -6px;
-  background: var(--color-ink);
-}
-.knob::-moz-range-track {
-  height: 1px;
-  background: var(--color-rule-strong);
-}
-.knob::-moz-range-thumb {
-  width: 8px;
-  height: 12px;
-  border: 0;
-  background: var(--color-ink);
-}
-
-/* oscilloscope scanline that tracks the cursor */
-.scanline {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 1px;
-  background: var(--color-ink);
-  mix-blend-mode: multiply;
-  pointer-events: none;
-}
-.scanline::after {
-  content: "";
-  position: absolute;
-  inset: 0 -6px;
-  background: linear-gradient(to right, transparent, oklch(0.2 0.05 250 / 0.07), transparent);
-}
-
-/* instrument overload flash on compaction */
-@keyframes overload {
-  0% {
-    background-color: oklch(0.68 0.17 70 / 0);
-  }
-  18% {
-    background-color: oklch(0.68 0.17 70 / 0.22);
-  }
-  100% {
-    background-color: oklch(0.68 0.17 70 / 0);
-  }
-}
-.flash-amber {
-  animation: overload 1.1s ease-out;
-}
-
-@keyframes trace-in {
-  from {
-    stroke-dashoffset: var(--len, 1200);
-  }
-  to {
-    stroke-dashoffset: 0;
-  }
-}
-.trace-in {
-  animation: trace-in 0.9s ease-out;
-}
-
-.crosshair-x::before,
-.crosshair-x::after {
-  content: "";
-  position: absolute;
-  background: var(--color-danger);
-}
-.crosshair-x::before {
-  left: 50%;
-  top: 0;
-  bottom: 0;
-  width: 1px;
-  transform: translateX(-50%) rotate(45deg);
+/* terminal-style output block in the transcript */
+.out {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-variant-ligatures: none;
 }
 
 .no-scrollbar::-webkit-scrollbar {
@@ -232,28 +134,7 @@ body {
 .no-scrollbar::-webkit-scrollbar-track {
   background: transparent;
 }
-
-input[type="range"].knob {
-  -webkit-appearance: none;
-  appearance: none;
-  height: 1px;
-  background: var(--color-rule-strong);
-  outline: none;
-}
-input[type="range"].knob::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 10px;
-  height: 22px;
-  background: var(--color-ink);
-  border: 1px solid var(--color-paper);
-  box-shadow: 0 0 0 1px var(--color-ink);
-  cursor: ew-resize;
-}
-input[type="range"].knob::-moz-range-thumb {
-  width: 10px;
-  height: 22px;
-  border-radius: 0;
-  background: var(--color-ink);
-  border: 1px solid var(--color-paper);
-  cursor: ew-resize;
+.no-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: oklch(0.2 0.05 250 / 0.25) transparent;
 }

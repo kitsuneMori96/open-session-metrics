@@ -1,84 +1,135 @@
 import type { ReactNode } from "react";
 import clsx from "clsx";
 
-export function Panel({
-  title,
-  right,
-  children,
-  className,
-  bodyClassName,
-}: {
-  title?: string;
-  right?: ReactNode;
-  children: ReactNode;
-  className?: string;
-  bodyClassName?: string;
-}) {
+/** `── TITLE ──────`, the section rule the TUI prints between blocks. */
+export function SectionHeader({ title, right }: { title: string; right?: ReactNode }) {
   return (
-    <section className={clsx("hairline bg-paper-raised/70 flex flex-col min-h-0", className)}>
-      {title && (
-        <header className="flex items-center justify-between px-2 h-[18px] border-b border-rule shrink-0">
-          <h2 className="micro">{title}</h2>
-          {right}
-        </header>
-      )}
-      <div className={clsx("min-h-0 flex-1", bodyClassName)}>{children}</div>
-    </section>
+    <div className="mt-3 mb-1 flex items-center gap-2 first:mt-0">
+      <span className="micro shrink-0">{title}</span>
+      <span className="h-px flex-1 bg-rule" />
+      {right && <span className="tape shrink-0 text-ink-faint">{right}</span>}
+    </div>
   );
 }
 
-export function Readout({
+/***
+ * The TUI's StatRow: the label sits in a fixed column and the value follows it
+ * immediately, so the pair stays readable however wide the panel gets.
+ */
+export function StatRow({
   label,
   value,
-  unit,
   tone = "ink",
-  size = 48,
-  hint,
+  labelWidth = 100,
 }: {
   label: string;
-  value: string;
-  unit?: string;
-  tone?: "ink" | "danger" | "good" | "warning";
-  size?: number;
-  hint?: string;
+  value: ReactNode;
+  tone?: "ink" | "soft" | "faint" | "danger" | "warning" | "good" | "flow";
+  labelWidth?: number;
 }) {
   const color =
     tone === "danger"
       ? "text-danger"
-      : tone === "good"
-        ? "text-good"
-        : tone === "warning"
-          ? "text-warning"
-          : "text-ink";
+      : tone === "warning"
+        ? "text-warning"
+        : tone === "good"
+          ? "text-good"
+          : tone === "flow"
+            ? "text-flow"
+            : tone === "soft"
+              ? "text-ink-soft"
+              : tone === "faint"
+                ? "text-ink-faint"
+                : "text-ink";
   return (
-    <div className="px-2 py-1.5">
-      <div className="micro">{label}</div>
-      <div className="flex items-baseline gap-1">
-        <span
-          className={clsx("readout font-mono font-extralight tabular-nums", color)}
-          style={{ fontSize: size }}
-        >
-          {value}
-        </span>
-        {unit && <span className="tape text-ink-faint">{unit}</span>}
-      </div>
-      {hint && <div className="tape text-ink-soft mt-0.5">{hint}</div>}
+    <div className="flex items-baseline gap-2 py-px">
+      <span className="tape shrink-0 text-ink-soft" style={{ width: labelWidth }}>
+        {label}
+      </span>
+      <span className={clsx("tape min-w-0 truncate", color)}>{value}</span>
     </div>
+  );
+}
+
+/** Discrete cell bar: cells can be counted, so short bars stay readable. */
+export function SegBar({
+  filled,
+  total,
+  tone = "var(--color-ink)",
+  cell = 5,
+  height = 7,
+}: {
+  filled: number;
+  total: number;
+  tone?: string;
+  cell?: number;
+  height?: number;
+}) {
+  const n = Math.max(1, total);
+  const f = Math.max(0, Math.min(n, filled));
+  return (
+    <span className="inline-flex shrink-0 items-center gap-[2px]">
+      {Array.from({ length: n }, (_, i) => (
+        <i key={i} className="block" style={{ width: cell, height, background: i < f ? tone : "var(--color-rule)" }} />
+      ))}
+    </span>
+  );
+}
+
+/** Two-segment bar: the share that succeeded, then the share that failed. */
+export function SplitBar({
+  ok,
+  total,
+  cells = 16,
+  toneOk = "var(--color-good)",
+  toneBad = "var(--color-danger)",
+  cell = 5,
+  height = 7,
+}: {
+  ok: number;
+  total: number;
+  cells?: number;
+  toneOk?: string;
+  toneBad?: string;
+  cell?: number;
+  height?: number;
+}) {
+  const okFilled = total > 0 ? Math.round((ok / total) * cells) : cells;
+  return (
+    <span className="inline-flex shrink-0 items-center gap-[2px]">
+      {Array.from({ length: cells }, (_, i) => (
+        <i
+          key={i}
+          className="block"
+          style={{ width: cell, height, background: i < okFilled ? toneOk : toneBad }}
+        />
+      ))}
+    </span>
+  );
+}
+
+/** Continuous fill bar for the context readout. */
+export function FillBar({ value, tone = "var(--color-ink)", height = 6 }: { value: number; tone?: string; height?: number }) {
+  const pct = Math.max(0, Math.min(1, value));
+  return (
+    <span className="hairline block w-full" style={{ height }}>
+      <i className="block h-full" style={{ width: `${pct * 100}%`, background: tone }} />
+    </span>
   );
 }
 
 export function Chip({
   children,
-  tone = "ink",
-  onClick,
   active,
+  onClick,
   title,
+  tone = "ink",
 }: {
   children: ReactNode;
-  tone?: "ink" | "danger" | "warning" | "good";
-  onClick?: () => void;
   active?: boolean;
+  onClick?: () => void;
   title?: string;
+  tone?: "ink" | "danger" | "warning" | "good";
 }) {
   return (
     <button
@@ -86,11 +137,11 @@ export function Chip({
       title={title}
       onClick={onClick}
       className={clsx(
-        "tape px-1.5 py-0.5 border transition-colors",
-        active ? "bg-ink text-paper border-ink" : "border-rule text-ink-soft hover:border-rule-strong",
-        tone === "danger" && !active && "text-danger border-danger/40",
-        tone === "warning" && !active && "text-warning border-warning/40",
-        tone === "good" && !active && "text-good border-good/40"
+        "tape shrink-0 border px-1.5 py-[2px] transition-colors",
+        active ? "border-ink bg-ink text-paper" : "border-rule text-ink-soft hover:border-rule-strong",
+        !active && tone === "danger" && "text-danger",
+        !active && tone === "warning" && "text-warning",
+        !active && tone === "good" && "text-good"
       )}
     >
       {children}
@@ -98,22 +149,28 @@ export function Chip({
   );
 }
 
-/** Tactical crosshair marker used for failures/retries in the probe layer. */
-export function Crosshair({ size = 9, color = "var(--color-danger)" }: { size?: number; color?: string }) {
-  const r = size / 2;
+/** Query highlight; only the first occurrence is marked, as in the TUI. */
+export function Mark({ text, query, className }: { text: string; query: string; className?: string }) {
+  const q = query.trim().toLowerCase();
+  const idx = q ? text.toLowerCase().indexOf(q) : -1;
+  if (idx < 0) return <span className={className}>{text}</span>;
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="overflow-visible">
-      <circle cx={r} cy={r} r={r - 0.5} fill="none" stroke={color} strokeWidth="1" />
-      <line x1={r} y1="-2" x2={r} y2={size + 2} stroke={color} strokeWidth="1" />
-      <line x1="-2" y1={r} x2={size + 2} y2={r} stroke={color} strokeWidth="1" />
-    </svg>
+    <span className={className}>
+      {text.slice(0, idx)}
+      <mark className="mark">{text.slice(idx, idx + q.length)}</mark>
+      {text.slice(idx + q.length)}
+    </span>
   );
 }
 
-export function Spinner({ label = "ACQUIRING" }: { label?: string }) {
+export function Spinner({ label = "acquiring" }: { label?: string }) {
   return (
-    <div className="h-full grid place-items-center">
-      <div className="tape text-ink-faint tracking-[0.3em]">{label}…</div>
+    <div className="grid h-full place-items-center">
+      <div className="micro animate-pulse">{label}…</div>
     </div>
   );
+}
+
+export function Empty({ children }: { children: ReactNode }) {
+  return <div className="tape px-3 py-2 text-ink-faint">{children}</div>;
 }
