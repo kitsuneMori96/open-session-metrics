@@ -123,4 +123,14 @@ function previewValue(value: unknown): string {
 /** The TUI's 40-row cap on a tool's captured output, kept as a rendering budget. */
 export const OUT_ROWS = 40;
 
-export const statusGlyph = (status: string): string => (status === "completed" ? "✓" : status === "error" ? "✗" : "◌");
+/**
+ * Status as a mark, in the data face.
+ *
+ * These are text glyphs, so only glyphs the shipped mono cut actually carries may be
+ * used: JetBrains Mono has no U+2713/U+2717/U+25CC, and a browser that cannot find a
+ * glyph silently substitutes another typeface — on one machine a mono fallback, on
+ * another a proportional symbol face, mid-line. `✓` and `◌` come from that font stack
+ * too, but `×` (U+00D7) is in the cut, so the failure mark is a real multiplication
+ * sign rather than a substituted ballot X.
+ */
+export const statusGlyph = (status: string): string => (status === "completed" ? "✓" : status === "error" ? "×" : "◌");

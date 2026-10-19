@@ -228,7 +228,7 @@ function ToolMix({ a, b, ta, tb }: { a: SessionRow; b: SessionRow; ta: Turn[]; t
             <span className="tape tabular w-[46px] shrink-0 text-ink-soft">{int(y)}</span>
             {/* Always rendered: a trailing element that comes and goes would resize the
                 flexible bar and shift the B column on the rows that carry an error. */}
-            <span className="tape w-[30px] shrink-0 text-right text-danger">{errs > 0 ? `✗${errs}` : ""}</span>
+            <span className="tape w-[30px] shrink-0 text-right text-danger">{errs > 0 ? `${errs}×` : ""}</span>
           </div>
         );
       })}

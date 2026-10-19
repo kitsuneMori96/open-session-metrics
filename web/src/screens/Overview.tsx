@@ -375,7 +375,7 @@ export default function Overview() {
                   </span>
                   <span className="tape tabular shrink-0 text-good">{usd(s.cost)}</span>
                   <span className="tape tabular shrink-0 text-ink-faint">{int(s.turns)}t</span>
-                  {s.errors > 0 && <span className="tape shrink-0 text-danger">✗{s.errors}</span>}
+                  {s.errors > 0 && <span className="tape shrink-0 text-danger">{s.errors}×</span>}
                 </button>
               ))}
           </div>

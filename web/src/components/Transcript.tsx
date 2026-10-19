@@ -315,7 +315,7 @@ function TurnHeader({ row, active, query }: { row: Row; active: boolean; query: 
       </span>
       <span className="tape tabular shrink-0 text-ink-faint">{t.cost > 0 ? `$${t.cost.toFixed(4)}` : ""}</span>
       {t.finish && t.finish !== "stop" && <span className="tape shrink-0 text-warning">{t.finish}</span>}
-      {t.errors > 0 && <span className="tape shrink-0 text-danger">✗{t.errors}</span>}
+      {t.errors > 0 && <span className="tape shrink-0 text-danger">{t.errors}×</span>}
       {t.additions + t.deletions > 0 && (
         <span className="tape shrink-0">
           <span className="text-good">+{t.additions}</span> <span className="text-danger">−{t.deletions}</span>

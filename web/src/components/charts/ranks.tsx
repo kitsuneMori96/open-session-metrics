@@ -17,6 +17,8 @@ import type { GranularityLike } from "../../lib/chart";
  * terminal could not offer at all (click a project, filter the dashboard).
  * ------------------------------------------------------------------ */
 
+const RIGHT2_TONE = { danger: "text-danger", warning: "text-warning" } as const;
+
 export interface RankRow {
   key: string;
   label: string;
@@ -25,6 +27,8 @@ export interface RankRow {
   right?: string;
   /** Right-aligned second readout. It gets a column of its own — see below. */
   right2?: string;
+  /** When the second readout is a failure count rather than a value. */
+  right2Tone?: "danger" | "warning";
   sub?: string;
   color?: string;
   onClick?: () => void;
@@ -85,7 +89,14 @@ export function RankBars({
             <span className="tape tabular whitespace-nowrap text-right text-ink-soft">{readout(r)}</span>
             {split && <span className="tape text-center text-ink-faint">·</span>}
             {split && (
-              <span className="tape tabular whitespace-nowrap text-right text-ink-soft">{r.right2 ?? ""}</span>
+              <span
+                className={clsx(
+                  "tape tabular whitespace-nowrap text-right",
+                  r.right2Tone ? RIGHT2_TONE[r.right2Tone] : "text-ink-soft"
+                )}
+              >
+                {r.right2 ?? ""}
+              </span>
             )}
           </button>
         );

@@ -237,7 +237,7 @@ export default function SessionDetail() {
 
           <Panel title="shape">
             <Stat label="turns" value={int(turnCount)} labelWidth={92} />
-            <Stat label="tool calls" value={`${int(stats.tools)}${stats.errors > 0 ? ` · ${stats.errors} ✗` : ""}`} tone={stats.errors > 0 ? "warning" : "ink"} labelWidth={92} />
+            <Stat label="tool calls" value={`${int(stats.tools)}${stats.errors > 0 ? ` · ${stats.errors}×` : ""}`} tone={stats.errors > 0 ? "warning" : "ink"} labelWidth={92} />
             <Stat label="wall clock" value={dur(stats.spanMs)} labelWidth={92} title="first turn to last completion" />
             <Stat label="output rate" value={rate(stats.rate)} tone="good" labelWidth={92} title="median tokens/second across turns" />
             <Stat label="context window" value={tok(stats.windowTokens)} labelWidth={92} />
@@ -265,7 +265,7 @@ export default function SessionDetail() {
                   </Link>
                   <RateBar rate={t.calls > 0 ? t.errors / t.calls : 0} width={54} />
                   <span className="tape tabular w-[20px] shrink-0 text-right text-ink-soft">{int(t.calls)}</span>
-                  {t.errors > 0 && <span className="tape shrink-0 text-danger">✗{t.errors}</span>}
+                  {t.errors > 0 && <span className="tape shrink-0 text-danger">{t.errors}×</span>}
                 </div>
               ))
             )}

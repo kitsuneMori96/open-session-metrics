@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+/* Two cuts, both shipped: the interface sets its icons as text, so any glyph outside
+   these two faces is substituted by whatever the OS happens to have — and that shows. */
+
 @font-face {
   font-family: "JetBrains Mono";
   src: url("/fonts/jetbrains-mono.woff2") format("woff2-variations");

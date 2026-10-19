@@ -42,14 +42,7 @@ export default function Tools() {
         header: "tool",
         size: 180,
         accessorKey: "name",
-        cell: ({ row }) => (
-          <span className="flex items-center gap-2">
-            {/* A fixed name slot so the ✗ column stays a column: letting it ride on the
-                name's own width left a staircase of marks down the table. */}
-            <span className="tape w-[92px] shrink-0 truncate">{row.original.name}</span>
-            {row.original.errors > 0 && <span className="tape shrink-0 text-danger">✗</span>}
-          </span>
-        ),
+        cell: ({ row }) => <span className="tape truncate">{row.original.name}</span>,
       },
       { id: "calls", header: "calls", size: 66, accessorKey: "calls", meta: { align: "right" }, cell: ({ row }) => <span className="tape tabular">{int(row.original.calls)}</span> },
       {
@@ -173,7 +166,8 @@ export default function Tools() {
                       label: a.agent,
                       value: a.calls,
                       right: int(a.calls),
-                      right2: a.errors > 0 ? `${a.errors}✗` : undefined,
+                      right2: a.errors > 0 ? `${a.errors}×` : undefined,
+                      right2Tone: "danger",
                       color: a.errors > 0 ? "var(--color-warning)" : undefined,
                     }))}
                     empty="no calls in this slice"
@@ -186,7 +180,8 @@ export default function Tools() {
                       label: p.project,
                       value: p.calls,
                       right: int(p.calls),
-                      right2: p.errors > 0 ? `${p.errors}✗` : undefined,
+                      right2: p.errors > 0 ? `${p.errors}×` : undefined,
+                      right2Tone: "danger",
                       color: p.errors > 0 ? "var(--color-warning)" : undefined,
                     }))}
                     empty="no calls in this slice"
