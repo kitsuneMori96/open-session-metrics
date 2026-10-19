@@ -54,3 +54,27 @@ opencode-top 每次刷新都直接读 `opencode.db`，把 `session_message` / `p
 ## 我们保留的风格差异
 - 深色 TUI 换成纸白 + 墨蓝；`▓░` 换成实心条；`◆`、`╰─`、`▶` 等符号保留（等宽字体下语义清楚）。
 - 键位映射为鼠标优先，键盘等价键保留并在状态栏提示。
+
+## 落点
+
+| 原版 | 本项目 |
+|---|---|
+| `core/session.ts` 的 `getSessionTokens/Cost/Duration/OutputRate` | `sessions` 表在物化时算好，接口直接返回 |
+| `computeOverviewStats()` 在内存里遍历 | `/api/top/overview` 里用 SQL 聚合，再按同口径拼装 |
+| `buildTrendBuckets()` | `metrics/trend.ts`（小时 / 天 / 周自适应，标签按 `ceil(n/8)` 稀释） |
+| `groupSessionsToWorkflows()` / `buildAgentNode()` | `web/src/lib/derive.ts`（子节点按最近活跃排序，workflow 按含子代理的最新活跃排序） |
+| `MessagesPanel.buildLines()` | `web/src/lib/derive.ts` 的 `buildLines()`（同样六种行、同样 40 行回显上限） |
+| `BarChart` / `ErrBar` / `SuccessBar` | `components/BarChart.tsx`、`components/ui.tsx` 的 `SegBar` / `SplitBar` |
+
+## Web 端的几处适配
+
+原版是终端全屏程序，没有鼠标和异步加载，几处行为按浏览器的习惯改写，内容不变：
+
+- **`/` 搜索**：左栏即时按标题 / 项目 / 首条提问过滤，同时对 `/api/top/search` 做一次防抖
+  的全库正文检索，把命中会话列在过滤结果上方（`n` / `N` 在命中之间跳）。原版是在内存里
+  遍历所有 interaction 的正文；我们不在浏览器里放全库正文，所以这一步走了接口。
+- **Messages 面板**：正文不再手工按列宽折行，交给 CSS 换行；游标仍按「逻辑行」移动，
+  计行条的行号范围由容器实测得出。
+- **Stats 面板**：窗口够宽时 `STATS / MODELS / TOOLS` 与 `AGENT CHAIN` 并成两列，
+  窄窗口自动叠回一列；字段与顺序不变。
+
