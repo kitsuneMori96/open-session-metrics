@@ -3,7 +3,6 @@ import cors from "cors";
 import type { DatabaseSync } from "node:sqlite";
 import { BUCKET_MS } from "./config";
 import { getMeta, getMetaNumber } from "./metrics/schema";
-import { buildTrendBuckets } from "./metrics/trend";
 import { dashboard, facets, toolDetail, type Slice } from "./metrics/analytics";
 import type { BuildReport } from "./metrics/build";
 
@@ -81,107 +80,8 @@ export function createApp(deps: {
   });
 
   /**
-   * Screen 1 payload. Every session with the aggregates the details panel and the
-   * agent tree need, so selecting a row never hits the network: the tree, the STATS
-   * block, the context bar, MODELS, TOOLS and the AGENT CHAIN all render from this.
-   * The transcript is the only thing loaded separately (it is big).
-   */
-  app.get("/api/top/sessions", (req, res) => {
-    const project = projectOf(req);
-    const sessions = q<any>(
-      `SELECT s.id, s.parent_id, s.project, s.title, s.agent, s.model, s.provider, s.created, s.updated,
-              s.t_input, s.t_output, s.t_reasoning, s.t_cache_read, s.t_cache_write,
-              s.cost, s.turns, s.tool_calls, s.tool_errors, s.first_prompt, s.output_rate,
-              s.peak_fill, s.avg_fill,
-              (SELECT MAX(COALESCE(t.completed, t.created)) - MIN(t.created)
-                 FROM turns t WHERE t.session_id = s.id) AS span_ms,
-              (SELECT MAX(t.context_window) FROM turns t
-                 WHERE t.session_id = s.id AND t.role = 'assistant') AS ctx_window
-       FROM sessions s ${project ? "WHERE s.project = ?" : ""} ORDER BY s.updated DESC`,
-      ...(project ? [project] : [])
-    );
-
-    const bySessionModels = new Map<string, any[]>();
-    for (const r of q<any>(
-      `SELECT session_id, model, COUNT(*) calls, SUM(input+output+reasoning+cache_read+cache_write) tokens
-       FROM turns WHERE role='assistant' GROUP BY session_id, model`
-    )) {
-      const list = bySessionModels.get(r.session_id) ?? [];
-      list.push({ id: r.model ?? "unknown", calls: r.calls, tokens: r.tokens });
-      bySessionModels.set(r.session_id, list);
-    }
-    for (const list of bySessionModels.values()) list.sort((a, b) => b.tokens - a.tokens);
-
-    const bySessionTools = new Map<string, any[]>();
-    for (const r of q<any>(
-      `SELECT session_id, name, COUNT(*) calls,
-              SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) successes,
-              SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) failures,
-              SUM(COALESCE(dur_ms,0)) ms
-       FROM tools GROUP BY session_id, name`
-    )) {
-      const list = bySessionTools.get(r.session_id) ?? [];
-      list.push({
-        name: r.name,
-        calls: r.calls,
-        successes: r.successes,
-        failures: r.failures,
-        avgMs: r.calls > 0 ? r.ms / r.calls : 0,
-      });
-      bySessionTools.set(r.session_id, list);
-    }
-    for (const list of bySessionTools.values()) list.sort((a, b) => b.calls - a.calls);
-
-    res.json({
-      generatedAt: Date.now(),
-      sessions: sessions.map((s) => {
-        const input = Number(s.t_input ?? 0);
-        const cacheRead = Number(s.t_cache_read ?? 0);
-        const cacheWrite = Number(s.t_cache_write ?? 0);
-        // Context pressure is measured the way the TUI measures it: what the provider
-        // had to re-read plus what it wrote, over the model's window. Output is not
-        // resident context, and reasoning is billed separately from it.
-        const contextUsage = input + cacheRead + cacheWrite;
-        const contextWindow = Number(s.ctx_window ?? 0) || 128000;
-        return {
-          id: s.id,
-          parentId: s.parent_id ?? null,
-          project: s.project ?? "—",
-          title: s.title ?? null,
-          agent: s.agent ?? null,
-          model: s.model ?? null,
-          provider: s.provider ?? null,
-          created: Number(s.created ?? 0),
-          updated: Number(s.updated ?? 0),
-          tokens: {
-            input,
-            output: Number(s.t_output ?? 0),
-            reasoning: Number(s.t_reasoning ?? 0),
-            cacheRead,
-            cacheWrite,
-            total: input + Number(s.t_output ?? 0) + cacheRead + cacheWrite,
-          },
-          cost: Number(s.cost ?? 0),
-          calls: Number(s.turns ?? 0),
-          durationMs: Number(s.span_ms ?? 0),
-          outputRate: Number(s.output_rate ?? 0),
-          contextUsage,
-          contextWindow,
-          contextPct: contextWindow > 0 ? contextUsage / contextWindow : 0,
-          peakFill: Number(s.peak_fill ?? 0),
-          avgFill: Number(s.avg_fill ?? 0),
-          firstPrompt: s.first_prompt ?? null,
-          models: bySessionModels.get(s.id) ?? [],
-          tools: bySessionModels.has(s.id) ? bySessionTools.get(s.id) ?? [] : [],
-        };
-      }),
-    });
-  });
-
-  /**
-   * Screen 1, right panel in "Messages" mode: one session's assistant turns in order,
-   * each with its content parts. This is the only endpoint that returns bodies, and it
-   * is fetched per session on demand.
+   * One session's assistant turns in order, each with its content parts. This is the
+   * only endpoint that returns bodies, and it is fetched per session on demand.
    */
   app.get("/api/top/session/:id/messages", (req, res) => {
     const id = req.params.id;
@@ -279,182 +179,6 @@ export function createApp(deps: {
   });
 
   /**
-   * Screen 2 payload: tool usage aggregated across every session, with the newest
-   * error messages per tool.
-   */
-  app.get("/api/top/tools", (_req, res) => {
-    const rows = q<any>(
-      `SELECT name, COUNT(*) calls,
-              SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) successes,
-              SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) failures,
-              SUM(COALESCE(dur_ms,0)) total_ms
-       FROM tools GROUP BY name ORDER BY calls DESC`
-    );
-    const recentByTool = new Map<string, string[]>();
-    for (const r of q<any>(
-      `SELECT name, error FROM tools
-       WHERE status='error' AND error IS NOT NULL AND error <> ''
-       ORDER BY COALESCE(ended, started, 0) DESC`
-    )) {
-      const list = recentByTool.get(r.name) ?? [];
-      if (list.length < 3) list.push(String(r.error).slice(0, 200));
-      recentByTool.set(r.name, list);
-    }
-    res.json({
-      tools: rows.map((r) => ({
-        name: r.name,
-        calls: Number(r.calls),
-        successes: Number(r.successes),
-        failures: Number(r.failures),
-        totalDurationMs: Number(r.total_ms ?? 0),
-        avgDurationMs: r.calls > 0 ? Number(r.total_ms ?? 0) / Number(r.calls) : 0,
-        recentErrors: recentByTool.get(r.name) ?? [],
-      })),
-    });
-  });
-
-  /**
-   * Screen 3 payload: aggregate stats over a time range/project.
-   *
-   * The TUI keeps whole workflows and skips *interactions* before the cutoff, so a
-   * sub-agent whose parent went quiet is dropped along with the parent. We reproduce
-   * that: roots are selected first (by project and cutoff), then their descendants.
-   */
-  app.get("/api/top/overview", (req, res) => {
-    const now = Date.now();
-    const cutoff = cutoffOf(req);
-    const project = projectOf(req);
-
-    const meta = q<any>(`SELECT id, parent_id, project, created, updated FROM sessions`);
-    const roots = meta.filter((s) => !s.parent_id || !meta.some((p) => p.id === s.parent_id));
-    const projects = [...new Set(roots.map((r) => String(r.project ?? "—")))].sort();
-
-    const chosen = roots.filter(
-      (r) => (!project || String(r.project ?? "—") === project) && (cutoff === 0 || Number(r.updated ?? 0) >= cutoff)
-    );
-    const activeIds = new Set<string>(chosen.map((r) => String(r.id)));
-    // Descendants are attached by walking parent links once; 200 sessions is small.
-    for (let pass = 0; pass < 8; pass++) {
-      for (const s of meta) {
-        if (s.parent_id && activeIds.has(String(s.parent_id))) activeIds.add(String(s.id));
-      }
-    }
-    const ids = [...activeIds];
-    const ph = ids.map(() => "?").join(",");
-    const turnWhere = ids.length ? `t.session_id IN (${ph}) AND t.created >= ?` : null;
-
-    const turns = turnWhere
-      ? q<any>(
-          `SELECT t.id, t.session_id, t.project, t.agent, t.model, t.created, t.input, t.output,
-                  t.reasoning, t.cache_read, t.cache_write, t.cost
-           FROM turns t WHERE t.role='assistant' AND ${turnWhere}`,
-          ...ids,
-          cutoff
-        )
-      : [];
-    const toolRows = turnWhere
-      ? q<any>(
-          `SELECT COALESCE(t.agent,'main') agent, tl.name, tl.status, COALESCE(tl.dur_ms,0) dur_ms
-           FROM tools tl JOIN turns t ON t.id = tl.turn_id WHERE ${turnWhere}`,
-          ...ids,
-          cutoff
-        )
-      : [];
-
-    const totals = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
-    const models = new Map<string, { id: string; calls: number; tokens: number; cost: number }>();
-    const projBreak = new Map<string, { project: string; sessions: number; cost: number }>();
-    const agentErrors = new Map<string, { agent: string; calls: number; errors: number }>();
-    const toolCounts = new Map<string, { name: string; calls: number; errors: number; totalDurationMs: number }>();
-    const tokenPoints: [number, number][] = [];
-    const hourly = new Array(24).fill(0);
-    const activeSessions = new Set<string>();
-
-    for (const t of turns) {
-      const input = Number(t.input ?? 0);
-      const output = Number(t.output ?? 0);
-      const reasoning = Number(t.reasoning ?? 0);
-      const cacheRead = Number(t.cache_read ?? 0);
-      const cacheWrite = Number(t.cache_write ?? 0);
-      const cost = Number(t.cost ?? 0);
-      // `total` deliberately excludes reasoning: it is what the provider billed as
-      // context traffic, and the TUI's own TokenUsage.total draws the same line.
-      const total = input + output + cacheRead + cacheWrite;
-
-      totals.input += input;
-      totals.output += output;
-      totals.reasoning += reasoning;
-      totals.cacheRead += cacheRead;
-      totals.cacheWrite += cacheWrite;
-      totals.cost += cost;
-
-      const modelId = String(t.model ?? "unknown");
-      const mEntry = models.get(modelId) ?? { id: modelId, calls: 0, tokens: 0, cost: 0 };
-      mEntry.calls++;
-      mEntry.tokens += total;
-      mEntry.cost += cost;
-      models.set(modelId, mEntry);
-
-      const proj = String(t.project ?? "—");
-      const pEntry = projBreak.get(proj) ?? { project: proj, sessions: 0, cost: 0 };
-      pEntry.cost += cost;
-      projBreak.set(proj, pEntry);
-
-      activeSessions.add(String(t.session_id));
-      const ts = Number(t.created ?? 0);
-      if (ts) {
-        hourly[new Date(ts).getHours()]++;
-        tokenPoints.push([ts, total]);
-      }
-    }
-
-    for (const r of toolRows) {
-      const name = String(r.name);
-      const isError = r.status === "error";
-      const tEntry = toolCounts.get(name) ?? { name, calls: 0, errors: 0, totalDurationMs: 0 };
-      tEntry.calls++;
-      if (isError) tEntry.errors++;
-      tEntry.totalDurationMs += Number(r.dur_ms ?? 0);
-      toolCounts.set(name, tEntry);
-
-      const agent = String(r.agent ?? "main");
-      const aEntry = agentErrors.get(agent) ?? { agent, calls: 0, errors: 0 };
-      aEntry.calls++;
-      if (isError) aEntry.errors++;
-      agentErrors.set(agent, aEntry);
-    }
-
-    // A session counts once it has an interaction inside the window, whatever the
-    // wall-clock span of its row says.
-    for (const s of meta) {
-      if (!activeSessions.has(String(s.id))) continue;
-      const proj = String(s.project ?? "—");
-      const pEntry = projBreak.get(proj) ?? { project: proj, sessions: 0, cost: 0 };
-      pEntry.sessions++;
-      projBreak.set(proj, pEntry);
-    }
-
-    const sessionPoints: [number, number][] = meta
-      .filter((s) => activeSessions.has(String(s.id)))
-      .map((s) => [Number(s.updated ?? s.created ?? 0), 1] as [number, number]);
-
-    res.json({
-      generatedAt: now,
-      range: { from: cutoff, to: now, project },
-      projects,
-      activity: { roots: { shown: chosen.length, total: roots.length } },
-      totals: { ...totals, total: totals.input + totals.output + totals.cacheRead + totals.cacheWrite },
-      models: [...models.values()].sort((a, b) => b.calls - a.calls),
-      projectsBreakdown: [...projBreak.values()].sort((a, b) => b.sessions - a.sessions),
-      agentErrors: [...agentErrors.values()].sort((a, b) => b.calls - a.calls),
-      tools: [...toolCounts.values()].sort((a, b) => b.calls - a.calls),
-      tokenTrend: buildTrendBuckets(tokenPoints, cutoff, now),
-      sessionTrend: buildTrendBuckets(sessionPoints, cutoff, now),
-      hourly,
-    });
-  });
-
-  /**
    * Everything the dashboard's filter bar needs to describe the corpus, in one call:
    * the project / model / agent dimensions with their sizes, plus the data extent so a
    * relative window ("last 30 days") can be anchored to what actually exists.
@@ -464,9 +188,9 @@ export function createApp(deps: {
   });
 
   /**
-   * The Overview payload. Unlike `/api/top/overview` this returns raw buckets rather
-   * than a pre-thinned label array, so the browser can draw a real time axis, brush a
-   * sub-range and stack the series by model without another round trip.
+   * The dashboard payload: raw buckets rather than a pre-thinned label array, so the
+   * browser can draw a real time axis, brush a sub-range and stack the series by model
+   * without another round trip.
    */
   app.get("/api/top/analytics", (req, res) => {
     res.json(dashboard(deps.db(), sliceOf(req)));
