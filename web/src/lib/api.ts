@@ -1,7 +1,6 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, type UseQueryResult } from "@tanstack/react-query";
 
 const BASE = (import.meta.env.VITE_OSM_API as string | undefined) ?? "http://127.0.0.1:8787";
-const DAY = 86_400_000;
 
 async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { signal });
@@ -9,17 +8,76 @@ async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
   return (await res.json()) as T;
 }
 
-export interface Status {
-  sourceDb: string | null;
-  sourceSchema: string | null;
-  sourceMaxTime: number;
-  materializedAt: number;
-  mode: string | null;
-  extent: { from: number; to: number };
-  counts: { sessions: number; turns: number; tools: number; parts: number; events: number; models: number };
+/* ------------------------------------------------------------------ *
+ * The slice: every analytical view is rendered against this window and
+ * this cross-filter, so the URL alone can reproduce a screen.
+ * ------------------------------------------------------------------ */
+
+export interface Slice {
+  from: number;
+  to: number;
+  project: string | null;
+  model: string | null;
+  agent: string | null;
 }
 
-export interface TokenBuckets {
+export const DAY = 86_400_000;
+
+/**
+ * A window is kept symbolic in the URL so "last 30 days" stays relative across
+ * reloads, and so a query key does not change every time the clock ticks: only a
+ * brush commits absolute epoch values.
+ */
+export type WindowSpec = { kind: "preset"; id: PresetId } | { kind: "custom"; from: number; to: number };
+
+export const DEFAULT_PRESET: PresetId = "30d";
+
+export const PRESETS = [
+  { id: "24h", label: "24h", ms: DAY },
+  { id: "7d", label: "7d", ms: 7 * DAY },
+  { id: "30d", label: "30d", ms: 30 * DAY },
+  { id: "90d", label: "90d", ms: 90 * DAY },
+  { id: "1y", label: "1y", ms: 365 * DAY },
+  { id: "all", label: "all", ms: 0 },
+] as const;
+export type PresetId = (typeof PRESETS)[number]["id"];
+
+const presetOf = (id: string): (typeof PRESETS)[number] | undefined => PRESETS.find((p) => p.id === id);
+
+export function resolveWindow(w: WindowSpec, now: number): { from: number; to: number } {
+  if (w.kind === "custom") return { from: w.from, to: w.to };
+  const preset = presetOf(w.id) ?? PRESETS[2];
+  return preset.ms > 0 ? { from: now - preset.ms, to: now } : { from: 0, to: now };
+}
+
+export const windowKey = (w: WindowSpec): string =>
+  w.kind === "preset" ? `p:${w.id}` : `c:${Math.round(w.from)}-${Math.round(w.to)}`;
+
+export const windowLabel = (w: WindowSpec): string => {
+  if (w.kind === "preset") return presetOf(w.id)?.label ?? "all";
+  const d = (ts: number) => {
+    const x = new Date(ts);
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${p(x.getMonth() + 1)}-${p(x.getDate())}`;
+  };
+  return `${d(w.from)} → ${d(w.to)}`;
+};
+
+export const sliceQuery = (s: Slice): string => {
+  const p = new URLSearchParams();
+  p.set("from", String(Math.max(0, Math.round(s.from))));
+  p.set("to", String(Math.round(s.to)));
+  if (s.project) p.set("project", s.project);
+  if (s.model) p.set("model", s.model);
+  if (s.agent) p.set("agent", s.agent);
+  return p.toString();
+};
+
+/* ------------------------------------------------------------------ *
+ * Payloads
+ * ------------------------------------------------------------------ */
+
+export interface TokenTotals {
   input: number;
   output: number;
   reasoning: number;
@@ -28,46 +86,160 @@ export interface TokenBuckets {
   total: number;
 }
 
-export interface ModelUsage {
+export interface Totals extends TokenTotals {
+  cost: number;
+  turns: number;
+  tools: number;
+  errors: number;
+  sessions: number;
+  additions: number;
+  deletions: number;
+  writeLines: number;
+}
+
+export interface Bucket extends Totals {
+  ts: number;
+}
+
+export interface Kpi {
+  value: number;
+  prev: number;
+  delta: number;
+}
+
+export interface Efficiency {
+  outputRate: number;
+  turnMs: { p50: number; p90: number; p99: number };
+  cacheHit: number;
+  fill: { p50: number; p90: number; max: number };
+  stopped: number;
+}
+
+export interface Series {
+  gran: "hour" | "day" | "week";
+  bucketMs: number;
+  buckets: Bucket[];
+  models: string[];
+  modelTokens: number[][];
+  heat: number[][];
+  hourly: number[];
+}
+
+export interface ModelRow {
   id: string;
   calls: number;
   tokens: number;
-  cost?: number;
+  input: number;
+  output: number;
+  cost: number;
+  sessions: number;
 }
 
-export interface ToolUsage {
+export interface ProjectRow {
+  project: string;
+  sessions: number;
+  turns: number;
+  tokens: number;
+  cost: number;
+  tools: number;
+  errors: number;
+}
+
+export interface ToolRow {
   name: string;
   calls: number;
-  successes: number;
-  failures: number;
+  errors: number;
+  totalMs: number;
   avgMs: number;
-  recentErrors?: string[];
+  p50Ms: number;
+  p95Ms: number;
+  maxMs: number;
+  sessions: number;
+  agents: number;
 }
 
-/** One row of the sessions list — everything the tree and the STATS panel need. */
-export interface TopSession {
+export interface AgentRow {
+  agent: string;
+  turns: number;
+  tokens: number;
+  cost: number;
+  sessions: number;
+  tools: number;
+  errors: number;
+}
+
+export interface SessionRow {
   id: string;
-  parentId: string | null;
-  project: string;
   title: string | null;
+  project: string;
   agent: string | null;
   model: string | null;
-  provider: string | null;
+  parentId: string | null;
   created: number;
   updated: number;
-  tokens: TokenBuckets;
+  tokens: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
   cost: number;
-  calls: number;
-  durationMs: number;
+  turns: number;
+  tools: number;
+  errors: number;
+  spanMs: number;
   outputRate: number;
-  contextUsage: number;
-  contextWindow: number;
   contextPct: number;
   peakFill: number;
-  avgFill: number;
   firstPrompt: string | null;
-  models: ModelUsage[];
-  tools: ToolUsage[];
+  workflow: string;
+  depth: number;
+  childCount: number;
+}
+
+export interface Dashboard {
+  generatedAt: number;
+  slice: Slice & { gran: "hour" | "day" | "week"; resolvedFrom: number; spanMs: number };
+  totals: Totals;
+  kpis: {
+    tokens: Kpi;
+    cost: Kpi;
+    turns: Kpi;
+    tools: Kpi;
+    errors: Kpi;
+    sessions: Kpi;
+    output: Kpi;
+    additions: Kpi;
+    deletions: Kpi;
+  };
+  efficiency: Efficiency;
+  series: Series;
+  models: ModelRow[];
+  projects: ProjectRow[];
+  agents: AgentRow[];
+  tools: ToolRow[];
+  sessions: SessionRow[];
+}
+
+export interface ToolDetail {
+  name: string;
+  totals: ToolRow | null;
+  gran: "hour" | "day" | "week";
+  buckets: { ts: number; calls: number; errors: number; avgMs: number; totalMs: number }[];
+  latency: { label: string; count: number; upperMs: number }[];
+  agents: { agent: string; calls: number; errors: number }[];
+  projects: { project: string; calls: number; errors: number }[];
+  signatures: { sig: string; count: number; sample: string }[];
+  recentErrors: { at: number; session: string; error: string }[];
+  edited: { additions: number; deletions: number; files: number; chars: number };
+}
+
+export interface Facets {
+  projects: { project: string; sessions: number; tokens: number; cost: number; updated: number }[];
+  models: { id: string; label: string; calls: number }[];
+  agents: { agent: string; calls: number }[];
+  tools: { name: string; calls: number }[];
+  extent: { from: number; to: number };
+  counts: { sessions: number; turns: number; tools: number; parts: number };
 }
 
 export interface ToolPart {
@@ -119,6 +291,15 @@ export interface Turn {
   finish: string | null;
   tools: number;
   errors: number;
+  project: string;
+  occupancy: number;
+  contextWindow: number;
+  fill: number;
+  fillAfter: number;
+  additions: number;
+  deletions: number;
+  writeLines: number;
+  hasError: boolean;
   parts: Part[];
 }
 
@@ -139,38 +320,6 @@ export interface Transcript {
   turns: Turn[];
 }
 
-export interface GlobalTool {
-  name: string;
-  calls: number;
-  successes: number;
-  failures: number;
-  totalDurationMs: number;
-  avgDurationMs: number;
-  recentErrors: string[];
-}
-
-export interface TrendSeries {
-  labels: string[];
-  values: number[];
-  mode: "hour" | "day" | "week";
-  spanText: string;
-}
-
-export interface Overview {
-  generatedAt: number;
-  range: { from: number; to: number; project: string | null };
-  projects: string[];
-  activity: { roots: { shown: number; total: number } };
-  totals: TokenBuckets & { cost: number };
-  models: ModelUsage[];
-  projectsBreakdown: { project: string; sessions: number; cost: number }[];
-  agentErrors: { agent: string; calls: number; errors: number }[];
-  tools: { name: string; calls: number; errors: number; totalDurationMs: number }[];
-  tokenTrend: TrendSeries;
-  sessionTrend: TrendSeries;
-  hourly: number[];
-}
-
 export interface SearchHit {
   id: string;
   title: string | null;
@@ -179,71 +328,81 @@ export interface SearchHit {
   hits: number;
 }
 
-/** Time filters, in the order the Overview screen cycles them with `t`. */
-export const RANGES = [
-  { id: "today", label: "today" },
-  { id: "7d", label: "last 7d" },
-  { id: "30d", label: "last 30d" },
-  { id: "90d", label: "last 90d" },
-  { id: "all", label: "all time" },
-] as const;
-export type RangeId = (typeof RANGES)[number]["id"];
-
-/** Cutoff anchored to local midnight, so day buckets line up with the calendar. */
-export function cutoffOf(range: RangeId, now = Date.now()): number {
-  const midnight = (ts: number) => {
-    const d = new Date(ts);
-    d.setHours(0, 0, 0, 0);
-    return d.getTime();
-  };
-  if (range === "today") return midnight(now);
-  const days = range === "7d" ? 7 : range === "30d" ? 30 : range === "90d" ? 90 : 0;
-  return days > 0 ? midnight(now - days * DAY) : 0;
+export interface Status {
+  sourceDb: string | null;
+  sourceSchema: string | null;
+  sourceMaxTime: number;
+  materializedAt: number;
+  mode: string | null;
+  extent: { from: number; to: number };
+  counts: { sessions: number; turns: number; tools: number; parts: number; events: number; models: number };
 }
 
-const POLL_MS = 15_000;
+/* ------------------------------------------------------------------ *
+ * Hooks. The store only changes when the server re-materializes, so the
+ * panels poll slowly and keep the previous frame while a filter settles.
+ * ------------------------------------------------------------------ */
+
+const POLL_MS = 60_000;
+
+export interface Facets0 {
+  project: string | null;
+  model: string | null;
+  agent: string | null;
+}
+
+const facetKey = (f: Facets0): string => `${f.project ?? ""}|${f.model ?? ""}|${f.agent ?? ""}`;
+
+/** Resolve a symbolic window plus the cross-filter into a concrete slice. */
+export const sliceOf = (win: WindowSpec, f: Facets0, now = Date.now()): Slice => {
+  const { from, to } = resolveWindow(win, now);
+  return { from, to, ...f };
+};
 
 export const useStatus = () =>
-  useQuery({ queryKey: ["status"], queryFn: ({ signal }) => get<Status>("/api/status", signal), refetchInterval: POLL_MS });
+  useQuery({ queryKey: ["status"], queryFn: ({ signal }) => get<Status>("/api/status", signal), refetchInterval: 30_000 });
 
-export const useSessions = () =>
+export const useFacets = () =>
+  useQuery({ queryKey: ["facets"], queryFn: ({ signal }) => get<Facets>("/api/top/facets", signal), staleTime: POLL_MS });
+
+/**
+ * The window stays symbolic in the key, so a preset does not re-key the cache on
+ * every tick; the request still resolves `now` when it fires.
+ */
+export const useAnalytics = (win: WindowSpec, f: Facets0): UseQueryResult<Dashboard> =>
   useQuery({
-    queryKey: ["top", "sessions"],
-    queryFn: ({ signal }) => get<{ generatedAt: number; sessions: TopSession[] }>("/api/top/sessions", signal),
-    refetchInterval: POLL_MS,
-  });
-
-export const useTools = () =>
-  useQuery({
-    queryKey: ["top", "tools"],
-    queryFn: ({ signal }) => get<{ tools: GlobalTool[] }>("/api/top/tools", signal),
-    refetchInterval: POLL_MS,
-  });
-
-export const useOverview = (range: RangeId, project: string | null) => {
-  const from = cutoffOf(range);
-  return useQuery({
-    queryKey: ["top", "overview", range, project],
+    queryKey: ["analytics", windowKey(win), facetKey(f)],
     queryFn: ({ signal }) =>
-      get<Overview>(`/api/top/overview?from=${from}${project ? `&project=${encodeURIComponent(project)}` : ""}`, signal),
+      get<Dashboard>(`/api/top/analytics?${sliceQuery(sliceOf(win, f))}`, signal),
+    placeholderData: keepPreviousData,
+    staleTime: 20_000,
     refetchInterval: POLL_MS,
   });
-};
+
+export const useToolDetail = (win: WindowSpec, f: Facets0, name: string | null) =>
+  useQuery({
+    queryKey: ["tool", name, windowKey(win), facetKey(f)],
+    queryFn: ({ signal }) =>
+      get<ToolDetail>(`/api/top/tool?name=${encodeURIComponent(name!)}&${sliceQuery(sliceOf(win, f))}`, signal),
+    enabled: !!name,
+    placeholderData: keepPreviousData,
+    staleTime: 20_000,
+  });
 
 export const useTranscript = (id: string | null) =>
   useQuery({
-    queryKey: ["top", "messages", id],
+    queryKey: ["transcript", id],
     queryFn: ({ signal }) => get<Transcript>(`/api/top/session/${id}/messages`, signal),
     enabled: !!id,
-    staleTime: 60_000,
+    staleTime: 300_000,
   });
 
 export const useSearch = (q: string) =>
   useQuery({
-    queryKey: ["top", "search", q],
+    queryKey: ["search", q],
     queryFn: ({ signal }) => get<{ query: string; hits: SearchHit[] }>(`/api/top/search?q=${encodeURIComponent(q)}`, signal),
     enabled: q.trim().length >= 2,
-    staleTime: 30_000,
+    staleTime: 60_000,
   });
 
 export async function refresh(full = false): Promise<{ ok: boolean; report?: unknown }> {
@@ -254,3 +413,9 @@ export async function refresh(full = false): Promise<{ ok: boolean; report?: unk
   });
   return (await res.json()) as { ok: boolean; report?: unknown };
 }
+
+/* ------------------------------------------------------------------ *
+ * Windows
+ * ------------------------------------------------------------------ */
+
+

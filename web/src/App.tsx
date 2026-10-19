@@ -1,66 +1,72 @@
-import { useCallback, useState, type ReactNode } from "react";
-import clsx from "clsx";
+import { useCallback, useState } from "react";
+import { Navigate, Route, Routes, useNavigate } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { refresh, useStatus } from "./lib/api";
+import { refresh } from "./lib/api";
 import { useKeys } from "./lib/useKeys";
-import TabBar, { type ScreenId } from "./components/TabBar";
-import SessionsScreen from "./screens/SessionsScreen";
-import ToolsScreen from "./screens/ToolsScreen";
-import OverviewScreen from "./screens/OverviewScreen";
+import { NAV, SliceBar, TopBar } from "./components/Chrome";
+import Palette from "./components/Palette";
+import Overview from "./screens/Overview";
+import Sessions from "./screens/Sessions";
+import SessionDetail from "./screens/SessionDetail";
+import Tools from "./screens/Tools";
+import Compare from "./screens/Compare";
 
 /**
- * Three screens behind a tab bar: Sessions, Tools, Overview. All three stay mounted so
- * a selection, a scroll position or a filter survives a tab switch — the same way the
- * TUI keeps every screen in memory behind a key press.
+ * The shell.
+ *
+ * Three panels that used to be three screens are now four routes plus a deep link for
+ * every session, and one slice bar above all of them. The keymap survives: 1–4 navigate,
+ * `/` opens the palette, `r` re-materializes the store, Escape dismisses overlays.
  */
 export default function App() {
-  const [screen, setScreen] = useState<ScreenId>("sessions");
-  const [refreshing, setRefreshing] = useState(false);
-  const status = useStatus();
+  const [palette, setPalette] = useState(false);
+  const navigate = useNavigate();
   const qc = useQueryClient();
 
-  const doRefresh = useCallback(async () => {
-    setRefreshing(true);
+  const sync = useCallback(async () => {
     try {
       await refresh(false);
       await qc.invalidateQueries();
     } catch {
-      // The panel keeps showing the last good snapshot; the tab bar stops spinning.
-    } finally {
-      setRefreshing(false);
+      // keep showing the last good snapshot
     }
   }, [qc]);
 
   useKeys((e) => {
-    if (e.key === "1") return setScreen("sessions");
-    if (e.key === "2") return setScreen("tools");
-    if (e.key === "3") return setScreen("overview");
-    if (e.key === "r") return void doRefresh();
-    return;
+    const hit = NAV.find((n) => n.key === e.key);
+    if (hit) {
+      navigate(hit.to);
+      return;
+    }
+    if (e.key === "/") {
+      e.preventDefault();
+      setPalette(true);
+      return;
+    }
+    if (e.key === "r") {
+      void sync();
+      return;
+    }
+    if (e.key === "Escape") setPalette(false);
   });
 
-  const panels: { id: ScreenId; node: ReactNode }[] = [
-    { id: "sessions", node: <SessionsScreen active={screen === "sessions"} /> },
-    { id: "tools", node: <ToolsScreen active={screen === "tools"} /> },
-    { id: "overview", node: <OverviewScreen active={screen === "overview"} /> },
-  ];
-
   return (
-    <div className="grid-paper flex h-full flex-col overflow-hidden bg-paper text-ink">
-      <TabBar
-        screen={screen}
-        onScreen={setScreen}
-        status={status.data}
-        onRefresh={() => void doRefresh()}
-        refreshing={refreshing}
-      />
+    <div className="grid-paper flex h-full min-h-0 flex-col">
+      <TopBar onPalette={() => setPalette(true)} />
+      <SliceBar />
       <main className="flex min-h-0 flex-1 flex-col">
-        {panels.map((p) => (
-          <div key={p.id} className={clsx("min-h-0 flex-1", screen === p.id ? "flex flex-col" : "hidden")}>
-            {p.node}
-          </div>
-        ))}
+        <Routes>
+          <Route path="/" element={<Navigate to="/overview" replace />} />
+          <Route path="/overview" element={<Overview />} />
+          <Route path="/sessions" element={<Sessions />} />
+          <Route path="/sessions/:id" element={<SessionDetail />} />
+          <Route path="/tools" element={<Tools />} />
+          <Route path="/tools/:name" element={<Tools />} />
+          <Route path="/compare" element={<Compare />} />
+          <Route path="*" element={<Navigate to="/overview" replace />} />
+        </Routes>
       </main>
+      {palette && <Palette onClose={() => setPalette(false)} />}
     </div>
   );
 }
