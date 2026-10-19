@@ -152,7 +152,9 @@ export default function Sessions() {
         cell: ({ row }) => (
           <span className="flex min-w-0 items-center gap-2">
             <StackRule segments={tokenSegments(row.original)} />
-            <span className="tape tabular flex-1 text-right">{tok(row.original.tokens)}</span>
+            {/* A fixed slot: `flex-1` would let the container shrink to the number's own
+                width, which walks the rule left and right from row to row. */}
+            <span className="tape tabular w-[44px] shrink-0 text-right">{tok(row.original.tokens)}</span>
           </span>
         ),
       },
@@ -203,7 +205,7 @@ export default function Sessions() {
         cell: ({ row }) => (
           <span className="flex items-center justify-end gap-2" title="context tokens over the model window">
             <RateBar rate={row.original.contextPct} tone="var(--color-flow)" />
-            <span className="tape tabular text-ink-faint">{pct(Math.min(1, row.original.contextPct), 0)}</span>
+            <span className="tape tabular w-[28px] text-right text-ink-faint">{pct(Math.min(1, row.original.contextPct), 0)}</span>
           </span>
         ),
       },

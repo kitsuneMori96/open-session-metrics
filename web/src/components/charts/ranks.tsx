@@ -21,8 +21,10 @@ export interface RankRow {
   key: string;
   label: string;
   value: number;
-  /** Right-aligned secondary readout. */
+  /** Right-aligned readout; defaults to `format(value)`. */
   right?: string;
+  /** Right-aligned second readout. It gets a column of its own — see below. */
+  right2?: string;
   sub?: string;
   color?: string;
   onClick?: () => void;
@@ -44,6 +46,18 @@ export function RankBars({
 }) {
   const peak = Math.max(max ?? 0, ...rows.map((r) => r.value), 1);
   if (rows.length === 0) return <div className="tape py-px text-ink-faint">{empty}</div>;
+
+  // Every row is its own grid element, so the tracks have to be spelled out: a
+  // `max-content` column is measured per row, which starts the bar at a different x on
+  // every line and shifts the readout with it. The data face is monospaced, so `ch` is
+  // an exact column width, and a second readout gets a column of its own with the
+  // separator between them — otherwise "2,407 · 17s" and "949 · 8.5s" never line up.
+  const readout = (r: RankRow) => r.right ?? format(r.value);
+  const w1 = Math.max(...rows.map((r) => readout(r).length), 1);
+  const split = rows.some((r) => r.right2 !== undefined);
+  const w2 = split ? Math.max(...rows.map((r) => r.right2?.length ?? 0), 1) : 0;
+  const cols = `minmax(0,1fr) ${track}px ${w1}ch${split ? ` 1ch ${w2}ch` : ""}`;
+
   return (
     <div>
       {rows.map((r) => {
@@ -56,11 +70,11 @@ export function RankBars({
             disabled={!r.onClick}
             title={r.sub}
             className={clsx(
-              "grid w-full items-center gap-x-2 py-[3px] text-left",
+              "grid w-full items-center gap-x-1.5 py-[3px] text-left",
               r.onClick && "cursor-pointer hover:bg-ink/5",
               r.active && "bg-flow/10"
             )}
-            style={{ gridTemplateColumns: `minmax(0,1fr) ${track}px max-content` }}
+            style={{ gridTemplateColumns: cols }}
           >
             <span className="tape truncate" style={{ color: r.active ? "var(--color-flow)" : undefined }}>
               {r.label}
@@ -68,7 +82,11 @@ export function RankBars({
             <span className="relative block h-[9px] w-full bg-ink/10">
               <i className="absolute inset-y-0 left-0 block" style={{ width: `${pct}%`, background: r.color ?? "var(--color-ink)" }} />
             </span>
-            <span className="tape tabular min-w-[52px] text-right text-ink-soft">{r.right ?? format(r.value)}</span>
+            <span className="tape tabular whitespace-nowrap text-right text-ink-soft">{readout(r)}</span>
+            {split && <span className="tape text-center text-ink-faint">·</span>}
+            {split && (
+              <span className="tape tabular whitespace-nowrap text-right text-ink-soft">{r.right2 ?? ""}</span>
+            )}
           </button>
         );
       })}

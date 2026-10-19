@@ -241,13 +241,13 @@ export default function SessionDetail() {
             <Stat label="wall clock" value={dur(stats.spanMs)} labelWidth={92} title="first turn to last completion" />
             <Stat label="output rate" value={rate(stats.rate)} tone="good" labelWidth={92} title="median tokens/second across turns" />
             <Stat label="context window" value={tok(stats.windowTokens)} labelWidth={92} />
-            <div className="mt-1">
-              <div className="mb-1 flex items-baseline gap-2">
-                <span className="tape text-ink-soft">peak fill</span>
-                <span className="flex-1" />
-                <span className="tape tabular">{pctInt(stats.peak)}</span>
-              </div>
-              <RateBar rate={stats.peak} width={180} tone="var(--color-flow)" />
+            <div className="mt-1 flex items-center gap-2 py-[2px]">
+              <span className="tape shrink-0 text-ink-soft" style={{ width: 92 }}>
+                peak fill
+              </span>
+              {/* The readout rides at the end of its own bar, like every other rule in the app. */}
+              <RateBar rate={stats.peak} width={140} tone="var(--color-flow)" />
+              <span className="tape tabular shrink-0">{pctInt(stats.peak)}</span>
             </div>
             <SectionHeader title="code written" />
             <Stat label="lines" value={`+${int(stats.additions)} −${int(stats.deletions)}`} labelWidth={92} />
@@ -264,7 +264,7 @@ export default function SessionDetail() {
                     {name}
                   </Link>
                   <RateBar rate={t.calls > 0 ? t.errors / t.calls : 0} width={54} />
-                  <span className="tape tabular shrink-0 text-ink-soft">{int(t.calls)}</span>
+                  <span className="tape tabular w-[20px] shrink-0 text-right text-ink-soft">{int(t.calls)}</span>
                   {t.errors > 0 && <span className="tape shrink-0 text-danger">✗{t.errors}</span>}
                 </div>
               ))

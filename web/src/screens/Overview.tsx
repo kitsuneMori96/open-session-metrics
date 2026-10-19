@@ -220,7 +220,8 @@ export default function Overview() {
                 label: p.project,
                 value: p.tokens,
                 sub: `${p.sessions} sessions · ${int(p.turns)} turns · ${usd(p.cost)}`,
-                right: `${tok(p.tokens)} · ${usd3ceil(p.cost)}`,
+                right: tok(p.tokens),
+                right2: usd3ceil(p.cost),
                 active: facets.project === p.project,
                 color: facets.project === p.project ? "var(--color-flow)" : undefined,
                 onClick: () => setFacet("project", facets.project === p.project ? null : p.project),
@@ -237,7 +238,8 @@ export default function Overview() {
                 key: m.id,
                 label: shortModel(m.id),
                 value: m.tokens,
-                right: `${tok(m.tokens)} · ${usdPerM(m.cost, m.tokens)}`,
+                right: tok(m.tokens),
+                right2: usdPerM(m.cost, m.tokens),
                 sub: `${int(m.calls)} turns · ${m.sessions} sessions · ${usd(m.cost)}`,
                 active: facets.model === m.id,
                 onClick: () => setFacet("model", facets.model === m.id ? null : m.id),
@@ -253,7 +255,8 @@ export default function Overview() {
                 key: t.name,
                 label: t.name,
                 value: t.calls,
-                right: `${int(t.calls)} · ${dur(t.p95Ms)}`,
+                right: int(t.calls),
+                right2: dur(t.p95Ms),
                 sub: `${int(t.calls)} calls · ${t.errors} errors · median ${dur(t.p50Ms)} · p95 ${dur(t.p95Ms)}`,
                 color: t.errors > 0 ? "var(--color-warning)" : undefined,
                 onClick: () => navigate(`/tools/${encodeURIComponent(t.name)}?${params.toString()}`),
@@ -287,7 +290,7 @@ export default function Overview() {
                   <div key={a.agent} className="flex items-baseline gap-2 py-px">
                     <span className="tape w-[64px] shrink-0 truncate">{a.agent}</span>
                     <DeltaBar delta={r} />
-                    <span className="tape tabular shrink-0 text-ink-soft">{pct(r)}</span>
+                    <span className="tape tabular w-[38px] shrink-0 text-right text-ink-soft">{pct(r)}</span>
                     <span className="tape shrink-0 text-ink-faint">
                       {a.errors}/{int(a.tools)}
                     </span>

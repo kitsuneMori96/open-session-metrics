@@ -216,6 +216,7 @@ function ToolMix({ a, b, ta, tb }: { a: SessionRow; b: SessionRow; ta: Turn[]; t
       {names.map((n) => {
         const x = ma.get(n)?.calls ?? 0;
         const y = mb.get(n)?.calls ?? 0;
+        const errs = (ma.get(n)?.errors ?? 0) + (mb.get(n)?.errors ?? 0);
         return (
           <div key={n} className="flex items-center gap-2 py-px">
             <span className="tape w-[110px] shrink-0 truncate">{n}</span>
@@ -225,11 +226,9 @@ function ToolMix({ a, b, ta, tb }: { a: SessionRow; b: SessionRow; ta: Turn[]; t
               <i className="absolute inset-y-0 left-0 opacity-70" style={{ width: `${(y / peak) * 100}%`, background: "var(--chart-5)", mixBlendMode: "multiply" }} />
             </span>
             <span className="tape tabular w-[46px] shrink-0 text-ink-soft">{int(y)}</span>
-            {(ma.get(n)?.errors ?? 0) + (mb.get(n)?.errors ?? 0) > 0 && (
-              <span className="tape shrink-0 text-danger">
-                ✗{(ma.get(n)?.errors ?? 0) + (mb.get(n)?.errors ?? 0)}
-              </span>
-            )}
+            {/* Always rendered: a trailing element that comes and goes would resize the
+                flexible bar and shift the B column on the rows that carry an error. */}
+            <span className="tape w-[30px] shrink-0 text-right text-danger">{errs > 0 ? `✗${errs}` : ""}</span>
           </div>
         );
       })}

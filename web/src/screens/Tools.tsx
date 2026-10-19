@@ -44,7 +44,9 @@ export default function Tools() {
         accessorKey: "name",
         cell: ({ row }) => (
           <span className="flex items-center gap-2">
-            <span className="tape truncate">{row.original.name}</span>
+            {/* A fixed name slot so the ✗ column stays a column: letting it ride on the
+                name's own width left a staircase of marks down the table. */}
+            <span className="tape w-[92px] shrink-0 truncate">{row.original.name}</span>
             {row.original.errors > 0 && <span className="tape shrink-0 text-danger">✗</span>}
           </span>
         ),
@@ -59,7 +61,7 @@ export default function Tools() {
         cell: ({ row }) => (
           <span className="flex items-center justify-end gap-2">
             <RateBar rate={row.original.calls > 0 ? row.original.errors / row.original.calls : 0} width={34} />
-            <span className="tape tabular">{row.original.errors}</span>
+            <span className="tape tabular w-[20px] text-right">{row.original.errors}</span>
           </span>
         ),
       },
@@ -170,7 +172,8 @@ export default function Tools() {
                       key: a.agent,
                       label: a.agent,
                       value: a.calls,
-                      right: `${int(a.calls)}${a.errors > 0 ? ` · ${a.errors}✗` : ""}`,
+                      right: int(a.calls),
+                      right2: a.errors > 0 ? `${a.errors}✗` : undefined,
                       color: a.errors > 0 ? "var(--color-warning)" : undefined,
                     }))}
                     empty="no calls in this slice"
@@ -182,7 +185,8 @@ export default function Tools() {
                       key: p.project,
                       label: p.project,
                       value: p.calls,
-                      right: `${int(p.calls)}${p.errors > 0 ? ` · ${p.errors}✗` : ""}`,
+                      right: int(p.calls),
+                      right2: p.errors > 0 ? `${p.errors}✗` : undefined,
                       color: p.errors > 0 ? "var(--color-warning)" : undefined,
                     }))}
                     empty="no calls in this slice"
