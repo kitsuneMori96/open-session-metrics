@@ -260,16 +260,23 @@ export default function SessionDetail() {
             {toolsByName.length === 0 ? (
               <Empty>no tool calls in this session</Empty>
             ) : (
-              toolsByName.map(([name, t]) => (
-                <div key={name} className="flex items-baseline gap-2 py-px">
-                  <Link to={link(`/tools/${encodeURIComponent(name)}`)} className="tape w-[92px] shrink-0 truncate no-underline hover:underline" title={`open ${name}`}>
-                    {name}
-                  </Link>
-                  <RateBar rate={t.calls > 0 ? t.errors / t.calls : 0} width={54} />
-                  <span className="tape tabular w-[20px] shrink-0 text-right text-ink-soft">{int(t.calls)}</span>
-                  {t.errors > 0 && <span className="tape shrink-0 text-danger">{t.errors}×</span>}
-                </div>
-              ))
+              (() => {
+                // The count column is sized by its widest value: `int()` groups thousands,
+                // so a fixed cell lets `2,558` spill into the error badge next to it.
+                const cols = toolsByName.reduce((w, [, t]) => Math.max(w, int(t.calls).length), 2);
+                return toolsByName.map(([name, t]) => (
+                  <div key={name} className="flex items-baseline gap-2 py-px">
+                    <Link to={link(`/tools/${encodeURIComponent(name)}`)} className="tape w-[92px] shrink-0 truncate no-underline hover:underline" title={`open ${name}`}>
+                      {name}
+                    </Link>
+                    <RateBar rate={t.calls > 0 ? t.errors / t.calls : 0} width={54} />
+                    <span className="tape tabular shrink-0 text-right text-ink-soft" style={{ width: `${cols}ch` }}>
+                      {int(t.calls)}
+                    </span>
+                    {t.errors > 0 && <span className="tape shrink-0 text-danger">{t.errors}×</span>}
+                  </div>
+                ));
+              })()
             )}
           </Panel>
 
