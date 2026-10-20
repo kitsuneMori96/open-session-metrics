@@ -185,16 +185,6 @@ export default function Overview() {
             active={new Set(keys.map((k) => k.key).filter((k) => !muted.has(k)))}
             format={split === "cost" ? (v) => usd(v) : tok}
             onWindow={setWindow}
-            // A click is a one-column zoom: drag is for "somewhere in here", a click is
-            // for "this month, then this day, then this hour". Each step re-picks the
-            // granularity, so the drill-down gets finer by itself.
-            onPointClick={(i) => {
-              const b = series?.buckets[i];
-              if (!b || !series || series.buckets.length < 2) return;
-              const step = series.buckets[1].ts - series.buckets[0].ts;
-              const end = series.buckets[i + 1]?.ts ?? Math.min(b.ts + step, data?.slice.to ?? b.ts + step);
-              setWindow(b.ts, Math.max(b.ts + 1, end));
-            }}
             windowLabel={window.kind === "custom" ? label : undefined}
             onClearWindow={() => setPreset(DEFAULT_PRESET)}
             height={196}
@@ -205,7 +195,7 @@ export default function Overview() {
             ]}
           />
           <div className="micro mt-1">
-            drag across the series to set the window for the whole page · click a column to zoom into it ·{" "}
+            drag across the series to set the window for the whole page ·{" "}
             {series?.buckets.length ?? 0} buckets ·{" "}
             {hasBaseline ? "baseline: previous window" : "baseline: none (all time)"}
           </div>
