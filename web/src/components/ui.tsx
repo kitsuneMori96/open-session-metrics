@@ -121,7 +121,7 @@ export function Tile({
 }: {
   label: string;
   value: string;
-  delta?: number;
+  delta?: number | null;
   prev?: string;
   spark?: ReactNode;
   tone?: Tone;
@@ -130,7 +130,8 @@ export function Tile({
   /** Metrics where growth is the bad news (errors, spend): a fall is what we want. */
   lowerIsBetter?: boolean;
 }) {
-  const flat = delta === undefined || Math.abs(delta) < 0.005;
+  const known = delta !== undefined && delta !== null;
+  const flat = known && Math.abs(delta) < 0.005;
   const good = lowerIsBetter ? (delta ?? 0) < 0 : (delta ?? 0) > 0;
   return (
     <div
@@ -146,10 +147,19 @@ export function Tile({
         <span className="flex-1" />
         {delta !== undefined && (
           <span
-            className={clsx("tape tabular shrink-0", flat ? "text-ink-faint" : good ? "text-good" : "text-danger")}
-            title={`previous window: ${prev ?? "—"}`}
+            className={clsx(
+              "tape tabular shrink-0",
+              !known || flat ? "text-ink-faint" : good ? "text-good" : "text-danger"
+            )}
+            title={
+              known
+                ? `previous window: ${prev ?? "—"}`
+                : prev !== undefined
+                  ? `previous window: ${prev} — nothing to compare against`
+                  : "no earlier window to compare"
+            }
           >
-            {flat ? "±0" : signed(delta)}
+            {!known ? "—" : flat ? "±0" : signed(delta)}
           </span>
         )}
       </div>

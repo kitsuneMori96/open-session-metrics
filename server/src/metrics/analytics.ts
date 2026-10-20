@@ -909,8 +909,11 @@ export function sessionContext(db: DatabaseSync, slice: Slice, id: string): Sess
 export interface Kpi {
   value: number;
   prev: number;
-  /** Relative change against the previous window of equal length; 0 when prev is 0. */
-  delta: number;
+  /**
+   * Relative change against the previous window of equal length; null when there is no
+   * earlier window (all of history) or no baseline to divide by (prev = 0).
+   */
+  delta: number | null;
 }
 
 export interface Dashboard {
@@ -943,10 +946,17 @@ export interface Dashboard {
   sessions: SessionRow[];
 }
 
-const kpi = (value: number, prev: number): Kpi => ({
+/**
+ * A KPI against the previous window of equal length.
+ *
+ * `delta` is null when there is nothing to compare *with* — the whole history is
+ * selected, or the metric was empty last time. Saying "+100 %" because the baseline was
+ * zero is a claim about the past that the data does not support.
+ */
+const kpi = (value: number, prev: number, comparable: boolean): Kpi => ({
   value,
   prev,
-  delta: prev > 0 ? (value - prev) / prev : value > 0 ? 1 : 0,
+  delta: !comparable || prev <= 0 ? (comparable && value === 0 ? 0 : null) : (value - prev) / prev,
 });
 
 export function dashboard(db: DatabaseSync, raw: Slice): Dashboard {
@@ -963,15 +973,15 @@ export function dashboard(db: DatabaseSync, raw: Slice): Dashboard {
     slice: { ...slice, gran, granRequested: raw.gran ?? null, resolvedFrom: slice.from, spanMs: span },
     totals,
     kpis: {
-      tokens: kpi(totals.total, prev.total),
-      cost: kpi(totals.cost, prev.cost),
-      turns: kpi(totals.turns, prev.turns),
-      tools: kpi(totals.tools, prev.tools),
-      errors: kpi(totals.errors, prev.errors),
-      sessions: kpi(totals.sessions, prev.sessions),
-      output: kpi(totals.output, prev.output),
-      additions: kpi(totals.additions, prev.additions),
-      deletions: kpi(totals.deletions, prev.deletions),
+      tokens: kpi(totals.total, prev.total, hasPrev),
+      cost: kpi(totals.cost, prev.cost, hasPrev),
+      turns: kpi(totals.turns, prev.turns, hasPrev),
+      tools: kpi(totals.tools, prev.tools, hasPrev),
+      errors: kpi(totals.errors, prev.errors, hasPrev),
+      sessions: kpi(totals.sessions, prev.sessions, hasPrev),
+      output: kpi(totals.output, prev.output, hasPrev),
+      additions: kpi(totals.additions, prev.additions, hasPrev),
+      deletions: kpi(totals.deletions, prev.deletions, hasPrev),
     },
     efficiency: efficiencyOf(db, slice, totals),
     series: seriesOf(db, slice, gran),

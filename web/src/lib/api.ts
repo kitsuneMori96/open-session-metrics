@@ -118,7 +118,8 @@ export interface Bucket extends Totals {
 export interface Kpi {
   value: number;
   prev: number;
-  delta: number;
+  /** null when there is no earlier window to compare with. */
+  delta: number | null;
 }
 
 export interface Efficiency {
