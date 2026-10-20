@@ -706,6 +706,16 @@ function toSessionRows(rows: Record<string, unknown>[]): SessionRow[] {
  */
 export const SESSION_SAMPLE = 200;
 
+/**
+ * The most roots one page of the session grid may return.
+ *
+ * Different number from `SESSION_SAMPLE`, for a different job: the dashboard sample is a
+ * *drawing* budget (scatter points, the heaviest list) while a page is a *reading* budget.
+ * A page of 500 roots is big enough that an ordinary store arrives in one request and the
+ * grid never shows a paging control at all; a decade store still answers in bounded slices.
+ */
+export const MAX_PAGE_ROOTS = 500;
+
 function sessionsOf(db: DatabaseSync, slice: Slice): SessionRow[] {
   const a = sessionAgg(db, slice);
   const rows = db
@@ -792,7 +802,7 @@ export function sessionsPage(
   const q = (opts.q ?? "").trim();
   const order = SESSION_ORDER_COLUMN[opts.order ?? "updated"] ?? "updated";
   const asc = opts.dir === "asc";
-  const limit = Math.min(SESSION_SAMPLE, Math.max(1, Math.round(opts.limit ?? 100)));
+  const limit = Math.min(MAX_PAGE_ROOTS, Math.max(1, Math.round(opts.limit ?? MAX_PAGE_ROOTS)));
 
   const hit = q
     ? `SELECT * FROM agg WHERE title LIKE ? ESCAPE '\\' OR project LIKE ? ESCAPE '\\'

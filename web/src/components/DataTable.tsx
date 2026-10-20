@@ -1,4 +1,4 @@
-import { useRef, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   getCoreRowModel,
@@ -39,6 +39,8 @@ export interface DataTableProps<T extends RowData> {
   rowHeight?: number;
   empty?: ReactNode;
   className?: string;
+  /** Called when the last rows come into view; the caller decides if there is more. */
+  onEndReached?: () => void;
 }
 
 export function DataTable<T extends RowData>({
@@ -57,6 +59,7 @@ export function DataTable<T extends RowData>({
   rowHeight = 23,
   empty,
   className,
+  onEndReached,
 }: DataTableProps<T>) {
   const table = useLegacyTable<T>({
     data: rows,
@@ -75,6 +78,26 @@ export function DataTable<T extends RowData>({
 
   const model = table.getRowModel().rows;
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // The table is its own scroller, so "near the end" is a property of this element rather
+  // than of the window. Reading the next page slightly early keeps the grid from showing
+  // a hole while the request is in flight.
+  const endRef = useRef(onEndReached);
+  endRef.current = onEndReached;
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const check = () => {
+      if (!endRef.current) return;
+      if (el.scrollHeight - el.scrollTop - el.clientHeight < 600) endRef.current();
+    };
+    el.addEventListener("scroll", check, { passive: true });
+    // A short page does not fill the panel, so there is nothing to scroll: check once the
+    // rows change as well, and the caller's "is a fetch already running" guard stops this
+    // from turning into a loop.
+    check();
+    return () => el.removeEventListener("scroll", check);
+  }, [model.length]);
   const virt = useVirtualizer({
     count: model.length,
     getScrollElement: () => scrollRef.current,

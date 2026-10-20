@@ -9,6 +9,7 @@ import {
   sessionContext,
   sessionsPage,
   toolDetail,
+  MAX_PAGE_ROOTS,
   SESSION_ORDERS,
   type SessionOrder,
   type Slice,
@@ -224,13 +225,13 @@ export function createApp(deps: {
       return res.json({ rows, matching: rows.length, roots: 0, next: null, totals: null });
     }
     const order = str(req, "order");
-    const limit = Number(req.query.limit ?? 100);
+    const limit = Number(req.query.limit ?? MAX_PAGE_ROOTS);
     res.json(
       sessionsPage(deps.db(), slice, {
         q: str(req, "q"),
         order: (SESSION_ORDERS as string[]).includes(order ?? "") ? (order as SessionOrder) : "updated",
         dir: req.query.dir === "asc" ? "asc" : "desc",
-        limit: Number.isFinite(limit) ? limit : 100,
+        limit: Number.isFinite(limit) ? limit : MAX_PAGE_ROOTS,
         cursor: str(req, "cursor"),
       })
     );

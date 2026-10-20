@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { useAnalytics, useSessionPages, type SessionOrder, type SessionRow } from "../lib/api";
 import { useSlice, useSliceHref } from "../lib/slice";
@@ -13,8 +13,14 @@ import type { ExpandedState, SortingState, Updater } from "@tanstack/react-table
 /** A session plus its sub-agent sessions, which is what the grid expands into. */
 type Node = SessionRow & { children: Node[] };
 
-/** Roots per request. Each page also carries the subtrees under those roots. */
-const PAGE = 100;
+/**
+ * Roots per request — the server's `MAX_PAGE_ROOTS`.
+ *
+ * A page is a *reading* budget, not a sample: it is large enough that a normal store
+ * arrives in a single request, so the grid shows no paging at all. Only a decade-scale
+ * store pages, and then the next window is fetched as you reach the end of the table.
+ */
+const PAGE = 500;
 
 /**
  * Screen 2: every session in the slice, as a grid.
@@ -27,7 +33,8 @@ const PAGE = 100;
  * Filtering, sorting and paging happen in SQL. A decade of turns holds thousands of
  * sessions, and shipping them all so the browser could sort them is exactly the thing
  * that made `all` expensive — so the grid asks for a window of roots and appends the
- * next window when you ask for it.
+ * next one when the end of the table comes into view. On a store that fits in one page
+ * (which is most of them) there is no paging control to look at: the rows just end.
  */
 export default function Sessions() {
   const { window, facets, gran, label } = useSlice();
@@ -56,6 +63,11 @@ export default function Sessions() {
   const pages = useSessionPages(window, facets, { q, order, dir, limit: PAGE });
   const head = pages.data?.pages[0];
   const sessions = useMemo(() => pages.data?.pages.flatMap((p) => p.rows) ?? [], [pages.data]);
+
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = pages;
+  const loadMore = useCallback(() => {
+    if (hasNextPage && !isFetchingNextPage) void fetchNextPage();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   const tree = useMemo<Node[]>(() => {
     const byId = new Map<string, Node>();
@@ -258,6 +270,7 @@ export default function Sessions() {
           onExpandedChange={(u: Updater<ExpandedState>) => setExpanded((prev) => (typeof u === "function" ? u(prev) : u))}
           onRowClick={(n) => navigate(href(`/sessions/${n.id}`))}
           onRowHover={(n) => setHover(n?.id ?? null)}
+          onEndReached={loadMore}
           activeId={hover}
           empty={q ? "no session in this slice matches that filter" : "no session in this slice"}
         />
@@ -265,17 +278,17 @@ export default function Sessions() {
 
       <div className="hairline-t flex shrink-0 items-center gap-2 px-2 py-1">
         <span className="tape shrink-0 text-ink-faint">
-          showing {int(sessions.length)} of {int(head.matching)} · {PAGE} roots per page
+          {hasNextPage
+            ? `showing ${int(sessions.length)} of ${int(head.matching)} · the rest arrive as you reach the end`
+            : `${int(sessions.length)} sessions`}
         </span>
-        {pages.hasNextPage && (
-          <Chip onClick={() => void pages.fetchNextPage()} title="the next window of roots, from the server">
-            {pages.isFetchingNextPage ? "loading…" : `load ${PAGE} more`}
+        {pages.isFetchNextPageError && (
+          <Chip onClick={loadMore} title="the last request failed">
+            retry
           </Chip>
         )}
         <span className="flex-1" />
-        <span className="tape shrink-0 text-ink-faint">
-          {order} {dir === "desc" ? "↓" : "↑"}
-        </span>
+        <span className="tape shrink-0 text-ink-faint">{q ? "filtered · " : ""}{order} {dir === "desc" ? "↓" : "↑"}</span>
       </div>
 
       <StatusBar
