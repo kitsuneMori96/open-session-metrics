@@ -3,7 +3,16 @@ import cors from "cors";
 import type { DatabaseSync } from "node:sqlite";
 import { BUCKET_MS } from "./config";
 import { getMeta, getMetaNumber } from "./metrics/schema";
-import { dashboard, facets, toolDetail, type Slice } from "./metrics/analytics";
+import {
+  dashboard,
+  facets,
+  sessionContext,
+  sessionsPage,
+  toolDetail,
+  SESSION_ORDERS,
+  type SessionOrder,
+  type Slice,
+} from "./metrics/analytics";
 import { isGranularity } from "./metrics/buckets";
 import type { BuildReport } from "./metrics/build";
 
@@ -198,6 +207,33 @@ export function createApp(deps: {
    */
   app.get("/api/top/analytics", (req, res) => {
     res.json(dashboard(deps.db(), sliceOf(req)));
+  });
+
+  /**
+   * One page of the session grid, filtered and sorted in SQL.
+   *
+   * The dashboard carries only a bounded sample of sessions; this is where the rest are,
+   * `limit` roots at a time, with `cursor` resuming exactly where the last page stopped.
+   */
+  app.get("/api/top/sessions", (req, res) => {
+    const focus = str(req, "focus");
+    const slice = sliceOf(req);
+    if (focus) {
+      const rows = sessionContext(deps.db(), slice, focus);
+      if (!rows.length) return res.status(404).json({ error: "session not in this window" });
+      return res.json({ rows, matching: rows.length, roots: 0, next: null, totals: null });
+    }
+    const order = str(req, "order");
+    const limit = Number(req.query.limit ?? 100);
+    res.json(
+      sessionsPage(deps.db(), slice, {
+        q: str(req, "q"),
+        order: (SESSION_ORDERS as string[]).includes(order ?? "") ? (order as SessionOrder) : "updated",
+        dir: req.query.dir === "asc" ? "asc" : "desc",
+        limit: Number.isFinite(limit) ? limit : 100,
+        cursor: str(req, "cursor"),
+      })
+    );
   });
 
   /** Per-tool forensics: volume, latency distribution, error signatures, call sites. */

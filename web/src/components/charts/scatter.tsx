@@ -47,8 +47,11 @@ export function SessionScatter({
   onPick,
   highlightId,
   onHighlight,
+  total,
 }: {
   sessions: SessionRow[];
+  /** Sessions in the slice, when `sessions` is a bounded sample of them. */
+  total?: number;
   /** Carries the current axis choice so it survives a reload, like the slice does. */
   url: URLSearchParams;
   xKey: string;
@@ -124,7 +127,10 @@ export function SessionScatter({
       }
       note={
         <>
-          {sessions.length} sessions active in the window ·{" "}
+          {total != null && total > sessions.length
+            ? `the ${sessions.length} heaviest of ${int(total)} sessions in the window`
+            : `${sessions.length} sessions active in the window`}{" "}
+          ·{" "}
           <span style={{ color: FAINT }}>{hover ? "" : "hover a point to read it, click to open"}</span>
         </>
       }

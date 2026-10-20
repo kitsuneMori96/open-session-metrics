@@ -1,17 +1,20 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import { useAnalytics, type SessionRow } from "../lib/api";
+import { useAnalytics, useSessionPages, type SessionOrder, type SessionRow } from "../lib/api";
 import { useSlice, useSliceHref } from "../lib/slice";
 import { dur, int, pct, shortModel, stamp, tok, usd } from "../lib/format";
 import { modelColor } from "../lib/format";
 import { Caret, DataTable, type Column } from "../components/DataTable";
-import { Chip, Num, Panel, RateBar, Spinner } from "../components/ui";
+import { Chip, Panel, RateBar, Spinner } from "../components/ui";
 import { BaseHints, StatusBar } from "../components/Chrome";
 import { StackRule } from "../components/charts/series";
 import type { ExpandedState, SortingState, Updater } from "@tanstack/react-table";
 
 /** A session plus its sub-agent sessions, which is what the grid expands into. */
 type Node = SessionRow & { children: Node[] };
+
+/** Roots per request. Each page also carries the subtrees under those roots. */
+const PAGE = 100;
 
 /**
  * Screen 2: every session in the slice, as a grid.
@@ -20,19 +23,39 @@ type Node = SessionRow & { children: Node[] };
  * right. Here it is one virtualized grid: columns sort, the tree expands in place, a
  * click opens a deep-linked session page, and the whole thing answers to the same
  * window and cross-filter as the dashboard.
+ *
+ * Filtering, sorting and paging happen in SQL. A decade of turns holds thousands of
+ * sessions, and shipping them all so the browser could sort them is exactly the thing
+ * that made `all` expensive — so the grid asks for a window of roots and appends the
+ * next window when you ask for it.
  */
 export default function Sessions() {
-  const { window, facets, gran, slice, label } = useSlice();
-  const { data, isLoading } = useAnalytics(window, facets, gran);
+  const { window, facets, gran, label } = useSlice();
+  const analytics = useAnalytics(window, facets, gran);
   const navigate = useNavigate();
   const href = useSliceHref();
   const [sorting, setSorting] = useState<SortingState>([{ id: "updated", desc: true }]);
   const [expanded, setExpanded] = useState<ExpandedState>({});
   const [query, setQuery] = useState("");
+  const [q, setQ] = useState("");
   const [hover, setHover] = useState<string | null>(null);
   const filterRef = useRef<HTMLInputElement>(null);
 
-  const sessions = data?.sessions ?? [];
+  // Typing should not fire a query per keystroke; the server does the matching now.
+  useEffect(() => {
+    const timer = setTimeout(() => setQ(query.trim()), 220);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  const [order, dir] = useMemo<[SessionOrder, "asc" | "desc"]>(() => {
+    const first = sorting[0];
+    if (!first) return ["updated", "desc"];
+    return [first.id as SessionOrder, first.desc ? "desc" : "asc"];
+  }, [sorting]);
+
+  const pages = useSessionPages(window, facets, { q, order, dir, limit: PAGE });
+  const head = pages.data?.pages[0];
+  const sessions = useMemo(() => pages.data?.pages.flatMap((p) => p.rows) ?? [], [pages.data]);
 
   const tree = useMemo<Node[]>(() => {
     const byId = new Map<string, Node>();
@@ -45,42 +68,6 @@ export default function Sessions() {
     }
     return roots;
   }, [sessions]);
-
-  const q = query.trim().toLowerCase();
-  const matches = useCallback(
-    (s: SessionRow) =>
-      !q ||
-      (s.title ?? "").toLowerCase().includes(q) ||
-      s.project.toLowerCase().includes(q) ||
-      (s.model ?? "").toLowerCase().includes(q) ||
-      (s.agent ?? "").toLowerCase().includes(q) ||
-      (s.firstPrompt ?? "").toLowerCase().includes(q),
-    [q]
-  );
-
-  /** Filtering a tree has to keep the ancestors of a match, or the row loses its home. */
-  const filtered = useMemo<Node[]>(() => {
-    if (!q) return tree;
-    const keep = (node: Node): Node | null => {
-      const kids = node.children.map(keep).filter((n): n is Node => !!n);
-      if (matches(node) || kids.length) return { ...node, children: kids };
-      return null;
-    };
-    return tree.map(keep).filter((n): n is Node => !!n);
-  }, [tree, q, matches]);
-
-  const hitCount = useMemo(() => {
-    if (!q) return sessions.length;
-    let n = 0;
-    const walk = (nodes: Node[]) => {
-      for (const node of nodes) {
-        if (matches(node)) n++;
-        walk(node.children);
-      }
-    };
-    walk(filtered);
-    return n;
-  }, [filtered, matches, q, sessions.length]);
 
   const columns = useMemo<Column<Node>[]>(() => {
     const tokenSegments = (s: SessionRow) => [
@@ -224,7 +211,10 @@ export default function Sessions() {
     ];
   }, []);
 
-  if (isLoading || !data) return <Spinner label="reading the store" />;
+  if (pages.isLoading || analytics.isLoading) return <Spinner label="reading the store" />;
+  if (!head) return <Spinner label="no sessions in this window" />;
+
+  const sliceSessions = analytics.data?.totals.sessions ?? 0;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -244,10 +234,10 @@ export default function Sessions() {
           </Chip>
         )}
         <span className="tape shrink-0 text-ink-faint">
-          {int(hitCount)} matching of {int(sessions.length)} in slice
+          {int(head.matching)} matching of {int(sliceSessions)} in slice
         </span>
         <span className="shrink-0 text-rule-strong">│</span>
-        <Chip onClick={() => setExpanded(allExpanded(filtered))}>expand all</Chip>
+        <Chip onClick={() => setExpanded(allExpanded(tree))}>expand all</Chip>
         <Chip onClick={() => setExpanded({})}>collapse</Chip>
         <span className="flex-1" />
         <span className="tape shrink-0 text-ink-faint">window {label}</span>
@@ -255,20 +245,36 @@ export default function Sessions() {
 
       <Panel title={undefined} bodyClass="flex min-h-0 flex-1 flex-col p-0" className="min-h-0 flex-1 border-0">
         <DataTable<Node>
-          rows={filtered}
+          rows={tree}
           columns={columns}
           getRowId={(n) => n.id}
           getSubRows={(n) => n.children}
           sorting={sorting}
+          manualSorting
           onSortingChange={(u: Updater<SortingState>) => setSorting((prev) => (typeof u === "function" ? u(prev) : u))}
           expanded={expanded}
           onExpandedChange={(u: Updater<ExpandedState>) => setExpanded((prev) => (typeof u === "function" ? u(prev) : u))}
           onRowClick={(n) => navigate(href(`/sessions/${n.id}`))}
           onRowHover={(n) => setHover(n?.id ?? null)}
           activeId={hover}
-          empty="no session in this slice matches"
+          empty={q ? "no session in this slice matches that filter" : "no session in this slice"}
         />
       </Panel>
+
+      <div className="hairline-t flex shrink-0 items-center gap-2 px-2 py-1">
+        <span className="tape shrink-0 text-ink-faint">
+          showing {int(sessions.length)} of {int(head.matching)} · {PAGE} roots per page
+        </span>
+        {pages.hasNextPage && (
+          <Chip onClick={() => void pages.fetchNextPage()} title="the next window of roots, from the server">
+            {pages.isFetchingNextPage ? "loading…" : `load ${PAGE} more`}
+          </Chip>
+        )}
+        <span className="flex-1" />
+        <span className="tape shrink-0 text-ink-faint">
+          {order} {dir === "desc" ? "↓" : "↑"}
+        </span>
+      </div>
 
       <StatusBar
         hints={
@@ -278,8 +284,8 @@ export default function Sessions() {
         }
         info={
           <>
-            {int(sessions.length)} sessions · {tok(sessions.reduce((a, s) => a + s.tokens, 0))} tokens ·{" "}
-            {usd(sessions.reduce((a, s) => a + s.cost, 0))}
+            {int(head.totals.sessions)} sessions · {tok(head.totals.tokens)} tokens · {usd(head.totals.cost)}
+            {q ? " · matching the filter" : ""}
           </>
         }
       />
@@ -300,4 +306,3 @@ const allExpanded = (nodes: Node[]): ExpandedState => {
   walk(nodes);
   return out;
 };
-

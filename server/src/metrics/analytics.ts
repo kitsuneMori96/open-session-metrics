@@ -572,55 +572,47 @@ export interface SessionRow {
   contextPct: number;
   peakFill: number;
   firstPrompt: string | null;
-  /** Root session this one hangs off, restricted to rows inside the slice. */
-  workflow: string;
-  /** Distance from that root, so the list can indent a sub-agent. */
-  depth: number;
+  /** Sub-agent sessions hanging off this one, among the rows returned. */
   childCount: number;
 }
 
-function sessionsOf(db: DatabaseSync, slice: Slice): SessionRow[] {
+/**
+ * Per-session aggregates over a slice, in one grouped scan.
+ *
+ * Shared by the dashboard sample, the paged grid and the detail page's family lookup, so
+ * all three count turns the same way. `ctx` is computed here rather than in JS because it
+ * is also a sort key, and sorting a page after fetching it would page the wrong rows.
+ */
+function sessionAgg(slice: Slice): { sql: string; args: unknown[] } {
   const w = turnWhere(slice);
-  const rows = db
-    .prepare(
-      `SELECT s.id id, s.parent_id parent, COALESCE(s.title,'') title, COALESCE(s.project,'—') project,
-              s.agent agent, s.model model, COALESCE(s.created,0) created, COALESCE(s.updated,0) updated,
-              COALESCE(s.first_prompt,'') prompt, COALESCE(s.peak_fill,0) peak,
-              SUM(t.input) i, SUM(t.output) o,
-              SUM(t.cache_read) cr, SUM(t.cache_write) cw,
-              SUM(t.input+t.output+t.cache_read+t.cache_write) tokens,
-              SUM(t.cost) cost, COUNT(*) turns,
-              SUM(COALESCE(t.tool_calls,0)) tools, SUM(COALESCE(t.tool_errors,0)) errors,
-              MAX(COALESCE(t.completed,t.created)) - MIN(t.created) span,
-              MAX(COALESCE(t.context_window,0)) window
-       FROM turns t JOIN sessions s ON s.id = t.session_id
-       WHERE ${w.sql} GROUP BY s.id ORDER BY updated DESC`
-    )
-    .all(...w.args) as Record<string, unknown>[];
-
-  const byId = new Map(rows.map((r) => [String(r.id), r]));
-  const parentOf = (id: string): string => {
-    const p = byId.get(id)?.parent;
-    const s = p == null ? "" : String(p);
-    return s && byId.has(s) ? s : "";
+  return {
+    args: w.args,
+    sql: `SELECT s.id id, s.parent_id parent, COALESCE(s.title,'') title, COALESCE(s.project,'—') project,
+                 COALESCE(s.agent,'main') agent, COALESCE(s.model,'') model,
+                 COALESCE(s.created,0) created, COALESCE(s.updated,0) updated,
+                 COALESCE(s.first_prompt,'') prompt, COALESCE(s.peak_fill,0) peak,
+                 SUM(t.input) i, SUM(t.output) o,
+                 SUM(t.cache_read) cr, SUM(t.cache_write) cw,
+                 SUM(t.input+t.output+t.cache_read+t.cache_write) tokens,
+                 SUM(t.cost) cost, COUNT(*) turns,
+                 SUM(COALESCE(t.tool_calls,0)) tools, SUM(COALESCE(t.tool_errors,0)) errors,
+                 MAX(COALESCE(t.completed,t.created)) - MIN(t.created) span,
+                 MAX(COALESCE(t.context_window,0)) win,
+                 SUM(t.input+t.cache_read+t.cache_write) * 1.0 /
+                   MAX(CASE WHEN COALESCE(t.context_window,0) > 0 THEN t.context_window ELSE 128000 END) ctx
+          FROM turns t JOIN sessions s ON s.id = t.session_id
+          WHERE ${w.sql}
+          GROUP BY s.id`,
   };
+}
+
+function toSessionRows(rows: Record<string, unknown>[]): SessionRow[] {
+  const ids = new Set(rows.map((r) => String(r.id)));
   const childCount = new Map<string, number>();
   for (const r of rows) {
-    const p = parentOf(String(r.id));
-    if (p) childCount.set(p, (childCount.get(p) ?? 0) + 1);
+    const p = r.parent == null ? "" : String(r.parent);
+    if (p && ids.has(p)) childCount.set(p, (childCount.get(p) ?? 0) + 1);
   }
-  /** The ancestor inside the slice, plus how deep below it this row sits. */
-  const lineage = (id: string): { workflow: string; depth: number } => {
-    let cur = id;
-    let depth = 0;
-    for (let i = 0; i < 32; i++) {
-      const p = parentOf(cur);
-      if (!p) break;
-      cur = p;
-      depth++;
-    }
-    return { workflow: cur, depth };
-  };
 
   return rows.map((r) => {
     const id = String(r.id);
@@ -629,14 +621,14 @@ function sessionsOf(db: DatabaseSync, slice: Slice): SessionRow[] {
     const input = num(r.i);
     const cacheRead = num(r.cr);
     const cacheWrite = num(r.cw);
-    const window = num(r.window) || 128000;
-    const { workflow, depth } = lineage(id);
+    const window = num(r.win) || 128000;
+    const model = r.model == null || String(r.model) === "" ? null : String(r.model);
     return {
       id,
       title: String(r.title) || null,
       project: String(r.project),
       agent: r.agent == null ? null : String(r.agent),
-      model: r.model == null ? null : String(r.model),
+      model,
       parentId: r.parent == null ? null : String(r.parent),
       created: num(r.created),
       updated: num(r.updated),
@@ -656,12 +648,216 @@ function sessionsOf(db: DatabaseSync, slice: Slice): SessionRow[] {
       contextPct: (input + cacheRead + cacheWrite) / window,
       peakFill: num(r.peak),
       firstPrompt: String(r.prompt) || null,
-      workflow,
-      depth,
       childCount: childCount.get(id) ?? 0,
     };
   });
 }
+
+/**
+ * How many sessions the dashboard carries.
+ *
+ * The list used to be every session in the slice, which is the one array that grows with
+ * history — 4,662 rows and 3.7 MB on a decade of turns, for a chart that cannot draw them
+ * all. 200 heaviest is a bounded sample of the same shape; the Sessions screen pages
+ * through the rest server-side.
+ */
+export const SESSION_SAMPLE = 200;
+
+function sessionsOf(db: DatabaseSync, slice: Slice): SessionRow[] {
+  const a = sessionAgg(slice);
+  const rows = db
+    .prepare(`${a.sql} ORDER BY tokens DESC, id DESC LIMIT ${SESSION_SAMPLE}`)
+    .all(...(a.args as never[])) as Record<string, unknown>[];
+  return toSessionRows(rows);
+}
+
+export type SessionOrder =
+  | "updated" | "created" | "tokens" | "cost" | "turns"
+  | "tools" | "errors" | "span" | "ctx" | "title" | "project" | "model" | "agent";
+
+const SESSION_ORDER_COLUMN: Record<SessionOrder, string> = {
+  updated: "updated", created: "created", tokens: "tokens", cost: "cost",
+  turns: "turns", tools: "tools", errors: "errors", span: "span", ctx: "ctx",
+  title: "title", project: "project", model: "model", agent: "agent",
+};
+
+export const SESSION_ORDERS = Object.keys(SESSION_ORDER_COLUMN) as SessionOrder[];
+
+export interface SessionTotals {
+  sessions: number;
+  tokens: number;
+  cost: number;
+  turns: number;
+  tools: number;
+  errors: number;
+}
+
+export interface SessionPage {
+  rows: SessionRow[];
+  /** Sessions matching the filter, including the ancestors kept for context. */
+  matching: number;
+  /** Root sessions in the filtered forest — what paging walks. */
+  roots: number;
+  /** Cursor for the next page, or null on the last one. */
+  next: string | null;
+  /** Aggregates over every matching session, not just this page. */
+  totals: SessionTotals;
+}
+
+const likePattern = (q: string): string => `%${q.replace(/[\%_]/g, (c) => `\${c}`)}%`;
+
+/** Keyset cursor as an opaque token; the value keeps its type so tuple comparison works. */
+export const encodeCursor = (value: { v: unknown; id: string }): string =>
+  Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
+
+const decodeCursor = (raw: string | null | undefined): { v: unknown; id: string } | null => {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as { v?: unknown; id?: unknown };
+    if (parsed.id == null) return null;
+    return { v: parsed.v ?? 0, id: String(parsed.id) };
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * One page of the session grid, filtered and sorted in SQL.
+ *
+ * Two things make this more than a `LIMIT`:
+ *
+ * - paging walks **roots**, and every page carries the whole subtree under each of them,
+ *   so a sub-agent is never orphaned into a page its parent is not on;
+ * - a text filter keeps the **ancestors** of every match (a recursive walk up, then back
+ *   down), which is what the screen always meant by "matching a tree".
+ *
+ * `matching` counts the kept rows, `roots` counts the page units, and `totals` aggregates
+ * the whole filtered set — the status bar must not describe only the visible page.
+ */
+export function sessionsPage(
+  db: DatabaseSync,
+  slice: Slice,
+  opts: {
+    q?: string | null;
+    order?: SessionOrder;
+    dir?: "asc" | "desc";
+    limit?: number;
+    cursor?: string | null;
+  } = {}
+): SessionPage {
+  const agg = sessionAgg(slice);
+  const q = (opts.q ?? "").trim();
+  const order = SESSION_ORDER_COLUMN[opts.order ?? "updated"] ?? "updated";
+  const asc = opts.dir === "asc";
+  const limit = Math.min(SESSION_SAMPLE, Math.max(1, Math.round(opts.limit ?? 100)));
+
+  const hit = q
+    ? `SELECT * FROM agg WHERE title LIKE ? ESCAPE '\\' OR project LIKE ? ESCAPE '\\'
+              OR model LIKE ? ESCAPE '\\' OR agent LIKE ? ESCAPE '\\' OR prompt LIKE ? ESCAPE '\\'`
+    : "SELECT * FROM agg";
+  const hitArgs = q ? Array(5).fill(likePattern(q)) : [];
+  const args = [...(agg.args as never[]), ...(hitArgs as never[])];
+
+  const cursor = decodeCursor(opts.cursor);
+  const cursorSql = cursor ? `WHERE (${order}, id) ${asc ? ">" : "<"} (?, ?)` : "";
+  const cursorArgs: (string | number)[] = cursor ? [cursor.v as string | number, cursor.id] : [];
+  const direction = asc ? "ASC" : "DESC";
+
+  const prefix = `WITH RECURSIVE
+      agg AS MATERIALIZED (${agg.sql}),
+      hit AS (${hit}),
+      keep(id) AS (
+        SELECT id FROM hit
+        UNION
+        SELECT a.parent FROM agg a JOIN keep k ON a.id = k.id
+         WHERE a.parent IS NOT NULL AND a.parent IN (SELECT id FROM agg)
+      ),
+      roots AS (
+        SELECT * FROM agg WHERE id IN (SELECT id FROM keep)
+          AND (parent IS NULL OR parent NOT IN (SELECT id FROM keep))
+      ),
+      page AS (
+        SELECT * FROM roots ${cursorSql} ORDER BY ${order} ${direction}, id ${direction} LIMIT ?
+      ),
+      down(id) AS (
+        SELECT id FROM page
+        UNION
+        SELECT a.id FROM agg a JOIN down d ON a.parent = d.id WHERE a.id IN (SELECT id FROM keep)
+      ),
+      matched AS (SELECT * FROM agg WHERE id IN (SELECT id FROM keep))`;
+
+  /**
+   * One statement, not four.
+   *
+   * The per-session aggregate is the expensive half (a decade of turns is half a million
+   * rows joined and grouped), and every extra statement used to pay for it again. The
+   * counts and sums ride along as uncorrelated subqueries — SQLite evaluates those once —
+   * so a page costs one aggregate pass instead of four.
+   */
+  const rows = db
+    .prepare(
+      `${prefix}
+       SELECT a.*, (a.id IN (SELECT id FROM page)) inpage,
+              (SELECT COUNT(*) FROM matched) matching,
+              (SELECT COUNT(*) FROM roots) roots,
+              (SELECT SUM(tokens) FROM matched) m_tokens,
+              (SELECT SUM(cost) FROM matched) m_cost,
+              (SELECT SUM(turns) FROM matched) m_turns,
+              (SELECT SUM(tools) FROM matched) m_tools,
+              (SELECT SUM(errors) FROM matched) m_errors,
+              (SELECT COUNT(*) FROM matched) m_sessions
+         FROM agg a JOIN down d ON d.id = a.id
+         ORDER BY ${order} ${direction}, a.id ${direction}`
+    )
+    .all(...args, ...cursorArgs, limit) as Record<string, unknown>[];
+
+  const meta = rows[0];
+  const pageRoots = rows.filter((r) => num(r.inpage) === 1);
+  const last = pageRoots[pageRoots.length - 1];
+  const next = pageRoots.length >= limit && last ? encodeCursor({ v: last[order] ?? 0, id: String(last.id) }) : null;
+
+  return {
+    rows: toSessionRows(rows),
+    matching: num(meta?.matching),
+    roots: num(meta?.roots),
+    next,
+    totals: {
+      sessions: num(meta?.m_sessions),
+      tokens: num(meta?.m_tokens),
+      cost: num(meta?.m_cost),
+      turns: num(meta?.m_turns),
+      tools: num(meta?.m_tools),
+      errors: num(meta?.m_errors),
+    },
+  };
+}
+
+/**
+ * The family of one session inside the slice: itself, its ancestors, its siblings and its
+ * children. The detail page asks for this instead of scanning the whole session list,
+ * which it cannot afford to receive once history is long.
+ */
+export function sessionContext(db: DatabaseSync, slice: Slice, id: string): SessionRow[] {
+  const agg = sessionAgg(slice);
+  const rows = db
+    .prepare(
+      `WITH RECURSIVE
+       agg AS (${agg.sql}),
+       focus AS (SELECT parent FROM agg WHERE id = ?),
+       up(id) AS (
+         SELECT parent FROM focus WHERE parent IS NOT NULL
+         UNION
+         SELECT a.parent FROM agg a JOIN up ON a.id = up.id WHERE a.parent IS NOT NULL
+       )
+       SELECT a.* FROM agg a
+        WHERE a.id = ? OR a.id IN (SELECT id FROM up)
+           OR a.parent = ? OR a.parent = (SELECT parent FROM focus)
+        ORDER BY updated DESC`
+    )
+    .all(...(agg.args as never[]), id, id, id) as Record<string, unknown>[];
+  return toSessionRows(rows);
+}
+
 
 /* ------------------------------------------------------------------ *
  * Public payloads

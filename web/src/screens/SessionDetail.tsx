@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import { useAnalytics, useTranscript, type Bucket, type SessionRow, type Turn } from "../lib/api";
+import { useAnalytics, useSessionContext, useTranscript, type Bucket, type SessionRow, type Turn } from "../lib/api";
 import { TOKEN_CLASSES } from "../lib/chart";
 import {
   ago,
@@ -39,6 +39,8 @@ export default function SessionDetail() {
   const { window, facets, gran, label } = useSlice();
   const { data, isLoading } = useTranscript(id);
   const list = useAnalytics(window, facets, gran);
+  // The dashboard only carries a sample of sessions; ask for this one's family directly.
+  const context = useSessionContext(window, facets, id ?? null);
   const navigate = useNavigate();
   const link = useSliceHref();
 
@@ -138,7 +140,7 @@ export default function SessionDetail() {
   );
 
   const related = useMemo(() => {
-    const all = list.data?.sessions ?? [];
+    const all = context.data?.rows ?? [];
     const byId = new Map(all.map((s) => [s.id, s]));
     const ancestors: SessionRow[] = [];
     let cursor = byId.get(id)?.parentId ?? null;
@@ -151,8 +153,8 @@ export default function SessionDetail() {
     const children = all.filter((s) => s.parentId === id);
     const siblings = (byId.get(id)?.parentId ? all.filter((s) => s.parentId === byId.get(id)!.parentId) : [])
       .filter((s) => s.id !== id);
-    return { ancestors, children, siblings, all };
-  }, [list.data, id]);
+    return { ancestors, children, siblings };
+  }, [context.data, id]);
 
   const turnCount = turns.length;
   const shown: [number, number] = range ?? [0, Math.max(0, turnCount - 1)];
@@ -291,7 +293,7 @@ export default function SessionDetail() {
             )}
             <div className="micro mt-1">
               {related.children.length} sub-agent{related.children.length === 1 ? "" : "s"} ·{" "}
-              {list.data?.sessions.length ?? 0} sessions in the current window
+              {list.data?.totals.sessions ?? 0} sessions in the current window
             </div>
           </Panel>
         </div>

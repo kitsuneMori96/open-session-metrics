@@ -218,6 +218,7 @@ export default function Overview() {
             onPick={openSession}
             highlightId={hoverSession}
             onHighlight={setHoverSession}
+            total={totals.sessions}
           />
           <div className="flex flex-col gap-4">
             <ActivityHeatmap heat={series?.heat ?? emptyHeat()} />
@@ -374,7 +375,11 @@ export default function Overview() {
         <Panel
           title="heaviest sessions"
           className="mt-4"
-          right={<span className="tape text-ink-faint">by tokens · hover to locate in the plot</span>}
+          right={
+            <span className="tape text-ink-faint">
+              top {Math.min(12, sessions.length)} of {int(totals.sessions)} · hover to locate in the plot
+            </span>
+          }
         >
           <div className="grid grid-cols-1 gap-x-6 lg:grid-cols-2">
             {[...sessions]

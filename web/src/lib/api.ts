@@ -1,4 +1,4 @@
-import { keepPreviousData, useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, useQuery, type UseQueryResult } from "@tanstack/react-query";
 
 const BASE = (import.meta.env.VITE_OSM_API as string | undefined) ?? "http://127.0.0.1:8787";
 
@@ -204,9 +204,32 @@ export interface SessionRow {
   contextPct: number;
   peakFill: number;
   firstPrompt: string | null;
-  workflow: string;
-  depth: number;
+  /** Sub-agent sessions hanging off this one, among the rows returned. */
   childCount: number;
+}
+
+/** Columns the session grid can be sorted by, server-side. */
+export type SessionOrder =
+  | "updated" | "created" | "tokens" | "cost" | "turns"
+  | "tools" | "errors" | "span" | "ctx" | "title" | "project" | "model" | "agent";
+
+export interface SessionTotals {
+  sessions: number;
+  tokens: number;
+  cost: number;
+  turns: number;
+  tools: number;
+  errors: number;
+}
+
+export interface SessionPage {
+  rows: SessionRow[];
+  /** Sessions matching the filter, including the ancestors kept for context. */
+  matching: number;
+  /** Root sessions in the filtered forest — what paging walks. */
+  roots: number;
+  next: string | null;
+  totals: SessionTotals;
 }
 
 export interface Dashboard {
@@ -415,6 +438,42 @@ export const useToolDetail = (
     enabled: !!name,
     placeholderData: keepPreviousData,
     staleTime: 20_000,
+  });
+
+/**
+ * The session grid, a page at a time.
+ *
+ * The dashboard carries a bounded sample of sessions; this endpoint is where the rest
+ * live. `cursor` comes from the previous page, so appending is exact: the server sorts,
+ * filters and slices, and the browser never holds the whole table.
+ */
+export const useSessionPages = (
+  win: WindowSpec,
+  f: Facets0,
+  opts: { q: string; order: SessionOrder; dir: "asc" | "desc"; limit: number }
+) =>
+  useInfiniteQuery({
+    queryKey: ["sessions", windowKey(win), facetKey(f), opts.q, opts.order, opts.dir, opts.limit],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam, signal }) => {
+      const params = new URLSearchParams({ limit: String(opts.limit), order: opts.order, dir: opts.dir });
+      if (opts.q) params.set("q", opts.q);
+      if (pageParam) params.set("cursor", pageParam);
+      return get<SessionPage>(`/api/top/sessions?${sliceQuery(sliceOf(win, f))}&${params}`, signal);
+    },
+    getNextPageParam: (last) => last.next,
+  });
+
+/** One session plus its ancestors, siblings and children inside the window. */
+export const useSessionContext = (win: WindowSpec, f: Facets0, id: string | null) =>
+  useQuery({
+    queryKey: ["session-context", id, windowKey(win), facetKey(f)],
+    enabled: !!id,
+    queryFn: ({ signal }) =>
+      get<{ rows: SessionRow[] }>(
+        `/api/top/sessions?focus=${encodeURIComponent(id!)}&${sliceQuery(sliceOf(win, f))}`,
+        signal
+      ),
   });
 
 export const useTranscript = (id: string | null) =>

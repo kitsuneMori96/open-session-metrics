@@ -90,7 +90,10 @@ export default function Compare() {
         )}
       </div>
 
-      <StatusBar hints="1–4 go · / search · pick A and B above" info={`${sessions.length} sessions in slice`} />
+      <StatusBar
+        hints="1–4 go · / search · pick A and B above"
+        info={`${int(data?.totals.sessions ?? 0)} sessions in slice · picking from the ${sessions.length} heaviest`}
+      />
     </div>
   );
 }

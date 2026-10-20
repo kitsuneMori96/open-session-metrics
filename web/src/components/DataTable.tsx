@@ -29,6 +29,8 @@ export interface DataTableProps<T extends RowData> {
   getSubRows?: (row: T) => T[] | undefined;
   sorting?: SortingState;
   onSortingChange?: (updater: Updater<SortingState>) => void;
+  /** The rows arrive already sorted — clicking a header only asks the server again. */
+  manualSorting?: boolean;
   expanded?: ExpandedState;
   onExpandedChange?: (updater: Updater<ExpandedState>) => void;
   onRowClick?: (row: T) => void;
@@ -46,6 +48,7 @@ export function DataTable<T extends RowData>({
   getSubRows,
   sorting,
   onSortingChange,
+  manualSorting,
   expanded,
   onExpandedChange,
   onRowClick,
@@ -59,6 +62,7 @@ export function DataTable<T extends RowData>({
     data: rows,
     columns,
     state: { sorting, expanded },
+    manualSorting,
     onSortingChange,
     onExpandedChange,
     getRowId,

@@ -375,6 +375,84 @@ async function main() {
     ok(`${g}: the SQL bucket key agrees with the axis`, same, JSON.stringify(keys));
   }
 
+  // ---- session paging (S2): the grid's page must be a forest, exact and cheap ----
+  //
+  // sessions() carries a bounded sample to the dashboard; the Sessions screen walks the
+  // rest here. What makes that honest is that a page is never a flat slice of rows: it
+  // carries whole subtrees, and a text filter keeps the ancestors of a match.
+  const { sessionsPage, sessionContext } = await import("../metrics/analytics");
+  const pg = new DatabaseSync(":memory:");
+  pg.exec(`
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY, parent_id TEXT, title TEXT, project TEXT, agent TEXT, model TEXT,
+      created INTEGER, updated INTEGER, first_prompt TEXT, peak_fill REAL
+    );
+    CREATE TABLE turns (
+      id TEXT PRIMARY KEY, session_id TEXT, role TEXT, created INTEGER, completed INTEGER,
+      input INTEGER, output INTEGER, cache_read INTEGER, cache_write INTEGER, cost REAL,
+      tool_calls INTEGER, tool_errors INTEGER, context_window INTEGER
+    );
+  `);
+  const put = (id: string, parent: string | null, title: string, tokens: number, turns = 1) => {
+    pg.prepare("INSERT INTO sessions VALUES (?,?,?,?,?,?,?,?,?,?)").run(
+      id, parent, title, "demo", "main", "model-a", T0, T0 + tokens, title, 0
+    );
+    for (let i = 0; i < turns; i++) {
+      pg.prepare("INSERT INTO turns VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)").run(
+        `${id}_t${i}`, id, "assistant", T0 + i, T0 + i + 500, tokens, 0, 0, 0, 0, 1, 0, 128000
+      );
+    }
+  };
+  put("A", null, "root alpha", 100, 3);   // 3 turns, 300 tokens
+  put("A1", "A", "child of alpha", 900);
+  put("A1g", "A1", "grandchild", 50);
+  put("B", null, "root beta", 500);
+  put("C", "ghost", "parent outside the slice", 10);
+  put("D", null, "root delta", 20);
+
+  const all = { from: T0 - 1, to: T0 + 10000, project: null, model: null, agent: null };
+  const p1 = sessionsPage(pg, all, { limit: 2 });
+  const seen = new Set(p1.rows.map((r) => r.id));
+  const rootOrder = () => {
+    const ids = new Set(p1.rows.map((r) => r.id));
+    return p1.rows.filter((r) => !r.parentId || !ids.has(r.parentId)).map((r) => r.id);
+  };
+  ok("a page carries the subtree under each of its roots", seen.has("A") && seen.has("A1") && seen.has("A1g"),
+    [...seen].join(","));
+  ok("paging walks roots, not rows", p1.roots === 4 && p1.rows.length === 4, `roots=${p1.roots} rows=${p1.rows.length}`);
+
+  const p2 = sessionsPage(pg, all, { limit: 2, cursor: p1.next });
+  const two = [...p1.rows, ...p2.rows];
+  const twoIds = new Set(two.map((r) => r.id));
+  const twoRoots = two.filter((r) => !r.parentId || !twoIds.has(r.parentId)).map((r) => r.id);
+  ok("a session whose parent is outside the slice is a root", twoRoots.includes("C"), twoRoots.join(","));
+  const overlap = p2.rows.filter((r) => seen.has(r.id));
+  ok("the cursor resumes where the page stopped", overlap.length === 0, `overlap=${overlap.length}`);
+  const every = new Set(two.map((r) => r.id));
+  ok("two pages cover every session exactly once", every.size === 6, [...every].join(","));
+  const p3 = sessionsPage(pg, all, { limit: 2, cursor: p2.next });
+  ok("a page past the end is empty and ends the walk", p3.rows.length === 0 && p3.next === null,
+    `rows=${p3.rows.length} next=${p3.next}`);
+
+  const heavy = sessionsPage(pg, all, { limit: 4 });
+  ok("a page can be sorted by an aggregate", heavy.rows[0].id === "A1", heavy.rows[0].id);
+
+  const hit = sessionsPage(pg, all, { limit: 10, q: "grandchild" });
+  ok("a text filter keeps the ancestors of a match",
+    hit.rows.map((r) => r.id).sort().join(",") === "A,A1,A1g", hit.rows.map((r) => r.id).join(","));
+  ok("the filter reports what it matched, ancestors included", hit.matching === 3 && hit.roots === 1,
+    `matching=${hit.matching} roots=${hit.roots}`);
+  ok("totals describe the filtered set, not the visible page",
+    hit.totals.sessions === 3 && hit.totals.tokens === 1250, JSON.stringify(hit.totals));
+
+  const tiny = sessionsPage(pg, all, { limit: 0 });
+  ok("a page is never empty by request", tiny.rows.length >= 1 && tiny.rows.length <= 2, String(tiny.rows.length));
+
+  const fam = sessionContext(pg, all, "A1g");
+  ok("a session's context is itself plus its family",
+    fam.map((r) => r.id).sort().join(",") === "A,A1,A1g", fam.map((r) => r.id).join(","));
+  pg.close();
+
   console.log(failures ? `\n${failures} check(s) failed` : "\nall ETL checks passed");
   rmSync(dir, { recursive: true, force: true });
   process.exit(failures ? 1 : 0);
