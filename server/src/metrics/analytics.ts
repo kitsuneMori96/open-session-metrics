@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { histogramOf, histMedian, ladder, quantile, type BinRow, type Histogram } from "./histogram";
 
 /**
  * Web-native analytics.
@@ -165,13 +166,6 @@ function totalsOf(db: DatabaseSync, slice: Slice): Totals {
   };
 }
 
-/** Median of an already-sorted numeric array. */
-function median(sorted: number[]): number {
-  if (sorted.length === 0) return 0;
-  const mid = sorted.length >> 1;
-  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-}
-
 function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0;
   const idx = Math.min(sorted.length - 1, Math.max(0, Math.round((sorted.length - 1) * p)));
@@ -191,39 +185,61 @@ export interface Efficiency {
   stopped: number;
 }
 
+/**
+ * Distributions come from binned aggregates, not from carrying rows into JS.
+ *
+ * The old version selected (dur, out, fill, finish) for every matching turn and sorted
+ * three arrays: on a decade of history that is 500k row objects and three sorts per
+ * request. Here the slice is materialized once and each channel is a small group-by over
+ * it, so JS sees a few hundred integers. Maxima stay exact (`MAX`); only the quantiles
+ * are interpolated inside their bin, to within ~1%.
+ */
 function efficiencyOf(db: DatabaseSync, slice: Slice, totals: Totals): Efficiency {
   const w = turnWhere(slice);
   const rows = db
     .prepare(
-      `SELECT COALESCE(t.dur_ms,0) dur, COALESCE(t.output,0) out, COALESCE(t.fill,0) fill, COALESCE(t.finish,'') finish
-       FROM turns t WHERE ${w.sql}`
+      `WITH x AS MATERIALIZED (
+         SELECT COALESCE(t.dur_ms,0) dur, COALESCE(t.output,0) out,
+                COALESCE(t.fill,0) fill, COALESCE(t.finish,'') finish
+         FROM turns t WHERE ${w.sql}
+       )
+       SELECT 'dur' kind, ${ladder.ms.key("dur")} bin, COUNT(*) n FROM x WHERE dur > 0 GROUP BY 2
+       UNION ALL
+       SELECT 'rate', ${ladder.rate.key("out * 1000.0 / dur")}, COUNT(*) FROM x WHERE dur > 0 AND out > 0 GROUP BY 2
+       UNION ALL
+       SELECT 'fill', ${ladder.share.key("fill")}, COUNT(*) FROM x WHERE fill > 0 GROUP BY 2
+       UNION ALL
+       SELECT 'durmax', 0, MAX(dur) FROM x
+       UNION ALL
+       SELECT 'peak', 0, MAX(fill) FROM x
+       UNION ALL
+       SELECT 'stopped', 0, SUM(CASE WHEN finish <> '' AND finish <> 'stop' THEN 1 ELSE 0 END) FROM x`
     )
-    .all(...w.args) as { dur: number; out: number; fill: number; finish: string }[];
+    .all(...w.args) as unknown as (BinRow & { kind: string })[];
 
-  const durs: number[] = [];
-  const rates: number[] = [];
-  const fills: number[] = [];
-  let stopped = 0;
-  for (const r of rows) {
-    const dur = num(r.dur);
-    const out = num(r.out);
-    if (dur > 0) {
-      durs.push(dur);
-      if (out > 0) rates.push((out / dur) * 1000);
-    }
-    if (num(r.fill) > 0) fills.push(num(r.fill));
-    if (r.finish && r.finish !== "stop") stopped++;
-  }
-  durs.sort((a, b) => a - b);
-  rates.sort((a, b) => a - b);
-  fills.sort((a, b) => a - b);
+  const channel = (kind: string) => histogramOf(rows.filter((r) => String(r.kind) === kind));
+  const scalar = (kind: string) => num(rows.find((r) => String(r.kind) === kind)?.n);
+
+  const durs = channel("dur");
+  const rates = channel("rate");
+  const fills = channel("fill");
+  const durMax = scalar("durmax");
+  const peak = scalar("peak");
 
   return {
-    outputRate: median(rates),
-    turnMs: { p50: percentile(durs, 0.5), p90: percentile(durs, 0.9), p99: percentile(durs, 0.99) },
+    outputRate: histMedian(rates, ladder.rate),
+    turnMs: {
+      p50: quantile(durs, 0.5, ladder.ms, durMax),
+      p90: quantile(durs, 0.9, ladder.ms, durMax),
+      p99: quantile(durs, 0.99, ladder.ms, durMax),
+    },
     cacheHit: totals.cacheRead + totals.input > 0 ? totals.cacheRead / (totals.cacheRead + totals.input) : 0,
-    fill: { p50: percentile(fills, 0.5), p90: percentile(fills, 0.9), max: fills.length ? fills[fills.length - 1] : 0 },
-    stopped,
+    fill: {
+      p50: quantile(fills, 0.5, ladder.share, peak),
+      p90: quantile(fills, 0.9, ladder.share, peak),
+      max: peak,
+    },
+    stopped: scalar("stopped"),
   };
 }
 
@@ -464,49 +480,76 @@ export interface ToolRow {
   agents: number;
 }
 
+interface ToolBin extends BinRow {
+  name: string;
+  errors: number;
+  ms: number;
+  maxMs: number;
+}
+
 function toolsOf(db: DatabaseSync, slice: Slice): ToolRow[] {
   const w = turnWhere(slice);
-  const rows = db
+  // One grouped scan yields the additive columns and the latency histogram together, so
+  // individual tool calls never reach JS. `sessions`/`agents` are distinct counts and so
+  // cannot be summed across bins: they come from their own grouped pass, which returns
+  // one row per tool.
+  const bins = db
     .prepare(
-      `SELECT tl.name name, COUNT(*) calls,
+      `SELECT tl.name name,
               SUM(CASE WHEN tl.status='error' THEN 1 ELSE 0 END) errors,
-              SUM(COALESCE(tl.dur_ms,0)) ms, COUNT(DISTINCT tl.session_id) sessions,
+              SUM(COALESCE(tl.dur_ms,0)) ms,
+              MAX(COALESCE(tl.dur_ms,0)) maxMs,
+              ${ladder.ms.key("COALESCE(tl.dur_ms,0)")} bin,
+              COUNT(*) n
+       FROM tools tl JOIN turns t ON t.id = tl.turn_id
+       WHERE ${w.sql} GROUP BY tl.name, bin`
+    )
+    .all(...w.args) as unknown as ToolBin[];
+
+  const people = db
+    .prepare(
+      `SELECT tl.name name, COUNT(DISTINCT tl.session_id) sessions,
               COUNT(DISTINCT COALESCE(t.agent,'main')) agents
        FROM tools tl JOIN turns t ON t.id = tl.turn_id
-       WHERE ${w.sql} GROUP BY tl.name ORDER BY calls DESC`
+       WHERE ${w.sql} GROUP BY tl.name`
     )
-    .all(...w.args) as Record<string, unknown>[];
+    .all(...w.args) as unknown as { name: string; sessions: number; agents: number }[];
 
-  // Percentiles need the individual durations; one narrow scan beats a correlated
-  // subquery per tool. ~25k integers is a couple of milliseconds.
-  const dur = db
-    .prepare(
-      `SELECT tl.name name, COALESCE(tl.dur_ms,0) ms
-       FROM tools tl JOIN turns t ON t.id = tl.turn_id WHERE ${w.sql}`
-    )
-    .all(...w.args) as { name: string; ms: number }[];
-  const byName = new Map<string, number[]>();
-  for (const r of dur) {
-    const list = byName.get(String(r.name)) ?? [];
-    list.push(num(r.ms));
-    byName.set(String(r.name), list);
+  interface Acc {
+    name: string;
+    calls: number;
+    errors: number;
+    totalMs: number;
+    maxMs: number;
+    hist: Histogram;
   }
+  const acc = new Map<string, Acc>();
+  for (const r of bins) {
+    const name = String(r.name);
+    const a = acc.get(name) ?? { name, calls: 0, errors: 0, totalMs: 0, maxMs: 0, hist: new Map() };
+    a.calls += num(r.n);
+    a.errors += num(r.errors);
+    a.totalMs += num(r.ms);
+    a.maxMs = Math.max(a.maxMs, num(r.maxMs));
+    a.hist.set(Number(r.bin) || 0, num(r.n));
+    acc.set(name, a);
+  }
+  const counts = new Map(people.map((p) => [String(p.name), p]));
 
-  return rows.map((r) => {
-    const list = (byName.get(String(r.name)) ?? []).sort((a, b) => a - b);
-    return {
-      name: String(r.name),
-      calls: num(r.calls),
-      errors: num(r.errors),
-      totalMs: num(r.ms),
-      avgMs: num(r.calls) > 0 ? num(r.ms) / num(r.calls) : 0,
-      p50Ms: percentile(list, 0.5),
-      p95Ms: percentile(list, 0.95),
-      maxMs: list.length ? list[list.length - 1] : 0,
-      sessions: num(r.sessions),
-      agents: num(r.agents),
-    };
-  });
+  return [...acc.values()]
+    .map((a) => ({
+      name: a.name,
+      calls: a.calls,
+      errors: a.errors,
+      totalMs: a.totalMs,
+      avgMs: a.calls > 0 ? a.totalMs / a.calls : 0,
+      p50Ms: quantile(a.hist, 0.5, ladder.ms, a.maxMs),
+      p95Ms: quantile(a.hist, 0.95, ladder.ms, a.maxMs),
+      maxMs: a.maxMs,
+      sessions: num(counts.get(a.name)?.sessions),
+      agents: num(counts.get(a.name)?.agents),
+    }))
+    .sort((x, y) => y.calls - x.calls);
 }
 
 /** One point per session active in the slice — the scatter, the table and the picker. */

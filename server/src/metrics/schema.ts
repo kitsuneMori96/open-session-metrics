@@ -9,6 +9,7 @@ export function openMetrics(): DatabaseSync {
   const db = new DatabaseSync(METRICS_DB);
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA foreign_keys = OFF");
+  ensureIndexes(db);
   return db;
 }
 
@@ -118,7 +119,30 @@ export function initSchema(db: DatabaseSync, opts: { drop?: boolean } = {}) {
     for (const t of FACT_TABLES) db.exec(`DROP TABLE IF EXISTS ${t}`);
   }
   db.exec(SCHEMA);
+  ensureIndexes(db);
   setMeta(db, "schemaSig", SCHEMA_SIG);
+}
+
+/**
+ * Indexes deliberately live outside `SCHEMA`. The signature covers the table layout, and
+ * a missing index is additive: `IF NOT EXISTS` runs on every open and on every build, so
+ * an older store picks it up without re-materializing anything. Folding an index into the
+ * DDL above would send every existing store through a full rebuild for no reason.
+ *
+ * `tools_turn` is the one that matters: without it a query filtered by turn time drives
+ * from `tools` and scans every tool call ever recorded — measured at 620 ms for a 24-hour
+ * window on a decade of history, against 2 ms once the join can start from `turns`.
+ */
+const INDEXES = /* sql */ `
+CREATE INDEX IF NOT EXISTS tools_turn ON tools(turn_id);
+`;
+
+export function ensureIndexes(db: DatabaseSync) {
+  // A store that has not been materialized yet has no tables; the build creates them and
+  // calls this again.
+  const built = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='tools'").get();
+  if (!built) return;
+  db.exec(INDEXES);
 }
 
 /**

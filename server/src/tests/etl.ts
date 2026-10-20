@@ -299,6 +299,27 @@ async function main() {
   const heatAfter = rows("SELECT SUM(turns) t FROM heat")[0].t;
   ok("heat aggregates the new turn", heatAfter === 10, `got ${heatAfter}`);
 
+  // ---- distribution machinery (S0): indexes and binned quantiles ----
+  const toolIdx = one("SELECT COUNT(*) c FROM sqlite_master WHERE type='index' AND name='tools_turn'");
+  ok("tools are indexed by turn, so a time-filtered join never scans the tool table", toolIdx.c === 1);
+
+  const { ladder, histogramOf, quantile, mergeHistograms, histogramCount } = await import("../metrics/histogram");
+  const values = [1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181, 6765, 10946];
+  const binned = histogramOf(values.map((v) => ({ bin: Number((Math.log2(v + 1) * 128) | 0), n: 1 })));
+  ok("every binned value is counted", histogramCount(binned) === values.length);
+  const p50 = quantile(binned, 0.5, ladder.ms);
+  const truth = values[Math.round(0.5 * (values.length - 1))];
+  ok("binned median is within 1% of the exact median", Math.abs(p50 - truth) / truth < 0.01, `${p50} vs ${truth}`);
+  const p95 = quantile(binned, 0.95, ladder.ms);
+  ok("binned p95 sits between the median and the maximum", p95 >= p50 && p95 <= values[values.length - 1] * 1.01,
+    `${p95}`);
+  ok("a quantile never exceeds an exact maximum", quantile(binned, 1, ladder.ms, 5) === 5);
+
+  const joined = mergeHistograms(new Map([[1, 2]]), new Map([[1, 3], [2, 1]]));
+  ok("histograms add up, which is what a day rollup needs", joined.get(1) === 5 && joined.get(2) === 1);
+  ok("fill uses a share ladder, not milliseconds",
+    ladder.share.key("fill").includes("/ 0.002") && ladder.ms.key("dur").includes("log2"));
+
   console.log(failures ? `\n${failures} check(s) failed` : "\nall ETL checks passed");
   rmSync(dir, { recursive: true, force: true });
   process.exit(failures ? 1 : 0);
