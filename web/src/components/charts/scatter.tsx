@@ -214,7 +214,6 @@ export function SessionScatter({
               </Group>
             </svg>
             <Tip
-              width={width}
               tip={
                 hover
                   ? {

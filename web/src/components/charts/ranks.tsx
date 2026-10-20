@@ -220,7 +220,6 @@ export function TimeBars({
               </Group>
             </svg>
             <Tip
-              width={width}
               tip={
                 hover
                   ? {
@@ -310,7 +309,6 @@ export function Histogram({
               ))}
             </Group>
             <Tip
-              width={width}
               tip={
                 hover === null
                   ? null

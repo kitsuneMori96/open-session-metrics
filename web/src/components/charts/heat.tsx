@@ -100,7 +100,6 @@ export function ActivityHeatmap({
               ))}
             </svg>
             <Tip
-              width={width}
               tip={
                 hover
                   ? {

@@ -286,7 +286,6 @@ export function TimeArea({
               )}
             </svg>
             <Tip
-              width={width}
               tip={
                 hover
                   ? {

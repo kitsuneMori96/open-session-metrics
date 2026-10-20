@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ParentSize } from "@visx/responsive";
 import { AxisBottom, AxisLeft } from "@visx/axis";
 import type { AxisScale } from "@visx/axis";
@@ -85,17 +86,96 @@ export function useTip() {
   };
 }
 
-/** Flips to the left of the pointer near the right edge so it never leaves the plot. */
-export function Tip({ tip, width }: { tip: TipState | null; width: number }) {
+const TIP_X = 10;
+const TIP_Y = 8;
+const TIP_PAD = 6;
+
+/** The box a tooltip may occupy: the pane that scrolls under the charts, else the window.
+ *  Decorative clipping (`overflow: hidden` on a plot wrapper) is not a viewport: the
+ *  tooltip is portalled out of it, so only real scroll containers bound it. */
+function visibleBox(from: HTMLElement | null): DOMRect {
+  for (let p = from?.parentElement ?? null; p; p = p.parentElement) {
+    const s = getComputedStyle(p);
+    if (s.overflowY === "auto" || s.overflowY === "scroll") {
+      const r = p.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) return r;
+    }
+  }
+  return new DOMRect(0, 0, document.documentElement.clientWidth, document.documentElement.clientHeight);
+}
+
+/**
+ * Beside the pointer, then pushed back inside what is actually visible.
+ *
+ * Three things were wrong before: the flip threshold was a guessed 160px, so a tooltip
+ * wider than that (a session title, four series) still ran off the edge; nothing looked at
+ * the vertical edges at all; and the tooltip lived inside the plot's clipping wrapper, so
+ * wherever it landed it could be cut by a box the user cannot see. Now it is placed by an
+ * invisible anchor in chart coordinates, portalled to the body, measured, and clamped to
+ * the scrolling pane — flipping sides when it can, sliding when it cannot.
+ */
+export function Tip({ tip }: { tip: TipState | null }) {
+  const anchor = useRef<HTMLSpanElement | null>(null);
+  const box = useRef<HTMLDivElement | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+
+  const place = useCallback(() => {
+    const a = anchor.current;
+    const el = box.current;
+    if (!a || !el) return;
+    const at = a.getBoundingClientRect();
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
+    const view = visibleBox(a);
+    // the pointer's right and below by default; the other side when that overflows
+    const preferredLeft = at.left + TIP_X;
+    const preferredTop = at.top + TIP_Y;
+    const left = preferredLeft + w > view.right - TIP_PAD ? at.left - TIP_X - w : preferredLeft;
+    const top = preferredTop + h > view.bottom - TIP_PAD ? at.top - TIP_Y - h : preferredTop;
+    const next = {
+      left: Math.round(Math.min(Math.max(left, view.left + TIP_PAD), view.right - TIP_PAD - w)),
+      top: Math.round(Math.min(Math.max(top, view.top + TIP_PAD), view.bottom - TIP_PAD - h)),
+    };
+    // the effect runs after every render; only a real move may schedule another one
+    setPos((prev) => (prev && prev.left === next.left && prev.top === next.top ? prev : next));
+  }, []);
+
+  useLayoutEffect(() => {
+    place();
+  });
+
+  // A portalled box does not travel with the content it describes, so re-place on scroll.
+  useEffect(() => {
+    if (!tip) return;
+    const onMove = () => place();
+    window.addEventListener("scroll", onMove, true);
+    window.addEventListener("resize", onMove);
+    return () => {
+      window.removeEventListener("scroll", onMove, true);
+      window.removeEventListener("resize", onMove);
+    };
+  }, [tip, place]);
+
   if (!tip) return null;
-  const flip = tip.x > width - 160;
   return (
-    <div
-      className="tip"
-      style={{ left: flip ? undefined : tip.x + 10, right: flip ? width - tip.x + 10 : undefined, top: tip.y + 8 }}
-    >
-      {tip.node}
-    </div>
+    <>
+      <span ref={anchor} aria-hidden className="absolute" style={{ left: tip.x, top: tip.y, width: 0, height: 0 }} />
+      {createPortal(
+        <div
+          ref={box}
+          className="tip"
+          style={{
+            position: "fixed",
+            left: pos?.left ?? 0,
+            top: pos?.top ?? 0,
+            visibility: pos ? undefined : "hidden",
+          }}
+        >
+          {tip.node}
+        </div>,
+        document.body
+      )}
+    </>
   );
 }
 
