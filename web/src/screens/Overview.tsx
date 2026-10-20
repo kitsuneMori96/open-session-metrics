@@ -33,8 +33,10 @@ export default function Overview() {
   const [hoverSession, setHoverSession] = useState<string | null>(null);
 
   const params = useSearchParams()[0];
+  // Duration on y by default: tokens-vs-cost is the same line (a free model bills 0),
+  // while how long a session ran is the axis that separates the outlier shapes.
   const scatterX = params.get("sx") ?? "tokens";
-  const scatterY = params.get("sy") ?? "cost";
+  const scatterY = params.get("sy") ?? "span";
 
   const series = data?.series;
   /**

@@ -137,7 +137,12 @@ export function SessionScatter({
     >
       {(box) => {
         const { margin, inner, width } = box;
-        const plotH = inner.height;
+        // The legend row is in flow above the plot, so the svg is that much shorter than the
+        // figure. The plot must therefore give up the same band the axis labels live in —
+        // sizing it from `inner.height` left 10px under the rule for a 20px axis and the x
+        // axis was clipped out of the svg viewport.
+        const legendH = 16;
+        const plotH = Math.max(10, box.height - legendH - margin.top - margin.bottom);
 
         const xs = sessions.map((s) => fx.get(s));
         const ys = sessions.map((s) => fy.get(s));
@@ -182,7 +187,16 @@ export function SessionScatter({
             <div className="mb-1 flex justify-end">
               <Legend items={groups.map((g) => ({ key: g.label, label: g.label, color: g.color }))} />
             </div>
-            <svg width={width} height={box.height - 16} onMouseLeave={() => setHover(null)}>
+            <svg
+              width={width}
+              height={box.height - legendH}
+              onMouseLeave={() => {
+                // The dimming reads `highlightId` from the parent; clearing only the local
+                // hover left every other point stuck at 0.1 opacity after the pointer left.
+                setHover(null);
+                onHighlight?.(null);
+              }}
+            >
               <Group top={margin.top} left={margin.left}>
                 <Rows ticks={yTicksV.map((t) => (fy.time ? yScale(t) : t))} y={(v) => (fy.time ? v : yScale(v))} left={0} width={inner.width} />
                 <AxisY top={0} left={0} scale={yScale} tickValues={yTicksV} format={fmtY} />
