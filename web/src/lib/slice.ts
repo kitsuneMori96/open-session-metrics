@@ -2,11 +2,13 @@ import { useCallback, useMemo } from "react";
 import { useSearchParams } from "react-router";
 import {
   DEFAULT_PRESET,
+  GRANULARITIES,
   PRESETS,
   resolveWindow,
   sliceOf,
   windowLabel,
   type Facets0,
+  type Granularity,
   type PresetId,
   type Slice,
   type WindowSpec,
@@ -17,6 +19,10 @@ export type FacetKey = (typeof FACET_KEYS)[number];
 
 const isPreset = (id: string | null): id is PresetId => !!id && PRESETS.some((p) => p.id === id);
 
+/** An unknown unit in the URL falls back to auto rather than to a wrong axis. */
+const granOf = (value: string | null): Granularity | null =>
+  value && (GRANULARITIES as readonly string[]).includes(value) ? (value as Granularity) : null;
+
 export interface SliceState {
   window: WindowSpec;
   facets: Facets0;
@@ -24,6 +30,9 @@ export interface SliceState {
   slice: Slice;
   label: string;
   filtered: boolean;
+  /** Axis unit override; `null` lets the span decide. */
+  gran: Granularity | null;
+  setGran: (g: Granularity | null) => void;
   setPreset: (id: PresetId) => void;
   /** Commit an absolute window, the result of brushing a chart. */
   setWindow: (from: number, to: number) => void;
@@ -53,6 +62,8 @@ export function useSlice(): SliceState {
     () => ({ project: params.get("project"), model: params.get("model"), agent: params.get("agent") }),
     [params]
   );
+
+  const gran = useMemo(() => granOf(params.get("gran")), [params]);
 
   const mutate = useCallback(
     (fn: (next: URLSearchParams) => void) => {
@@ -88,6 +99,15 @@ export function useSlice(): SliceState {
     [mutate]
   );
 
+  const setGran = useCallback(
+    (g: Granularity | null) =>
+      mutate((next) => {
+        if (g) next.set("gran", g);
+        else next.delete("gran");
+      }),
+    [mutate]
+  );
+
   const setFacet = useCallback(
     (key: FacetKey, value: string | null) =>
       mutate((next) => {
@@ -108,11 +128,12 @@ export function useSlice(): SliceState {
       next.delete("from");
       next.delete("to");
       next.delete("range");
+      next.delete("gran");
     }),
     [mutate]
   );
 
-  const slice = useMemo(() => sliceOf(window, facets), [window, facets]);
+  const slice = useMemo(() => sliceOf(window, facets, gran), [window, facets, gran]);
 
   return {
     window,
@@ -120,6 +141,8 @@ export function useSlice(): SliceState {
     slice,
     label: windowLabel(window),
     filtered: FACET_KEYS.some((k) => facets[k] !== null) || window.kind === "custom" || window.id !== DEFAULT_PRESET,
+    gran,
+    setGran,
     setPreset,
     setWindow,
     setFacet,
@@ -136,7 +159,7 @@ export const windowTimes = (w: WindowSpec, now = Date.now()): { from: number; to
  * symbolic in the URL (`range=30d`, not two timestamps that age); a brushed window is
  * absolute and travels as `from`/`to`. `a`, `b`, `q`, `split` belong to one screen.
  */
-const SLICE_KEYS = ["range", "from", "to", ...FACET_KEYS] as const;
+const SLICE_KEYS = ["range", "from", "to", "gran", ...FACET_KEYS] as const;
 
 /**
  * Build hrefs that keep the slice.

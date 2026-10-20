@@ -19,7 +19,17 @@ export interface Slice {
   project: string | null;
   model: string | null;
   agent: string | null;
+  /** Axis unit. `null`/absent means "the finest unit this span can afford". */
+  gran?: Granularity | null;
 }
+
+/**
+ * Time-axis units, finest to coarsest. The server climbs this ladder until a window fits
+ * in 200 columns, so the choice only matters when it is explicit — five minutes is
+ * reachable, but asking for it over a decade answers monthly instead of a million columns.
+ */
+export type Granularity = "5m" | "hour" | "day" | "week" | "month" | "quarter" | "year";
+export const GRANULARITIES: readonly Granularity[] = ["5m", "hour", "day", "week", "month", "quarter", "year"];
 
 export const DAY = 86_400_000;
 
@@ -73,6 +83,7 @@ export const sliceQuery = (s: Slice): string => {
   if (s.project) p.set("project", s.project);
   if (s.model) p.set("model", s.model);
   if (s.agent) p.set("agent", s.agent);
+  if (s.gran) p.set("gran", s.gran);
   return p.toString();
 };
 
@@ -119,8 +130,7 @@ export interface Efficiency {
 }
 
 export interface Series {
-  gran: "hour" | "day" | "week";
-  bucketMs: number;
+  gran: Granularity;
   buckets: Bucket[];
   models: string[];
   modelTokens: number[][];
@@ -201,7 +211,13 @@ export interface SessionRow {
 
 export interface Dashboard {
   generatedAt: number;
-  slice: Slice & { gran: "hour" | "day" | "week"; resolvedFrom: number; spanMs: number };
+  slice: Slice & {
+    gran: Granularity;
+    /** What was asked for, when the axis could not afford it. */
+    granRequested: Granularity | null;
+    resolvedFrom: number;
+    spanMs: number;
+  };
   totals: Totals;
   kpis: {
     tokens: Kpi;
@@ -226,7 +242,7 @@ export interface Dashboard {
 export interface ToolDetail {
   name: string;
   totals: ToolRow | null;
-  gran: "hour" | "day" | "week";
+  gran: Granularity;
   buckets: { ts: number; calls: number; errors: number; avgMs: number; totalMs: number }[];
   latency: { label: string; count: number; upperMs: number }[];
   agents: { agent: string; calls: number; errors: number }[];
@@ -357,9 +373,9 @@ export interface Facets0 {
 const facetKey = (f: Facets0): string => `${f.project ?? ""}|${f.model ?? ""}|${f.agent ?? ""}`;
 
 /** Resolve a symbolic window plus the cross-filter into a concrete slice. */
-export const sliceOf = (win: WindowSpec, f: Facets0, now = Date.now()): Slice => {
+export const sliceOf = (win: WindowSpec, f: Facets0, gran: Granularity | null = null, now = Date.now()): Slice => {
   const { from, to } = resolveWindow(win, now);
-  return { from, to, ...f };
+  return { from, to, ...f, gran };
 };
 
 export const useStatus = () =>
@@ -372,21 +388,30 @@ export const useFacets = () =>
  * The window stays symbolic in the key, so a preset does not re-key the cache on
  * every tick; the request still resolves `now` when it fires.
  */
-export const useAnalytics = (win: WindowSpec, f: Facets0): UseQueryResult<Dashboard> =>
+export const useAnalytics = (
+  win: WindowSpec,
+  f: Facets0,
+  gran: Granularity | null = null
+): UseQueryResult<Dashboard> =>
   useQuery({
-    queryKey: ["analytics", windowKey(win), facetKey(f)],
+    queryKey: ["analytics", windowKey(win), facetKey(f), gran ?? "auto"],
     queryFn: ({ signal }) =>
-      get<Dashboard>(`/api/top/analytics?${sliceQuery(sliceOf(win, f))}`, signal),
+      get<Dashboard>(`/api/top/analytics?${sliceQuery(sliceOf(win, f, gran))}`, signal),
     placeholderData: keepPreviousData,
     staleTime: 20_000,
     refetchInterval: POLL_MS,
   });
 
-export const useToolDetail = (win: WindowSpec, f: Facets0, name: string | null) =>
+export const useToolDetail = (
+  win: WindowSpec,
+  f: Facets0,
+  name: string | null,
+  gran: Granularity | null = null
+) =>
   useQuery({
-    queryKey: ["tool", name, windowKey(win), facetKey(f)],
+    queryKey: ["tool", name, windowKey(win), facetKey(f), gran ?? "auto"],
     queryFn: ({ signal }) =>
-      get<ToolDetail>(`/api/top/tool?name=${encodeURIComponent(name!)}&${sliceQuery(sliceOf(win, f))}`, signal),
+      get<ToolDetail>(`/api/top/tool?name=${encodeURIComponent(name!)}&${sliceQuery(sliceOf(win, f, gran))}`, signal),
     enabled: !!name,
     placeholderData: keepPreviousData,
     staleTime: 20_000,

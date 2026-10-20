@@ -2,7 +2,7 @@ import { NavLink, useLocation } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import clsx from "clsx";
-import { PRESETS, useFacets, useStatus } from "../lib/api";
+import { GRANULARITIES, PRESETS, useFacets, useStatus, type Granularity } from "../lib/api";
 import { clockSec, int, tok } from "../lib/format";
 import { useSlice, useSliceHref } from "../lib/slice";
 import { Chip, KeyCap } from "./ui";
@@ -93,7 +93,7 @@ export function TopBar({ onPalette }: { onPalette: () => void }) {
  * ------------------------------------------------------------------ */
 
 export function SliceBar() {
-  const { window, facets, label, filtered, setPreset, setFacet, reset } = useSlice();
+  const { window, facets, label, filtered, gran, setGran, setPreset, setFacet, reset } = useSlice();
   const query = useFacets();
   const data = query.data;
 
@@ -116,6 +116,8 @@ export function SliceBar() {
       <span className="tape shrink-0 tabular text-ink-faint" title="the resolved window, in local time">
         {window.kind === "custom" ? `${label} ✎` : label}
       </span>
+
+      <GranSelect value={gran} onChange={setGran} />
 
       <span className="shrink-0 text-rule-strong">│</span>
 
@@ -157,6 +159,33 @@ export function SliceBar() {
         </span>
       )}
     </div>
+  );
+}
+
+/**
+ * The axis unit. `auto` is the interesting choice — it climbs the ladder until the window
+ * fits 200 columns — so an explicit unit is only for when you want a particular width, and
+ * the server still refuses to ship a million columns if the span cannot afford it.
+ */
+function GranSelect({ value, onChange }: { value: Granularity | null; onChange: (v: Granularity | null) => void }) {
+  return (
+    <label className="flex shrink-0 items-center gap-1">
+      <span className={clsx("micro", value ? "text-flow" : "text-ink-faint")}>by</span>
+      <select
+        className="field"
+        value={value ?? ""}
+        onChange={(e) => onChange((e.target.value || null) as Granularity | null)}
+        title="time-axis unit — auto picks the finest one the window can afford"
+        style={value ? { borderColor: "var(--color-flow)", color: "var(--color-flow)" } : undefined}
+      >
+        <option value="">auto</option>
+        {GRANULARITIES.map((g) => (
+          <option key={g} value={g}>
+            {g}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 

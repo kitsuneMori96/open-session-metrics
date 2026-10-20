@@ -17,8 +17,8 @@ import { StatusBar } from "../components/Chrome";
  * screen uses.
  */
 export default function Compare() {
-  const { window, facets } = useSlice();
-  const { data, isLoading } = useAnalytics(window, facets);
+  const { window, facets, gran } = useSlice();
+  const { data, isLoading } = useAnalytics(window, facets, gran);
   const [params, setParams] = useSearchParams();
 
   const sessions = useMemo(

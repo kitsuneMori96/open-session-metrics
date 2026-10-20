@@ -36,9 +36,9 @@ import type { LineFilter } from "../lib/transcript";
  */
 export default function SessionDetail() {
   const { id = "" } = useParams();
-  const { window, facets, label } = useSlice();
+  const { window, facets, gran, label } = useSlice();
   const { data, isLoading } = useTranscript(id);
-  const list = useAnalytics(window, facets);
+  const list = useAnalytics(window, facets, gran);
   const navigate = useNavigate();
   const link = useSliceHref();
 

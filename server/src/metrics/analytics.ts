@@ -1,5 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
+import { bucketIndexer, bucketKeySql, bucketStart, bucketStarts, calendarKey, pickGranularity, type Granularity } from "./buckets";
 import { histogramOf, histMedian, ladder, quantile, type BinRow, type Histogram } from "./histogram";
+
+export type { Granularity };
+export { MAX_COLS } from "./buckets";
 
 /**
  * Web-native analytics.
@@ -25,17 +29,14 @@ import { histogramOf, histMedian, ladder, quantile, type BinRow, type Histogram 
  * a cross-filtered dashboard needs additive totals.
  */
 
-export const HOUR = 3_600_000;
-export const DAY = 86_400_000;
-
-export type Granularity = "hour" | "day" | "week";
-
 export interface Slice {
   from: number;
   to: number;
   project: string | null;
   model: string | null;
   agent: string | null;
+  /** Explicit axis unit; omitted means "pick the unit the span deserves". */
+  gran?: Granularity | null;
 }
 
 export interface Totals {
@@ -69,26 +70,6 @@ const num = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
-const localDay = (ts: number): number => {
-  const d = new Date(ts);
-  d.setHours(0, 0, 0, 0);
-  return d.getTime();
-};
-
-/** Monday 00:00 of the week containing `ts`. */
-const localWeek = (ts: number): number => {
-  const d = new Date(localDay(ts));
-  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
-  return d.getTime();
-};
-
-export function pickGranularity(from: number, to: number): Granularity {
-  const span = Math.max(0, to - from);
-  if (span <= 3 * DAY) return "hour";
-  if (span <= 180 * DAY) return "day";
-  return "week";
-}
-
 /**
  * The `turns` predicate every aggregate shares. Aliased as `t`, so callers that join
  * `tools` can reuse it verbatim.
@@ -111,13 +92,14 @@ function turnWhere(slice: Slice): { sql: string; args: (string | number)[] } {
   return { sql: parts.join(" AND "), args };
 }
 
-function granularityOf(db: DatabaseSync, slice: Slice): { gran: Granularity; from: number } {
+function granularityOf(db: DatabaseSync, slice: Slice): { gran: Granularity; from: number; requested: Granularity | null } {
   const row = db
     .prepare("SELECT MIN(created) a FROM turns WHERE role='assistant'")
     .get() as { a: number | null } | undefined;
   const dataFrom = num(row?.a) || slice.to;
   const from = slice.from > 0 ? slice.from : dataFrom;
-  return { gran: pickGranularity(from, slice.to), from };
+  const requested = slice.gran ?? null;
+  return { gran: pickGranularity(from, slice.to, requested), from, requested };
 }
 
 /** Resolve `from = 0` ("all time") to the first turn, so deltas have a real window. */
@@ -244,22 +226,19 @@ function efficiencyOf(db: DatabaseSync, slice: Slice, totals: Totals): Efficienc
 }
 
 /* ------------------------------------------------------------------ *
- * Time series, model stack, activity heatmap — one scan
+ * Time series, model stack, activity heatmap
  * ------------------------------------------------------------------ */
 
 interface Cell {
-  d: number;
-  hr: number;
+  k: string | number;
   model: string;
   i: number; o: number; r: number; cr: number; cw: number;
   cost: number; calls: number; tools: number; errors: number;
   adds: number; dels: number; writes: number;
-  sessions: string;
 }
 
 export interface Series {
   gran: Granularity;
-  bucketMs: number;
   buckets: Bucket[];
   /** Token-richest models, in stack order (bottom first). */
   models: string[];
@@ -273,45 +252,56 @@ export interface Series {
 
 const MODEL_STACK = 8;
 
+/**
+ * Three queries, each bounded by the column count.
+ *
+ * The old version grouped by day × hour × model *before* the axis unit was applied: 10,967
+ * cells on a decade of history to draw 527 columns, with every session id concatenated
+ * into the same rows. Bucketing inside SQL makes the intermediate the shape of the answer
+ * — at most `MAX_COLS` × models cells — and the session count and the weekday × hour heat
+ * become their own small aggregates. The heat stays hourly on purpose: it is the one chart
+ * that must keep reading when the axis has gone monthly.
+ */
 function seriesOf(db: DatabaseSync, slice: Slice, gran: Granularity): Series {
   const w = turnWhere(slice);
+  const starts = bucketStarts(slice.from, slice.to, gran);
+  const indexOf = bucketIndexer(gran, starts);
+  const key = bucketKeySql(gran);
+  const count = starts.length;
+
   const cells = db
     .prepare(
-      `SELECT CAST(t.day AS INTEGER) d,
-              CAST(strftime('%H', t.created/1000, 'unixepoch', 'localtime') AS INTEGER) hr,
-              COALESCE(t.model,'unknown') model,
+      `SELECT ${key} k, COALESCE(t.model,'unknown') model,
               SUM(t.input) i, SUM(t.output) o, SUM(t.reasoning) r,
               SUM(t.cache_read) cr, SUM(t.cache_write) cw, SUM(t.cost) cost,
               COUNT(*) calls, SUM(COALESCE(t.tool_calls,0)) tools, SUM(COALESCE(t.tool_errors,0)) errors,
               SUM(COALESCE(t.additions,0)) adds, SUM(COALESCE(t.deletions,0)) dels,
-              SUM(COALESCE(t.write_lines,0)) writes,
-              GROUP_CONCAT(t.session_id, ' ') sessions
+              SUM(COALESCE(t.write_lines,0)) writes
        FROM turns t WHERE ${w.sql}
-       GROUP BY t.day, strftime('%H', t.created/1000, 'unixepoch', 'localtime'), COALESCE(t.model,'unknown')`
+       GROUP BY k, model`
     )
     .all(...w.args) as unknown as Cell[];
 
-  const bucketMs = gran === "hour" ? HOUR : gran === "week" ? 7 * DAY : DAY;
-  const align = (ts: number) => (gran === "hour" ? Math.floor(ts / HOUR) * HOUR : gran === "week" ? localWeek(ts) : localDay(ts));
-  const start = align(slice.from);
-  const count = Math.max(1, Math.floor((slice.to - start) / bucketMs) + 1);
+  const sessionRows = db
+    .prepare(`SELECT ${key} k, COUNT(DISTINCT t.session_id) n FROM turns t WHERE ${w.sql} GROUP BY k`)
+    .all(...w.args) as unknown as { k: string | number; n: number }[];
 
-  const buckets: Bucket[] = Array.from({ length: count }, (_, i) => ({ ts: start + i * bucketMs, ...ZERO, sessions: 0 }));
-  const sessionSeen: Set<string>[] = Array.from({ length: count }, () => new Set<string>());
+  const heatRows = db
+    .prepare(
+      `SELECT CAST(strftime('%w', t.created / 1000, 'unixepoch', 'localtime') AS INTEGER) wd,
+              CAST(strftime('%H', t.created / 1000, 'unixepoch', 'localtime') AS INTEGER) hr,
+              COUNT(*) n
+       FROM turns t WHERE ${w.sql} GROUP BY wd, hr`
+    )
+    .all(...w.args) as unknown as { wd: number; hr: number; n: number }[];
+
+  const buckets: Bucket[] = starts.map((ts) => ({ ts, ...ZERO }));
   const modelTotals = new Map<string, number>();
   const perModel = new Map<string, number[]>();
 
-  const indexOf = (c: Cell): number => {
-    const ts = num(c.d) + num(c.hr) * HOUR;
-    const i = Math.floor((ts - start) / bucketMs);
-    return i < 0 ? 0 : i >= count ? count - 1 : i;
-  };
-
-  const heat: number[][] = Array.from({ length: 7 }, () => new Array(24).fill(0));
-  const hourly = new Array(24).fill(0);
-
   for (const c of cells) {
-    const i = indexOf(c);
+    const i = indexOf(c.k);
+    if (i < 0) continue;
     const b = buckets[i];
     const input = num(c.i);
     const output = num(c.o);
@@ -332,11 +322,6 @@ function seriesOf(db: DatabaseSync, slice: Slice, gran: Granularity): Series {
     b.additions += num(c.adds);
     b.deletions += num(c.dels);
     b.writeLines += num(c.writes);
-    for (const id of String(c.sessions).split(" ")) if (id) sessionSeen[i].add(id);
-
-    const mi = ((new Date(num(c.d)).getDay() + 6) % 7);
-    heat[mi][num(c.hr)] += num(c.calls);
-    hourly[num(c.hr)] += num(c.calls);
 
     const row = perModel.get(c.model) ?? new Array(count).fill(0);
     row[i] += total;
@@ -344,7 +329,18 @@ function seriesOf(db: DatabaseSync, slice: Slice, gran: Granularity): Series {
     modelTotals.set(c.model, (modelTotals.get(c.model) ?? 0) + total);
   }
 
-  for (let i = 0; i < count; i++) buckets[i].sessions = sessionSeen[i].size;
+  for (const s of sessionRows) {
+    const i = indexOf(s.k);
+    if (i >= 0) buckets[i].sessions = num(s.n);
+  }
+
+  const heat: number[][] = Array.from({ length: 7 }, () => new Array(24).fill(0));
+  const hourly = new Array(24).fill(0);
+  for (const r of heatRows) {
+    const hour = Math.max(0, Math.min(23, num(r.hr)));
+    heat[(num(r.wd) + 6) % 7][hour] += num(r.n);
+    hourly[hour] += num(r.n);
+  }
 
   const ranked = [...modelTotals.entries()].sort((a, b) => b[1] - a[1]).map(([m]) => m);
   const models = ranked.slice(0, MODEL_STACK);
@@ -360,7 +356,7 @@ function seriesOf(db: DatabaseSync, slice: Slice, gran: Granularity): Series {
     modelTokens.push(other);
   }
 
-  return { gran, bucketMs, buckets, models, modelTokens, heat, hourly };
+  return { gran, buckets, models, modelTokens, heat, hourly };
 }
 
 /* ------------------------------------------------------------------ *
@@ -680,7 +676,13 @@ export interface Kpi {
 
 export interface Dashboard {
   generatedAt: number;
-  slice: Slice & { gran: Granularity; resolvedFrom: number; spanMs: number };
+  slice: Slice & {
+    gran: Granularity;
+    /** The unit that was asked for, when it differs from the one the axis can afford. */
+    granRequested: Granularity | null;
+    resolvedFrom: number;
+    spanMs: number;
+  };
   totals: Totals;
   kpis: {
     tokens: Kpi;
@@ -719,7 +721,7 @@ export function dashboard(db: DatabaseSync, raw: Slice): Dashboard {
 
   return {
     generatedAt: Date.now(),
-    slice: { ...slice, gran, resolvedFrom: slice.from, spanMs: span },
+    slice: { ...slice, gran, granRequested: raw.gran ?? null, resolvedFrom: slice.from, spanMs: span },
     totals,
     kpis: {
       tokens: kpi(totals.total, prev.total),
@@ -785,14 +787,15 @@ export function toolDetail(db: DatabaseSync, raw: Slice, name: string): ToolDeta
     )
     .all(...args) as Record<string, unknown>[];
 
-  const bucketMs = gran === "hour" ? HOUR : gran === "week" ? 7 * DAY : DAY;
-  const align = (ts: number) => (gran === "hour" ? Math.floor(ts / HOUR) * HOUR : gran === "week" ? localWeek(ts) : localDay(ts));
-  const start = align(slice.from);
-  const count = Math.max(1, Math.floor((slice.to - start) / bucketMs) + 1);
-  const buckets = Array.from({ length: count }, (_, i) => ({ ts: start + i * bucketMs, calls: 0, errors: 0, avgMs: 0, totalMs: 0 }));
+  const starts = bucketStarts(slice.from, slice.to, gran);
+  const buckets = starts.map((ts) => ({ ts, calls: 0, errors: 0, avgMs: 0, totalMs: 0 }));
+  // Calendar buckets have no fixed width, so a call is placed by resolving its own bucket
+  // start through the axis rather than by dividing by a step.
+  const place = bucketIndexer(gran, starts);
   const idx = (ts: number) => {
-    const i = Math.floor((ts - start) / bucketMs);
-    return i < 0 ? 0 : i >= count ? count - 1 : i;
+    const start = bucketStart(ts, gran);
+    const i = place(gran === "month" || gran === "quarter" || gran === "year" ? calendarKey(start, gran) : start);
+    return i < 0 ? 0 : i;
   };
 
   const latency = LAT_BINS.map(([label, lo, hi]) => ({ label, count: 0, upperMs: hi }));

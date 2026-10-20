@@ -282,6 +282,10 @@ export function AxisX({
   tickValues: number[];
   format: (v: number) => string;
 }) {
+  // The end labels sit on the plot's edges, so centring them pushes half a label outside
+  // the figure — invisible on `10-20`, obvious on `2026-10`. Anchor the extremes inward.
+  const first = tickValues[0];
+  const last = tickValues[tickValues.length - 1];
   return (
     <AxisBottom
       top={top}
@@ -292,7 +296,11 @@ export function AxisX({
       stroke={RULE_STRONG}
       tickStroke={RULE_STRONG}
       tickLength={3}
-      tickLabelProps={() => ({ ...TICK_LABEL, textAnchor: "middle", dy: "0.35em" })}
+      tickLabelProps={(v) => ({
+        ...TICK_LABEL,
+        textAnchor: first === last ? "middle" : v === last ? "end" : v === first ? "start" : "middle",
+        dy: "0.35em",
+      })}
     />
   );
 }

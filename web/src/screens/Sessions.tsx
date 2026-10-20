@@ -22,8 +22,8 @@ type Node = SessionRow & { children: Node[] };
  * window and cross-filter as the dashboard.
  */
 export default function Sessions() {
-  const { window, facets, slice, label } = useSlice();
-  const { data, isLoading } = useAnalytics(window, facets);
+  const { window, facets, gran, slice, label } = useSlice();
+  const { data, isLoading } = useAnalytics(window, facets, gran);
   const navigate = useNavigate();
   const href = useSliceHref();
   const [sorting, setSorting] = useState<SortingState>([{ id: "updated", desc: true }]);

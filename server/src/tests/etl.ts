@@ -320,6 +320,61 @@ async function main() {
   ok("fill uses a share ladder, not milliseconds",
     ladder.share.key("fill").includes("/ 0.002") && ladder.ms.key("dur").includes("log2"));
 
+  // ---- the axis ladder (S1): bounded columns, real calendar edges ----
+  const {
+    MAX_COLS, GRANULARITIES, pickGranularity, bucketCount, bucketStarts,
+    bucketKeySql, bucketIndexer, bucketStart, calendarKey,
+  } = await import("../metrics/buckets");
+  const HOUR_MS = 3_600_000, DAY_MS = 86_400_000;
+  const decadeFrom = new Date(2016, 0, 15, 12, 0, 0).getTime();
+  const decadeTo = new Date(2026, 9, 20, 12, 0, 0).getTime();
+
+  const fit = (g: string) => bucketCount(decadeFrom, decadeTo, g as never) <= MAX_COLS;
+  ok("a decade cannot be drawn weekly within the column budget", !fit("week"));
+  ok("auto answers a decade monthly", pickGranularity(decadeFrom, decadeTo) === "month");
+  ok("every auto answer fits the budget",
+    GRANULARITIES.every((g) => g !== pickGranularity(decadeFrom, decadeTo) || fit(g)));
+  ok("auto keeps hourly for three days", pickGranularity(decadeTo - 3 * DAY_MS, decadeTo) === "hour");
+  ok("auto keeps daily up to half a year", pickGranularity(decadeTo - 180 * DAY_MS, decadeTo) === "day");
+  ok("an explicit five minutes is honoured when it fits",
+    pickGranularity(decadeTo - 6 * HOUR_MS, decadeTo, "5m") === "5m");
+  ok("an explicit five minutes over a decade is coarsened, never shipped",
+    pickGranularity(decadeFrom, decadeTo, "5m") === "month");
+  ok("an explicit year is honoured when coarser than auto",
+    pickGranularity(decadeFrom, decadeTo, "year") === "year");
+
+  ok("months start on the first, not on 30-day steps",
+    new Date(bucketStart(new Date(2024, 1, 10, 23, 0).getTime(), "month")).getDate() === 1);
+  ok("quarters start in Jan/Apr/Jul/Oct",
+    [0, 3, 6, 9].every((m) => new Date(bucketStart(new Date(2024, m + 1, 5).getTime(), "quarter")).getMonth() === m));
+  ok("a month column maps back to itself",
+    bucketStarts(decadeFrom, decadeTo, "month").every((ts, i) =>
+      bucketIndexer("month", bucketStarts(decadeFrom, decadeTo, "month"))(calendarKey(ts, "month")) === i));
+
+  // The SQL key and the JS axis must name the same bucket for every unit, or a column
+  // would silently receive another column's totals.
+  const probe = new DatabaseSync(":memory:");
+  probe.exec("CREATE TABLE turns (created INTEGER, day INTEGER, bucket INTEGER)");
+  const stamps = [
+    new Date(2024, 4, 15, 13, 42).getTime(),
+    new Date(2024, 1, 29, 23, 59).getTime(),
+    new Date(2023, 11, 31, 0, 3).getTime(),
+  ];
+  for (const ts of stamps) {
+    const d = new Date(ts);
+    d.setHours(0, 0, 0, 0);
+    probe.prepare("INSERT INTO turns VALUES (?,?,?)").run(ts, d.getTime(), Math.floor(ts / 300000) * 300000);
+  }
+  for (const g of GRANULARITIES) {
+    const keys = probe.prepare(`SELECT ${bucketKeySql(g)} k FROM turns t`).all() as { k: number | string }[];
+    const calendar = g === "month" || g === "quarter" || g === "year";
+    const same = keys.every((row, i) => {
+      const start = bucketStart(stamps[i], g);
+      return calendar ? String(row.k) === calendarKey(start, g) : Number(row.k) === start;
+    });
+    ok(`${g}: the SQL bucket key agrees with the axis`, same, JSON.stringify(keys));
+  }
+
   console.log(failures ? `\n${failures} check(s) failed` : "\nall ETL checks passed");
   rmSync(dir, { recursive: true, force: true });
   process.exit(failures ? 1 : 0);

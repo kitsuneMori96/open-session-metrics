@@ -85,14 +85,30 @@ export const logRange = (vals: number[], hi: number): [number, number] => {
   return [lo, Math.max(hi, lo * 10) * 1.08];
 };
 
-export type GranularityLike = "hour" | "day" | "week";
+export type GranularityLike = "5m" | "hour" | "day" | "week" | "month" | "quarter" | "year";
+
+/** The word a chart states on the right of its caption. */
+export function granLabel(gran: GranularityLike): string {
+  if (gran === "5m") return "5-minute";
+  if (gran === "hour") return "hourly";
+  if (gran === "day") return "daily";
+  if (gran === "week") return "weekly";
+  if (gran === "month") return "monthly";
+  if (gran === "quarter") return "quarterly";
+  return "yearly";
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /** Axis label per bucket width — the only place the granularity is visible. */
 export function timeTick(ts: number, gran: GranularityLike): string {
   const d = new Date(ts);
   const p = (n: number) => String(n).padStart(2, "0");
+  if (gran === "5m") return `${p(d.getHours())}:${p(d.getMinutes())}`;
   if (gran === "hour") return `${p(d.getHours())}:00`;
-  if (gran === "week") return `${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  if (gran === "year") return String(d.getFullYear());
+  if (gran === "quarter") return `${d.getFullYear()}-Q${Math.floor(d.getMonth() / 3) + 1}`;
+  if (gran === "month") return `${d.getFullYear()}-${p(d.getMonth() + 1)}`;
   return `${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
@@ -100,8 +116,15 @@ export function timeTooltip(ts: number, gran: GranularityLike): string {
   const d = new Date(ts);
   const p = (n: number) => String(n).padStart(2, "0");
   const day = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  if (gran === "5m") return `${day} ${p(d.getHours())}:${p(d.getMinutes())}`;
   if (gran === "hour") return `${day} ${p(d.getHours())}:00`;
   if (gran === "week") return `week of ${day}`;
+  if (gran === "month") return `${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+  if (gran === "quarter") {
+    const q = Math.floor(d.getMonth() / 3);
+    return `${d.getFullYear()} Q${q + 1} · ${MONTHS[q * 3]}–${MONTHS[q * 3 + 2]}`;
+  }
+  if (gran === "year") return `all of ${d.getFullYear()}`;
   return day;
 }
 

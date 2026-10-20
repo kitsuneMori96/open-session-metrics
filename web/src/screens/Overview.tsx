@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { DEFAULT_PRESET, useAnalytics, type SessionRow } from "../lib/api";
+import { granLabel } from "../lib/chart";
 import { TOKEN_CLASSES, paletteFor } from "../lib/chart";
 import { dur, int, pct, pctInt, rate, shortModel, tok, usd, usdPerM } from "../lib/format";
 import { useSlice, useSliceHref } from "../lib/slice";
@@ -22,8 +23,8 @@ import { BaseHints, StatusBar } from "../components/Chrome";
  * a model narrows everything, including the other screens.
  */
 export default function Overview() {
-  const { window, facets, slice, label, setWindow, setPreset, setFacet } = useSlice();
-  const { data, isLoading, isFetching } = useAnalytics(window, facets);
+  const { window, facets, gran, slice, label, setWindow, setPreset, setFacet } = useSlice();
+  const { data, isLoading, isFetching } = useAnalytics(window, facets, gran);
   const [, setParams] = useSearchParams();
   const href = useSliceHref();
   const navigate = useNavigate();
@@ -36,6 +37,18 @@ export default function Overview() {
   const scatterY = params.get("sy") ?? "cost";
 
   const series = data?.series;
+  /**
+   * What the axis actually did. A requested unit that the span cannot afford is coarsened
+   * server-side, and saying so is cheaper than letting the reader wonder why "5m" looks
+   * like months.
+   */
+  const axisCaption = useMemo(() => {
+    if (!series) return undefined;
+    const asked = data?.slice.granRequested;
+    const applied = series.gran;
+    const base = `by ${granLabel(applied)}`;
+    return asked && asked !== applied ? `${base} · ${asked} too dense` : base;
+  }, [series, data?.slice.granRequested]);
   const keys = useMemo(() => {
     if (!series) return [];
     if (split === "class") return TOKEN_CLASSES.map((c) => ({ key: c.key, label: c.label, color: c.color }));
@@ -168,6 +181,7 @@ export default function Overview() {
             buckets={buckets}
             keys={keys}
             gran={series?.gran ?? "day"}
+            caption={axisCaption}
             active={new Set(keys.map((k) => k.key).filter((k) => !muted.has(k)))}
             format={split === "cost" ? (v) => usd(v) : tok}
             onWindow={setWindow}
@@ -331,7 +345,7 @@ export default function Overview() {
           </Panel>
 
           <Panel title="rhythm">
-            {series && series.gran !== "hour" && (
+            {series && series.gran !== "hour" && series.gran !== "5m" && (
               <>
                 <TimeBars
                   label="sessions per day"

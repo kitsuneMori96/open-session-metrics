@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { BUCKET_MS } from "./config";
 import { getMeta, getMetaNumber } from "./metrics/schema";
 import { dashboard, facets, toolDetail, type Slice } from "./metrics/analytics";
+import { isGranularity } from "./metrics/buckets";
 import type { BuildReport } from "./metrics/build";
 
 export function createApp(deps: {
@@ -34,12 +35,15 @@ export function createApp(deps: {
   /** The window + cross-filter a dashboard view is rendered against. */
   const sliceOf = (req: express.Request): Slice => {
     const rawTo = Number(req.query.to ?? 0);
+    const gran = str(req, "gran");
     return {
       from: cutoffOf(req),
       to: Number.isFinite(rawTo) && rawTo > 0 ? rawTo : Date.now() + 1,
       project: projectOf(req),
       model: str(req, "model"),
       agent: str(req, "agent"),
+      // An unknown unit is ignored rather than rejected: the axis then picks for the span.
+      gran: isGranularity(gran) ? gran : null,
     };
   };
 

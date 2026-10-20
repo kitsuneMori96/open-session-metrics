@@ -20,9 +20,9 @@ import { BaseHints, StatusBar } from "../components/Chrome";
 export default function Tools() {
   const { name } = useParams();
   const navigate = useNavigate();
-  const { window, facets, label } = useSlice();
-  const { data, isLoading } = useAnalytics(window, facets);
-  const detail = useToolDetail(window, facets, name ?? null);
+  const { window, facets, gran, label } = useSlice();
+  const { data, isLoading } = useAnalytics(window, facets, gran);
+  const detail = useToolDetail(window, facets, name ?? null, gran);
   const href = useSliceHref();
   const [sorting, setSorting] = useState<SortingState>([{ id: "calls", desc: true }]);
   const [expanded] = useState<ExpandedState>({});

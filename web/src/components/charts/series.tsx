@@ -5,7 +5,7 @@ import { Brush } from "@visx/brush";
 import { curveLinear } from "@visx/curve";
 import { scaleLinear } from "@visx/scale";
 import type { Bucket } from "../../lib/api";
-import { RULE, RULE_STRONG, SOFT, tickIndices, timeTick, timeTooltip, yTicks, type GranularityLike } from "../../lib/chart";
+import { RULE, RULE_STRONG, SOFT, granLabel, tickIndices, timeTick, timeTooltip, yTicks, type GranularityLike } from "../../lib/chart";
 import { AxisX, AxisY, Figure, Rows, Tip, TipNote, TipTitle, type Box } from "./base";
 import { tok } from "../../lib/format";
 
@@ -147,7 +147,7 @@ export function TimeArea({
               ✕ {windowLabel}
             </button>
           )}
-          <span>{caption ?? (gran === "hour" ? "hourly" : gran === "week" ? "weekly" : "daily")}</span>
+          <span>{caption ?? granLabel(gran)}</span>
         </span>
       }
       note={peak === 0 ? "no assistant traffic in this window" : undefined}
