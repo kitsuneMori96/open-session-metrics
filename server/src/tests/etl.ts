@@ -409,6 +409,7 @@ async function main() {
   put("B", null, "root beta", 500);
   put("C", "ghost", "parent outside the slice", 10);
   put("D", null, "root delta", 20);
+  put("E", null, "root epsilon", 5);
 
   const all = { from: T0 - 1, to: T0 + 10000, project: null, model: null, agent: null };
   const p1 = sessionsPage(pg, all, { limit: 2 });
@@ -419,7 +420,7 @@ async function main() {
   };
   ok("a page carries the subtree under each of its roots", seen.has("A") && seen.has("A1") && seen.has("A1g"),
     [...seen].join(","));
-  ok("paging walks roots, not rows", p1.roots === 4 && p1.rows.length === 4, `roots=${p1.roots} rows=${p1.rows.length}`);
+  ok("paging walks roots, not rows", p1.roots === 5 && p1.rows.length === 4, `roots=${p1.roots} rows=${p1.rows.length}`);
 
   const p2 = sessionsPage(pg, all, { limit: 2, cursor: p1.next });
   const two = [...p1.rows, ...p2.rows];
@@ -428,11 +429,16 @@ async function main() {
   ok("a session whose parent is outside the slice is a root", twoRoots.includes("C"), twoRoots.join(","));
   const overlap = p2.rows.filter((r) => seen.has(r.id));
   ok("the cursor resumes where the page stopped", overlap.length === 0, `overlap=${overlap.length}`);
-  const every = new Set(two.map((r) => r.id));
-  ok("two pages cover every session exactly once", every.size === 6, [...every].join(","));
+  // Five roots at two per page: the second page is full *and* there is a root after it,
+  // so the server has to look one root ahead to know the difference.
+  ok("a full page with more behind it keeps the cursor", p2.next !== null && p2.rows.map((r) => r.id).sort().join(",") === "C,D",
+    `rows=${p2.rows.map((r) => r.id).join(",")} next=${p2.next}`);
   const p3 = sessionsPage(pg, all, { limit: 2, cursor: p2.next });
-  ok("a page past the end is empty and ends the walk", p3.rows.length === 0 && p3.next === null,
-    `rows=${p3.rows.length} next=${p3.next}`);
+  ok("the probe root is the next page, not part of this one", p3.rows.map((r) => r.id).join(",") === "E",
+    p3.rows.map((r) => r.id).join(","));
+  ok("the last page ends the walk instead of promising an empty one", p3.next === null, `next=${p3.next}`);
+  const every = new Set([...two, ...p3.rows].map((r) => r.id));
+  ok("three pages cover every session exactly once", every.size === 7, [...every].join(","));
 
   const heavy = sessionsPage(pg, all, { limit: 4 });
   ok("a page can be sorted by an aggregate", heavy.rows[0].id === "A1", heavy.rows[0].id);

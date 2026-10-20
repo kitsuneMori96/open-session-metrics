@@ -862,15 +862,38 @@ export function sessionsPage(
          FROM agg a JOIN down d ON d.id = a.id
          ORDER BY ${order} ${direction}, a.id ${direction}`
     )
-    .all(...args, ...cursorArgs, limit) as Record<string, unknown>[];
+    .all(...args, ...cursorArgs, limit + 1) as Record<string, unknown>[];
 
   const meta = rows[0];
   const pageRoots = rows.filter((r) => num(r.inpage) === 1);
-  const last = pageRoots[pageRoots.length - 1];
-  const next = pageRoots.length >= limit && last ? encodeCursor({ v: last[order] ?? 0, id: String(last.id) }) : null;
+  // The extra root is a probe, not part of the page: it only answers "is there more?".
+  // Without it, a page that happens to end exactly at the store's last root still
+  // reports a cursor and the client spends one request fetching nothing.
+  const cut = pageRoots.length > limit ? String(pageRoots[limit].id) : null;
+  let shipped = rows;
+  if (cut) {
+    // …and its subtree has to go with it, or the page would quietly carry one root more
+    // than the caller asked for. Rows are flat, so walk the parent links until stable.
+    const drop = new Set<string>([cut]);
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const r of rows) {
+        const id = String(r.id);
+        const parent = r.parent == null ? null : String(r.parent);
+        if (!drop.has(id) && parent !== null && drop.has(parent)) {
+          drop.add(id);
+          grew = true;
+        }
+      }
+    }
+    shipped = rows.filter((r) => !drop.has(String(r.id)));
+  }
+  const kept = pageRoots.slice(0, limit);
+  const last = kept[kept.length - 1];
+  const next = cut && last ? encodeCursor({ v: last[order] ?? 0, id: String(last.id) }) : null;
 
   return {
-    rows: toSessionRows(rows),
+    rows: toSessionRows(shipped),
     matching: num(meta?.matching),
     roots: num(meta?.roots),
     next,
