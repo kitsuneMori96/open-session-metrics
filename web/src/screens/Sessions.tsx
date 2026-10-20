@@ -234,7 +234,9 @@ export default function Sessions() {
           </Chip>
         )}
         <span className="tape shrink-0 text-ink-faint">
-          {int(head.matching)} matching of {int(sliceSessions)} in slice
+          {q
+            ? `${int(head.matching)} of ${int(sliceSessions)} in slice · ancestors of matches kept`
+            : `${int(head.matching)} of ${int(sliceSessions)} in slice`}
         </span>
         <span className="shrink-0 text-rule-strong">│</span>
         <Chip onClick={() => setExpanded(allExpanded(tree))}>expand all</Chip>

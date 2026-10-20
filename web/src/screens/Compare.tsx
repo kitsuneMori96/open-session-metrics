@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { Link, useSearchParams } from "react-router";
-import { useAnalytics, useTranscript, type SessionRow, type Turn } from "../lib/api";
+import { useAnalytics, useSessionContext, useTranscript, type SessionRow, type Turn } from "../lib/api";
 import { useSlice, useSliceHref } from "../lib/slice";
 import { dur, int, pct, rate, shortModel, tok, usd, usdPerM } from "../lib/format";
 import { TimeBars } from "../components/charts/ranks";
@@ -27,6 +27,13 @@ export default function Compare() {
   );
   const a = params.get("a") ?? sessions[0]?.id ?? "";
   const b = params.get("b") ?? sessions[1]?.id ?? "";
+  // The dashboard carries the 200 heaviest sessions, but a link may name any of them.
+  // Ask for the named one's family when it is not in the sample, so a bookmark still
+  // opens the comparison it points at.
+  const missA = !!a && !sessions.some((s) => s.id === a);
+  const missB = !!b && !sessions.some((s) => s.id === b);
+  const ctxA = useSessionContext(window, facets, missA ? a : null);
+  const ctxB = useSessionContext(window, facets, missB ? b : null);
   const ta = useTranscript(a || null);
   const tb = useTranscript(b || null);
 
@@ -39,15 +46,15 @@ export default function Compare() {
 
   if (isLoading || !data) return <Spinner label="reading the store" />;
 
-  const sa = sessions.find((s) => s.id === a);
-  const sb = sessions.find((s) => s.id === b);
+  const sa = sessions.find((s) => s.id === a) ?? ctxA.data?.rows.find((r) => r.id === a);
+  const sb = sessions.find((s) => s.id === b) ?? ctxB.data?.rows.find((r) => r.id === b);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="hairline-b flex shrink-0 flex-wrap items-center gap-2 px-2 py-1">
         <span className="micro shrink-0">compare</span>
-        <Picker label="A" value={a} sessions={sessions} onChange={(id) => set("a", id)} />
-        <Picker label="B" value={b} sessions={sessions} onChange={(id) => set("b", id)} />
+        <Picker label="A" value={a} sessions={sessions} extra={sa} onChange={(id) => set("a", id)} />
+        <Picker label="B" value={b} sessions={sessions} extra={sb} onChange={(id) => set("b", id)} />
         <span className="flex-1" />
         <span className="tape shrink-0 text-ink-faint">both sides read the same window and filters</span>
       </div>
@@ -102,17 +109,25 @@ function Picker({
   label,
   value,
   sessions,
+  extra,
   onChange,
 }: {
   label: string;
   value: string;
   sessions: SessionRow[];
+  /** A session named by the URL that is not among the sampled options. */
+  extra?: SessionRow;
   onChange: (id: string) => void;
 }) {
   return (
     <label className="flex min-w-0 shrink items-center gap-1">
       <span className="micro shrink-0 text-flow">{label}</span>
       <select className="field max-w-[320px]" value={value} onChange={(e) => onChange(e.target.value)}>
+        {extra && !sessions.some((s) => s.id === extra.id) && (
+          <option value={extra.id}>
+            {(extra.title ?? extra.firstPrompt ?? extra.id).slice(0, 60)} · {extra.project}
+          </option>
+        )}
         {sessions.map((s) => (
           <option key={s.id} value={s.id}>
             {(s.title ?? s.firstPrompt ?? s.id).slice(0, 60)} · {s.project}
