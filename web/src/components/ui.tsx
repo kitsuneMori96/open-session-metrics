@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import clsx from "clsx";
 import { signed } from "../lib/format";
+import { Roll } from "./Roll";
 
 /* ------------------------------------------------------------------ *
  * Panels
@@ -152,7 +153,9 @@ export function Tile({
           </span>
         )}
       </div>
-      <div className={clsx("tabular text-[19px] leading-none font-semibold tracking-tight", TONE[tone])}>{value}</div>
+      <div className={clsx("tabular text-[19px] leading-none font-semibold tracking-tight", TONE[tone])}>
+        <Roll text={value} />
+      </div>
       {spark ? <div className="h-[20px]">{spark}</div> : <div className="h-[20px]" />}
     </div>
   );

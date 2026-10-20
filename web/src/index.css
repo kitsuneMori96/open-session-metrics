@@ -149,6 +149,20 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* Digit wheels (components/Roll.tsx). The cell is an inline-block so it keeps a text
+   baseline, and the masking is clip-path, not overflow: overflow moves an inline-block's
+   baseline to its bottom edge, which would lift every digit off the line it shares with
+   the unit beside it. One cell is one line box, so a roll of 100% is exactly one digit. */
+.roll-cell {
+  display: inline-block;
+  position: relative;
+  clip-path: inset(0);
+}
+.roll-layer {
+  position: absolute;
+  inset: 0;
+}
+
 /* search hit inside a transcript */
 .mark {
   background-color: oklch(0.68 0.17 70 / 0.32);
@@ -344,6 +358,52 @@ body {
     to {
       opacity: 1;
       transform: none;
+    }
+  }
+
+  /* the wheel: mechanical, short, decelerating. 100% is one digit cell. */
+  .roll-layer[data-roll="in-up"] {
+    animation: roll-in-up 190ms cubic-bezier(0.25, 0.8, 0.3, 1);
+  }
+  .roll-layer[data-roll="out-up"] {
+    animation: roll-out-up 190ms cubic-bezier(0.25, 0.8, 0.3, 1);
+  }
+  .roll-layer[data-roll="in-down"] {
+    animation: roll-in-down 190ms cubic-bezier(0.25, 0.8, 0.3, 1);
+  }
+  .roll-layer[data-roll="out-down"] {
+    animation: roll-out-down 190ms cubic-bezier(0.25, 0.8, 0.3, 1);
+  }
+  @keyframes roll-in-up {
+    from {
+      transform: translateY(100%);
+    }
+    to {
+      transform: none;
+    }
+  }
+  @keyframes roll-out-up {
+    from {
+      transform: none;
+    }
+    to {
+      transform: translateY(-100%);
+    }
+  }
+  @keyframes roll-in-down {
+    from {
+      transform: translateY(-100%);
+    }
+    to {
+      transform: none;
+    }
+  }
+  @keyframes roll-out-down {
+    from {
+      transform: none;
+    }
+    to {
+      transform: translateY(100%);
     }
   }
 }
