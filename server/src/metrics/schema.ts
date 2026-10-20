@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { ensureRollups } from "./rollup";
 import { DATA_DIR, METRICS_DB } from "../config";
 import { mkdirSync } from "node:fs";
 
@@ -10,6 +11,7 @@ export function openMetrics(): DatabaseSync {
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA foreign_keys = OFF");
   ensureIndexes(db);
+  ensureRollups(db);
   return db;
 }
 
@@ -120,6 +122,7 @@ export function initSchema(db: DatabaseSync, opts: { drop?: boolean } = {}) {
   }
   db.exec(SCHEMA);
   ensureIndexes(db);
+  ensureRollups(db);
   setMeta(db, "schemaSig", SCHEMA_SIG);
 }
 

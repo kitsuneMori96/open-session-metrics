@@ -453,6 +453,95 @@ async function main() {
     fam.map((r) => r.id).sort().join(",") === "A,A1,A1g", fam.map((r) => r.id).join(","));
   pg.close();
 
+  // ---- day rollups (S3): the fast path has to answer exactly like the raw one ----
+  //
+  // Every panel above a wide window can be summed from (session, day) cells instead of
+  // from half a million turns. That is only allowed to be a faster *route* to the same
+  // numbers, so this builds a small multi-day store, renders the dashboard twice — once
+  // from the cells, once with the cells disabled (no version key) — and diffs the JSON.
+  const { ensureRollups } = await import("../metrics/rollup");
+  const { dashboard } = await import("../metrics/analytics");
+  const rr = new DatabaseSync(":memory:");
+  rr.exec(`
+    CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY, parent_id TEXT, title TEXT, project TEXT, agent TEXT, model TEXT,
+      created INTEGER, updated INTEGER, first_prompt TEXT, peak_fill REAL
+    );
+    CREATE TABLE turns (
+      id TEXT PRIMARY KEY, session_id TEXT, role TEXT, created INTEGER, completed INTEGER,
+      dur_ms INTEGER, project TEXT, model TEXT, agent TEXT, input INTEGER, output INTEGER,
+      reasoning INTEGER, cache_read INTEGER, cache_write INTEGER, cost REAL, finish TEXT,
+      fill REAL, context_window INTEGER, tool_calls INTEGER, tool_errors INTEGER,
+      additions INTEGER, deletions INTEGER, write_lines INTEGER, day INTEGER, hour INTEGER, bucket INTEGER
+    );
+    CREATE TABLE tools (
+      id INTEGER PRIMARY KEY, session_id TEXT, turn_id TEXT, name TEXT, status TEXT, dur_ms INTEGER
+    );
+  `);
+  const D0 = new Date(2024, 4, 6).getTime(); // a Monday, local midnight
+  const HOUR = 3600000;
+  let toolId = 0;
+  const addTurn = (sid: string, at: number, model: string, project: string, agent: string, dur: number, out: number) => {
+    const d = new Date(at);
+    d.setHours(0, 0, 0, 0);
+    const turnId = `${sid}_${at}`;
+    rr.prepare(
+      `INSERT INTO turns VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).run(
+      turnId, sid, "assistant", at, at + dur, dur, project, model, agent,
+      out * 4, out, 0, out * 2, 0, 0.01, at % 3 === 0 ? "length" : "stop",
+      0.42, 128000, 1, at % 5 === 0 ? 1 : 0, 2, 1, 0, d.getTime(), d.getHours(), Math.floor(at / 300000) * 300000
+    );
+    for (let k = 0; k < 2; k++) {
+      rr.prepare("INSERT INTO tools VALUES (?,?,?,?,?,?)").run(++toolId, sid, turnId, k ? "bash" : "read", k ? "error" : "ok", dur * (k + 1));
+    }
+  };
+  const addSession = (sid: string, parent: string | null, project: string, model: string, agent: string, created: number) => {
+    rr.prepare("INSERT INTO sessions VALUES (?,?,?,?,?,?,?,?,?,?)").run(
+      sid, parent, `session ${sid}`, project, agent, model, created, created + 3 * HOUR, `first prompt ${sid}`, 0.5
+    );
+  };
+  const MODELS = ["model-a", "model-b"];
+  const PROJECTS = ["alpha", "beta"];
+  const AGENTS = ["build", "explore"];
+  for (const [si, sid] of ["s1", "s2", "s3", "s4"].entries()) {
+    addSession(sid, si === 3 ? "s1" : null, PROJECTS[si % 2], MODELS[si % 2], AGENTS[si % 2], D0 + si * HOUR);
+    for (let day = 0; day < 4; day++) {
+      for (let h = 0; h < 6; h++) {
+        addTurn(sid, D0 + day * 24 * HOUR + (7 + h) * HOUR + si * 60000, MODELS[si % 2], PROJECTS[si % 2], AGENTS[si % 2], 1000 + day * 200 + h, 100 + h);
+      }
+    }
+  }
+  ensureRollups(rr);
+
+  const strip = (o: unknown): string => JSON.stringify(o, (k, v) => (k === "generatedAt" ? 0 : v));
+  const windows: [string, { from: number; to: number; project: string | null; model: string | null; agent: string | null }][] = [
+    ["all time", { from: 0, to: D0 + 4 * 24 * HOUR, project: null, model: null, agent: null }],
+    ["whole days", { from: D0, to: D0 + 3 * 24 * HOUR, project: null, model: null, agent: null }],
+    ["cut at both ends", { from: D0 + 9 * HOUR, to: D0 + 2 * 24 * HOUR + 15 * HOUR, project: null, model: null, agent: null }],
+    ["one project", { from: 0, to: D0 + 4 * 24 * HOUR, project: "alpha", model: null, agent: null }],
+    ["one model on a sub-agent", { from: 0, to: D0 + 4 * 24 * HOUR, project: null, model: "model-b", agent: "explore" }],
+  ];
+  const fast = windows.map(([, w]) => strip(dashboard(rr, w)));
+  // Deleting the version key makes `rollupsReady` false; the same queries then run on turns.
+  rr.exec("DELETE FROM meta WHERE key = 'rollVersion'");
+  const slow = windows.map(([, w]) => strip(dashboard(rr, w)));
+  for (const [i, [label]] of windows.entries()) {
+    ok(`rollups agree with the raw scan (${label})`, fast[i] === slow[i],
+      fast[i] === slow[i] ? "" : `${fast[i]?.length} vs ${slow[i]?.length} chars`);
+  }
+  const freq = (json: string) => JSON.parse(json);
+  const rolled = freq(fast[0]);
+  ok("a rolled-up window still counts sessions once", rolled.totals.sessions === 4, String(rolled.totals.sessions));
+  const daySeries = freq(strip(dashboard(rr, { from: 0, to: D0 + 4 * 24 * HOUR, project: null, model: null, agent: null })));
+  ok("every day column receives its turns", daySeries.series.buckets.reduce((a: number, b: any) => a + b.turns, 0) === 96,
+    String(daySeries.series.buckets.reduce((a: number, b: any) => a + b.turns, 0)));
+  ok("the heatmap sums to the same turns", daySeries.series.heat.flat().reduce((a: number, b: number) => a + b, 0) === 96,
+    String(daySeries.series.heat.flat().reduce((a: number, b: number) => a + b, 0)));
+  ok("tool percentiles survive the rollup", daySeries.tools.every((t: any) => t.p50Ms > 0 && t.p95Ms >= t.p50Ms), JSON.stringify(daySeries.tools[0]));
+  rr.close();
+
   console.log(failures ? `\n${failures} check(s) failed` : "\nall ETL checks passed");
   rmSync(dir, { recursive: true, force: true });
   process.exit(failures ? 1 : 0);

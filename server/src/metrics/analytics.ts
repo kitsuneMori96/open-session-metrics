@@ -1,6 +1,17 @@
 import type { DatabaseSync } from "node:sqlite";
 import { bucketIndexer, bucketKeySql, bucketStart, bucketStarts, calendarKey, pickGranularity, type Granularity } from "./buckets";
 import { histogramOf, histMedian, ladder, quantile, type BinRow, type Histogram } from "./histogram";
+import {
+  cellSource,
+  hourSource,
+  rawCellSource,
+  rawHourSource,
+  rawToolBins,
+  rawToolSource,
+  rollSpan,
+  toolBins,
+  toolSource,
+} from "./rollup";
 
 export type { Granularity };
 export { MAX_COLS } from "./buckets";
@@ -113,18 +124,18 @@ export function resolveSlice(db: DatabaseSync, slice: Slice): { slice: Slice; gr
  * ------------------------------------------------------------------ */
 
 function totalsOf(db: DatabaseSync, slice: Slice): Totals {
-  const w = turnWhere(slice);
+  const span = rollSpan(db, slice);
+  const src = span ? cellSource(slice, span) : rawCellSource(slice);
   const r = db
     .prepare(
-      `SELECT SUM(t.input) i, SUM(t.output) o, SUM(t.reasoning) r,
-              SUM(t.cache_read) cr, SUM(t.cache_write) cw, SUM(t.cost) cost,
-              COUNT(*) calls, SUM(COALESCE(t.tool_calls,0)) tools, SUM(COALESCE(t.tool_errors,0)) errors,
-              COUNT(DISTINCT t.session_id) sessions,
-              SUM(COALESCE(t.additions,0)) adds, SUM(COALESCE(t.deletions,0)) dels,
-              SUM(COALESCE(t.write_lines,0)) writes
-       FROM turns t WHERE ${w.sql}`
+      `SELECT SUM(input) i, SUM(output) o, SUM(reasoning) r,
+              SUM(cache_read) cr, SUM(cache_write) cw, SUM(cost) cost,
+              SUM(turns) calls, SUM(tools) tools, SUM(tool_errors) errors,
+              COUNT(DISTINCT session_id) sessions,
+              SUM(additions) adds, SUM(deletions) dels, SUM(write_lines) writes
+         FROM (${src.sql})`
     )
-    .get(...w.args) as Record<string, unknown> | undefined;
+    .get(...(src.args as never[])) as Record<string, unknown> | undefined;
 
   const input = num(r?.i);
   const output = num(r?.o);
@@ -263,7 +274,10 @@ const MODEL_STACK = 8;
  * that must keep reading when the axis has gone monthly.
  */
 function seriesOf(db: DatabaseSync, slice: Slice, gran: Granularity): Series {
-  const w = turnWhere(slice);
+  // The rollup knows days, not hours: a sub-day axis has to bucket from `turns` itself.
+  const span = gran === "5m" || gran === "hour" ? null : rollSpan(db, slice);
+  const src = span ? cellSource(slice, span) : rawCellSource(slice);
+  const hours = span ? hourSource(slice, span) : rawHourSource(slice);
   const starts = bucketStarts(slice.from, slice.to, gran);
   const indexOf = bucketIndexer(gran, starts);
   const key = bucketKeySql(gran);
@@ -271,29 +285,27 @@ function seriesOf(db: DatabaseSync, slice: Slice, gran: Granularity): Series {
 
   const cells = db
     .prepare(
-      `SELECT ${key} k, COALESCE(t.model,'unknown') model,
-              SUM(t.input) i, SUM(t.output) o, SUM(t.reasoning) r,
-              SUM(t.cache_read) cr, SUM(t.cache_write) cw, SUM(t.cost) cost,
-              COUNT(*) calls, SUM(COALESCE(t.tool_calls,0)) tools, SUM(COALESCE(t.tool_errors,0)) errors,
-              SUM(COALESCE(t.additions,0)) adds, SUM(COALESCE(t.deletions,0)) dels,
-              SUM(COALESCE(t.write_lines,0)) writes
-       FROM turns t WHERE ${w.sql}
+      `SELECT ${key} k, model,
+              SUM(input) i, SUM(output) o, SUM(reasoning) r,
+              SUM(cache_read) cr, SUM(cache_write) cw, SUM(cost) cost,
+              SUM(turns) calls, SUM(tools) tools, SUM(tool_errors) errors,
+              SUM(additions) adds, SUM(deletions) dels, SUM(write_lines) writes
+       FROM (${src.sql}) t
        GROUP BY k, model`
     )
-    .all(...w.args) as unknown as Cell[];
+    .all(...(src.args as never[])) as unknown as Cell[];
 
   const sessionRows = db
-    .prepare(`SELECT ${key} k, COUNT(DISTINCT t.session_id) n FROM turns t WHERE ${w.sql} GROUP BY k`)
-    .all(...w.args) as unknown as { k: string | number; n: number }[];
+    .prepare(`SELECT ${key} k, COUNT(DISTINCT session_id) n FROM (${src.sql}) t GROUP BY k`)
+    .all(...(src.args as never[])) as unknown as { k: string | number; n: number }[];
 
-  const heatRows = db
-    .prepare(
-      `SELECT CAST(strftime('%w', t.created / 1000, 'unixepoch', 'localtime') AS INTEGER) wd,
-              CAST(strftime('%H', t.created / 1000, 'unixepoch', 'localtime') AS INTEGER) hr,
-              COUNT(*) n
-       FROM turns t WHERE ${w.sql} GROUP BY wd, hr`
-    )
-    .all(...w.args) as unknown as { wd: number; hr: number; n: number }[];
+  // Hours come as (day, hour, turns) from either source; the weekday is read off the
+  // local day so both paths land on the same cell of the heatmap.
+  const heatRows = db.prepare(hours.sql).all(...(hours.args as never[])) as unknown as {
+    day: number;
+    hour: number;
+    n: number;
+  }[];
 
   const buckets: Bucket[] = starts.map((ts) => ({ ts, ...ZERO }));
   const modelTotals = new Map<string, number>();
@@ -337,8 +349,9 @@ function seriesOf(db: DatabaseSync, slice: Slice, gran: Granularity): Series {
   const heat: number[][] = Array.from({ length: 7 }, () => new Array(24).fill(0));
   const hourly = new Array(24).fill(0);
   for (const r of heatRows) {
-    const hour = Math.max(0, Math.min(23, num(r.hr)));
-    heat[(num(r.wd) + 6) % 7][hour] += num(r.n);
+    const hour = Math.max(0, Math.min(23, num(r.hour)));
+    const weekday = (new Date(num(r.day)).getDay() + 6) % 7;
+    heat[weekday][hour] += num(r.n);
     hourly[hour] += num(r.n);
   }
 
@@ -374,16 +387,17 @@ export interface ModelRow {
 }
 
 function modelsOf(db: DatabaseSync, slice: Slice): ModelRow[] {
-  const w = turnWhere(slice);
+  const span = rollSpan(db, slice);
+  const src = span ? cellSource(slice, span) : rawCellSource(slice);
   const rows = db
     .prepare(
-      `SELECT COALESCE(t.model,'unknown') id, COUNT(*) calls,
-              SUM(t.input+t.output+t.cache_read+t.cache_write) tokens,
-              SUM(t.input) input, SUM(t.output) output, SUM(t.cost) cost,
-              COUNT(DISTINCT t.session_id) sessions
-       FROM turns t WHERE ${w.sql} GROUP BY COALESCE(t.model,'unknown') ORDER BY tokens DESC`
+      `SELECT model id, SUM(turns) calls,
+              SUM(input+output+cache_read+cache_write) tokens,
+              SUM(input) input, SUM(output) output, SUM(cost) cost,
+              COUNT(DISTINCT session_id) sessions
+       FROM (${src.sql}) t GROUP BY model ORDER BY tokens DESC`
     )
-    .all(...w.args) as Record<string, unknown>[];
+    .all(...(src.args as never[])) as Record<string, unknown>[];
   return rows.map((r) => ({
     id: String(r.id),
     calls: num(r.calls),
@@ -406,15 +420,16 @@ export interface ProjectRow {
 }
 
 function projectsOf(db: DatabaseSync, slice: Slice): ProjectRow[] {
-  const w = turnWhere(slice);
+  const span = rollSpan(db, slice);
+  const src = span ? cellSource(slice, span) : rawCellSource(slice);
   const rows = db
     .prepare(
-      `SELECT COALESCE(t.project,'—') project, COUNT(DISTINCT t.session_id) sessions, COUNT(*) turns,
-              SUM(t.input+t.output+t.cache_read+t.cache_write) tokens, SUM(t.cost) cost,
-              SUM(COALESCE(t.tool_calls,0)) tools, SUM(COALESCE(t.tool_errors,0)) errors
-       FROM turns t WHERE ${w.sql} GROUP BY COALESCE(t.project,'—') ORDER BY tokens DESC`
+      `SELECT project, COUNT(DISTINCT session_id) sessions, SUM(turns) turns,
+              SUM(input+output+cache_read+cache_write) tokens, SUM(cost) cost,
+              SUM(tools) tools, SUM(tool_errors) errors
+       FROM (${src.sql}) t GROUP BY project ORDER BY tokens DESC`
     )
-    .all(...w.args) as Record<string, unknown>[];
+    .all(...(src.args as never[])) as Record<string, unknown>[];
   return rows.map((r) => ({
     project: String(r.project),
     sessions: num(r.sessions),
@@ -442,16 +457,17 @@ export interface AgentRow {
  * expensive, and which one is unreliable.
  */
 function agentsOf(db: DatabaseSync, slice: Slice): AgentRow[] {
-  const w = turnWhere(slice);
+  const span = rollSpan(db, slice);
+  const src = span ? cellSource(slice, span) : rawCellSource(slice);
   const rows = db
     .prepare(
-      `SELECT COALESCE(t.agent,'main') agent, COUNT(*) turns,
-              SUM(t.input+t.output+t.cache_read+t.cache_write) tokens, SUM(t.cost) cost,
-              COUNT(DISTINCT t.session_id) sessions,
-              SUM(COALESCE(t.tool_calls,0)) tools, SUM(COALESCE(t.tool_errors,0)) errors
-       FROM turns t WHERE ${w.sql} GROUP BY COALESCE(t.agent,'main') ORDER BY tokens DESC`
+      `SELECT agent, SUM(turns) turns,
+              SUM(input+output+cache_read+cache_write) tokens, SUM(cost) cost,
+              COUNT(DISTINCT session_id) sessions,
+              SUM(tools) tools, SUM(tool_errors) errors
+       FROM (${src.sql}) t GROUP BY agent ORDER BY tokens DESC`
     )
-    .all(...w.args) as Record<string, unknown>[];
+    .all(...(src.args as never[])) as Record<string, unknown>[];
   return rows.map((r) => ({
     agent: String(r.agent),
     turns: num(r.turns),
@@ -484,32 +500,30 @@ interface ToolBin extends BinRow {
 }
 
 function toolsOf(db: DatabaseSync, slice: Slice): ToolRow[] {
-  const w = turnWhere(slice);
-  // One grouped scan yields the additive columns and the latency histogram together, so
-  // individual tool calls never reach JS. `sessions`/`agents` are distinct counts and so
-  // cannot be summed across bins: they come from their own grouped pass, which returns
-  // one row per tool.
-  const bins = db
-    .prepare(
-      `SELECT tl.name name,
-              SUM(CASE WHEN tl.status='error' THEN 1 ELSE 0 END) errors,
-              SUM(COALESCE(tl.dur_ms,0)) ms,
-              MAX(COALESCE(tl.dur_ms,0)) maxMs,
-              ${ladder.ms.key("COALESCE(tl.dur_ms,0)")} bin,
-              COUNT(*) n
-       FROM tools tl JOIN turns t ON t.id = tl.turn_id
-       WHERE ${w.sql} GROUP BY tl.name, bin`
-    )
-    .all(...w.args) as unknown as ToolBin[];
+  const span = rollSpan(db, slice);
+  const sums = span ? toolSource(slice, span) : rawToolSource(slice);
+  const bins = span ? toolBins(slice, span) : rawToolBins(slice);
 
+  // Two grouped passes: one for the additive columns and one for the latency bins. Both
+  // read the day rollup when the window has whole days in it, so neither joins half a
+  // million turns to answer a question about 22 tools.
   const people = db
     .prepare(
-      `SELECT tl.name name, COUNT(DISTINCT tl.session_id) sessions,
-              COUNT(DISTINCT COALESCE(t.agent,'main')) agents
-       FROM tools tl JOIN turns t ON t.id = tl.turn_id
-       WHERE ${w.sql} GROUP BY tl.name`
+      `SELECT name, SUM(calls) calls, SUM(errors) errors, SUM(ms) ms, MAX(mx) maxMs,
+              COUNT(DISTINCT session_id) sessions, COUNT(DISTINCT agent) agents
+       FROM (${sums.sql}) GROUP BY name`
     )
-    .all(...w.args) as unknown as { name: string; sessions: number; agents: number }[];
+    .all(...(sums.args as never[])) as unknown as {
+    name: string;
+    calls: number;
+    errors: number;
+    ms: number;
+    maxMs: number;
+    sessions: number;
+    agents: number;
+  }[];
+
+  const hist = db.prepare(bins.sql).all(...(bins.args as never[])) as unknown as ToolBin[];
 
   interface Acc {
     name: string;
@@ -517,20 +531,30 @@ function toolsOf(db: DatabaseSync, slice: Slice): ToolRow[] {
     errors: number;
     totalMs: number;
     maxMs: number;
+    sessions: number;
+    agents: number;
     hist: Histogram;
   }
   const acc = new Map<string, Acc>();
-  for (const r of bins) {
+  for (const r of people) {
     const name = String(r.name);
-    const a = acc.get(name) ?? { name, calls: 0, errors: 0, totalMs: 0, maxMs: 0, hist: new Map() };
-    a.calls += num(r.n);
-    a.errors += num(r.errors);
-    a.totalMs += num(r.ms);
-    a.maxMs = Math.max(a.maxMs, num(r.maxMs));
-    a.hist.set(Number(r.bin) || 0, num(r.n));
-    acc.set(name, a);
+    acc.set(name, {
+      name,
+      calls: num(r.calls),
+      errors: num(r.errors),
+      totalMs: num(r.ms),
+      maxMs: num(r.maxMs),
+      sessions: num(r.sessions),
+      agents: num(r.agents),
+      hist: new Map(),
+    });
   }
-  const counts = new Map(people.map((p) => [String(p.name), p]));
+  for (const r of hist) {
+    const a = acc.get(String(r.name));
+    if (!a) continue;
+    const bin = Number(r.bin) || 0;
+    a.hist.set(bin, (a.hist.get(bin) ?? 0) + num(r.n));
+  }
 
   return [...acc.values()]
     .map((a) => ({
@@ -542,8 +566,8 @@ function toolsOf(db: DatabaseSync, slice: Slice): ToolRow[] {
       p50Ms: quantile(a.hist, 0.5, ladder.ms, a.maxMs),
       p95Ms: quantile(a.hist, 0.95, ladder.ms, a.maxMs),
       maxMs: a.maxMs,
-      sessions: num(counts.get(a.name)?.sessions),
-      agents: num(counts.get(a.name)?.agents),
+      sessions: a.sessions,
+      agents: a.agents,
     }))
     .sort((x, y) => y.calls - x.calls);
 }
@@ -583,26 +607,45 @@ export interface SessionRow {
  * all three count turns the same way. `ctx` is computed here rather than in JS because it
  * is also a sort key, and sorting a page after fetching it would page the wrong rows.
  */
-function sessionAgg(slice: Slice): { sql: string; args: unknown[] } {
+function sessionAgg(db: DatabaseSync, slice: Slice): { sql: string; args: unknown[] } {
+  const span = rollSpan(db, slice);
+  const meta = `SELECT s.id id, s.parent_id parent, COALESCE(s.title,'') title, COALESCE(s.project,'—') project,
+                       COALESCE(s.agent,'main') agent, COALESCE(s.model,'') model,
+                       COALESCE(s.created,0) created, COALESCE(s.updated,0) updated,
+                       COALESCE(s.first_prompt,'') prompt, COALESCE(s.peak_fill,0) peak,
+                       a.i i, a.o o, a.cr cr, a.cw cw, a.tokens tokens, a.cost cost, a.turns turns,
+                       a.tools tools, a.errors errors, a.span span, a.win win, a.ctx ctx
+                  FROM (`;
+
+  if (span) {
+    const src = cellSource(slice, span);
+    return {
+      args: src.args,
+      sql: `${meta}SELECT session_id id, SUM(input) i, SUM(output) o, SUM(cache_read) cr, SUM(cache_write) cw,
+                   SUM(input+output+cache_read+cache_write) tokens, SUM(cost) cost, SUM(turns) turns,
+                   SUM(tools) tools, SUM(tool_errors) errors,
+                   MAX(ended) - MIN(created) span, MAX(win) win,
+                   SUM(input+cache_read+cache_write) * 1.0 /
+                     MAX(CASE WHEN win > 0 THEN win ELSE 128000 END) ctx
+              FROM (${src.sql}) GROUP BY session_id) a
+             JOIN sessions s ON s.id = a.id`,
+    };
+  }
+
   const w = turnWhere(slice);
   return {
     args: w.args,
-    sql: `SELECT s.id id, s.parent_id parent, COALESCE(s.title,'') title, COALESCE(s.project,'—') project,
-                 COALESCE(s.agent,'main') agent, COALESCE(s.model,'') model,
-                 COALESCE(s.created,0) created, COALESCE(s.updated,0) updated,
-                 COALESCE(s.first_prompt,'') prompt, COALESCE(s.peak_fill,0) peak,
-                 SUM(t.input) i, SUM(t.output) o,
-                 SUM(t.cache_read) cr, SUM(t.cache_write) cw,
-                 SUM(t.input+t.output+t.cache_read+t.cache_write) tokens,
-                 SUM(t.cost) cost, COUNT(*) turns,
-                 SUM(COALESCE(t.tool_calls,0)) tools, SUM(COALESCE(t.tool_errors,0)) errors,
-                 MAX(COALESCE(t.completed,t.created)) - MIN(t.created) span,
-                 MAX(COALESCE(t.context_window,0)) win,
-                 SUM(t.input+t.cache_read+t.cache_write) * 1.0 /
-                   MAX(CASE WHEN COALESCE(t.context_window,0) > 0 THEN t.context_window ELSE 128000 END) ctx
-          FROM turns t JOIN sessions s ON s.id = t.session_id
-          WHERE ${w.sql}
-          GROUP BY s.id`,
+    sql: `${meta}SELECT t.session_id id, SUM(t.input) i, SUM(t.output) o,
+                   SUM(t.cache_read) cr, SUM(t.cache_write) cw,
+                   SUM(t.input+t.output+t.cache_read+t.cache_write) tokens,
+                   SUM(t.cost) cost, COUNT(*) turns,
+                   SUM(COALESCE(t.tool_calls,0)) tools, SUM(COALESCE(t.tool_errors,0)) errors,
+                   MAX(COALESCE(t.completed,t.created)) - MIN(t.created) span,
+                   MAX(COALESCE(t.context_window,0)) win,
+                   SUM(t.input+t.cache_read+t.cache_write) * 1.0 /
+                     MAX(CASE WHEN COALESCE(t.context_window,0) > 0 THEN t.context_window ELSE 128000 END) ctx
+              FROM turns t WHERE ${w.sql} GROUP BY t.session_id) a
+             JOIN sessions s ON s.id = a.id`,
   };
 }
 
@@ -664,7 +707,7 @@ function toSessionRows(rows: Record<string, unknown>[]): SessionRow[] {
 export const SESSION_SAMPLE = 200;
 
 function sessionsOf(db: DatabaseSync, slice: Slice): SessionRow[] {
-  const a = sessionAgg(slice);
+  const a = sessionAgg(db, slice);
   const rows = db
     .prepare(`${a.sql} ORDER BY tokens DESC, id DESC LIMIT ${SESSION_SAMPLE}`)
     .all(...(a.args as never[])) as Record<string, unknown>[];
@@ -745,7 +788,7 @@ export function sessionsPage(
     cursor?: string | null;
   } = {}
 ): SessionPage {
-  const agg = sessionAgg(slice);
+  const agg = sessionAgg(db, slice);
   const q = (opts.q ?? "").trim();
   const order = SESSION_ORDER_COLUMN[opts.order ?? "updated"] ?? "updated";
   const asc = opts.dir === "asc";
@@ -838,7 +881,7 @@ export function sessionsPage(
  * which it cannot afford to receive once history is long.
  */
 export function sessionContext(db: DatabaseSync, slice: Slice, id: string): SessionRow[] {
-  const agg = sessionAgg(slice);
+  const agg = sessionAgg(db, slice);
   const rows = db
     .prepare(
       `WITH RECURSIVE

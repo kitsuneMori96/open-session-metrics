@@ -3,6 +3,7 @@ import { BUCKET_MS, SOURCE_DB } from "../config";
 import { SourceReader, type SrcTurn, type SrcSession, type SrcTool } from "../source";
 import { initSchema, setMeta } from "./schema";
 import { catalogKey, loadCatalog, type Catalog } from "./catalog";
+import { ensureRollups, refreshRollups } from "./rollup";
 
 /** Same-signature tool calls inside this window are candidates for retry probes. */
 export const RETRY_WINDOW_MS = 15 * 60 * 1000;
@@ -114,6 +115,7 @@ export async function build(
   const src = new SourceReader(opts.sourceDb ?? SOURCE_DB);
   try {
     initSchema(db, { drop: mode === "full" });
+    ensureRollups(db);
 
     const allSessions = src.sessions();
     const allById = new Map<string, SrcSession>(allSessions.map((s) => [s.id, s]));
@@ -406,6 +408,9 @@ export async function build(
         upModel.run(key, m.provider, m.label, m.context, m.costInput, m.costOutput, m.costCacheRead, m.costCacheWrite, m.source);
       }
 
+      // Derived tables commit with their facts: a crash can never leave the rollups
+      // describing a build that did not happen.
+      refreshRollups(db, idList, [...affectedDays], mode === "full");
       setMeta(db, "sourceDb", opts.sourceDb ?? SOURCE_DB);
       setMeta(db, "sourceSchema", src.schema);
       setMeta(db, "sourceMaxTime", String(src.maxMessageTime()));
