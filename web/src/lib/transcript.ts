@@ -126,11 +126,10 @@ export const OUT_ROWS = 40;
 /**
  * Status as a mark, in the data face.
  *
- * These are text glyphs, so only glyphs the shipped mono cut actually carries may be
- * used: JetBrains Mono has no U+2713/U+2717/U+25CC, and a browser that cannot find a
- * glyph silently substitutes another typeface — on one machine a mono fallback, on
- * another a proportional symbol face, mid-line. `✓` and `◌` come from that font stack
- * too, but `×` (U+00D7) is in the cut, so the failure mark is a real multiplication
- * sign rather than a substituted ballot X.
+ * `✓` and `◌` are two of the sixteen glyphs in the shipped symbol cut (see index.css),
+ * so they render from the same mono cell everywhere. The failure mark is `×` — the
+ * multiplication sign JetBrains Mono itself carries, and already the project's "n times"
+ * notation: the error signatures on the tools screen count in `4×`. `✗` (U+2717) is in
+ * neither face and was being drawn by whatever font the OS offered instead.
  */
 export const statusGlyph = (status: string): string => (status === "completed" ? "✓" : status === "error" ? "×" : "◌");

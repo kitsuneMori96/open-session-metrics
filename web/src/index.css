@@ -1,7 +1,11 @@
 @import "tailwindcss";
 
-/* Two cuts, both shipped: the interface sets its icons as text, so any glyph outside
-   these two faces is substituted by whatever the OS happens to have — and that shows. */
+/* Three cuts, all shipped.
+   The interface sets its icons as text (◆ ⌕ ↻ ▲ ✓ …), and a browser that cannot find a
+   glyph in the declared stacks silently substitutes one from another typeface — another
+   weight, another advance, mid-line. So the symbols ship too: one 3 KB subset holding
+   exactly the glyphs the interface draws, cut from DejaVu Sans Mono and re-spaced to the
+   0.6 em cell. Nothing on screen is left to the OS to invent. */
 
 @font-face {
   font-family: "JetBrains Mono";
@@ -16,6 +20,17 @@
   font-weight: 100 900;
   font-style: normal;
   font-display: block;
+}
+/* Only the code points the two text cuts leave out, so they keep every glyph they do have,
+   and declared after them in the stacks for the same reason. See LICENSE-symbols.txt. */
+@font-face {
+  font-family: "Instrument Symbols";
+  src: url("/fonts/instrument-symbols.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: block;
+  unicode-range: U+03A3, U+2190, U+2192, U+21B5, U+21BB, U+2315, U+2502, U+2514, U+25B2,
+    U+25B8, U+25BC, U+25BE, U+25C6, U+25CC, U+270E, U+2713, U+2715;
 }
 
 /* ------------------------------------------------------------------ *
@@ -43,8 +58,8 @@
   --color-m-claude: oklch(0.55 0.14 45);
   --color-m-default: oklch(0.35 0.04 250);
 
-  --font-mono: "JetBrains Mono", ui-monospace, "DejaVu Sans Mono", monospace;
-  --font-sans: "Inter Grot", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "Instrument Symbols", ui-monospace, monospace;
+  --font-sans: "Inter Grot", "Instrument Symbols", "Helvetica Neue", Arial, sans-serif;
 }
 
 /* ------------------------------------------------------------------ *

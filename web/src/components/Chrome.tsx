@@ -71,8 +71,9 @@ export function TopBar({ onPalette }: { onPalette: () => void }) {
         <KeyCap>/</KeyCap>
       </button>
 
+      {/* ↻ rather than ⟳: both text faces lack the latter, and a substituted glyph shows. */}
       <button type="button" onClick={() => void sync()} className="btn" title="re-materialize from opencode.db">
-        {busy ? "⟳ syncing" : "⟳ sync"}
+        {busy ? "↻ syncing" : "↻ sync"}
       </button>
       {status.data && (
         <span className="tape shrink-0 text-ink-faint" title={`source: ${status.data.sourceDb ?? "?"}`}>
