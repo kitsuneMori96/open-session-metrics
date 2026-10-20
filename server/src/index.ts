@@ -43,7 +43,13 @@ const app = createApp({ db: current, refresh: (full) => materialize({ force: tru
 const webDist = path.join(ROOT, "web", "dist");
 if (existsSync(webDist)) {
   app.use(express.static(webDist));
-  app.get("*splat", (_req, res) => res.sendFile(path.join(webDist, "index.html")));
+  // A missing file is a 404, never the app shell. Answering HTML to a <script> request
+  // turns a stale bundle into a blank page: the browser reports a MIME error and no
+  // component ever mounts, so there is nothing on screen to explain what happened.
+  app.get("*splat", (req, res) => {
+    if (path.extname(req.path)) return res.status(404).type("text/plain").send("not found");
+    res.sendFile(path.join(webDist, "index.html"));
+  });
   console.log(`[osm] serving built web from ${webDist}`);
 }
 
