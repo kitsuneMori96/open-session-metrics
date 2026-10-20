@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router";
+import { Link, useNavigate, useParams } from "react-router";
 import type { ExpandedState, SortingState, Updater } from "@tanstack/react-table";
 import { useAnalytics, useToolDetail, type ToolRow } from "../lib/api";
-import { useSlice } from "../lib/slice";
+import { useSlice, useSliceHref } from "../lib/slice";
 import { dur, int, pct, stamp, tok } from "../lib/format";
 import { DataTable, type Column } from "../components/DataTable";
 import { Histogram, RankBars, TimeBars } from "../components/charts/ranks";
@@ -23,7 +23,7 @@ export default function Tools() {
   const { window, facets, label } = useSlice();
   const { data, isLoading } = useAnalytics(window, facets);
   const detail = useToolDetail(window, facets, name ?? null);
-  const [params] = useSearchParams();
+  const href = useSliceHref();
   const [sorting, setSorting] = useState<SortingState>([{ id: "calls", desc: true }]);
   const [expanded] = useState<ExpandedState>({});
 
@@ -81,7 +81,7 @@ export default function Tools() {
         </span>
         <span className="flex-1" />
         {name && (
-          <Chip onClick={() => navigate(`/tools?${params.toString()}`)} title="close the detail pane">
+          <Chip onClick={() => navigate(href("/tools"))} title="close the detail pane">
             ✕ {name}
           </Chip>
         )}
@@ -97,7 +97,7 @@ export default function Tools() {
             sorting={sorting}
             onSortingChange={(u: Updater<SortingState>) => setSorting((prev) => (typeof u === "function" ? u(prev) : u))}
             expanded={expanded}
-            onRowClick={(t) => navigate(`/tools/${encodeURIComponent(t.name)}?${params.toString()}`)}
+            onRowClick={(t) => navigate(href(`/tools/${encodeURIComponent(t.name)}`))}
             activeId={name ?? null}
             rowHeight={24}
             empty="no tool calls in this slice"
@@ -215,7 +215,7 @@ export default function Tools() {
                   active.recentErrors.map((e) => (
                     <Link
                       key={`${e.at}-${e.session}`}
-                      to={`/sessions/${e.session}?${params.toString()}`}
+                      to={href(`/sessions/${e.session}`)}
                       className="block border-b border-rule/60 py-1 no-underline last:border-b-0 hover:bg-ink/5"
                     >
                       <div className="flex items-baseline gap-2">

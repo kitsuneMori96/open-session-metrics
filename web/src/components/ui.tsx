@@ -116,6 +116,7 @@ export function Tile({
   tone = "ink",
   note,
   onClick,
+  lowerIsBetter,
 }: {
   label: string;
   value: string;
@@ -125,8 +126,11 @@ export function Tile({
   tone?: Tone;
   note?: string;
   onClick?: () => void;
+  /** Metrics where growth is the bad news (errors, spend): a fall is what we want. */
+  lowerIsBetter?: boolean;
 }) {
   const flat = delta === undefined || Math.abs(delta) < 0.005;
+  const good = lowerIsBetter ? (delta ?? 0) < 0 : (delta ?? 0) > 0;
   return (
     <div
       className={clsx(
@@ -141,7 +145,7 @@ export function Tile({
         <span className="flex-1" />
         {delta !== undefined && (
           <span
-            className={clsx("tape tabular shrink-0", flat ? "text-ink-faint" : delta >= 0 ? "text-good" : "text-danger")}
+            className={clsx("tape tabular shrink-0", flat ? "text-ink-faint" : good ? "text-good" : "text-danger")}
             title={`previous window: ${prev ?? "—"}`}
           >
             {flat ? "±0" : signed(delta)}

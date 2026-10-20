@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { useFacets, useSearch, type Facets } from "../lib/api";
 import { useDebounced } from "../lib/useKeys";
-import { useSlice } from "../lib/slice";
+import { useSlice, useSliceHref } from "../lib/slice";
 import { PRESETS } from "../lib/api";
 import { ago, int } from "../lib/format";
 import clsx from "clsx";
@@ -24,6 +24,7 @@ interface Command {
  */
 export default function Palette({ onClose }: { onClose: () => void }) {
   const navigate = useNavigate();
+  const href = useSliceHref();
   const { setPreset, setWindow, setFacet, reset } = useSlice();
   const facets = useFacets();
   const [q, setQ] = useState("");
@@ -34,7 +35,7 @@ export default function Palette({ onClose }: { onClose: () => void }) {
 
   const commands = useMemo<Command[]>(() => {
     const out: Command[] = [];
-    const go = (to: string, label: string) => out.push({ id: `go:${to}`, group: "go", label, run: () => { navigate(to); onClose(); } });
+    const go = (to: string, label: string) => out.push({ id: `go:${to}`, group: "go", label, run: () => { navigate(href(to)); onClose(); } });
     go("/overview", "Overview — dashboard");
     go("/sessions", "Sessions — every session in the slice");
     go("/tools", "Tools — call volume, latency, failures");
@@ -107,13 +108,13 @@ export default function Palette({ onClose }: { onClose: () => void }) {
         label: t.name,
         hint: `${int(t.calls)} calls`,
         run: () => {
-          navigate(`/tools/${encodeURIComponent(t.name)}`);
+          navigate(href(`/tools/${encodeURIComponent(t.name)}`));
           onClose();
         },
       });
     }
     return out;
-  }, [facets.data, navigate, onClose, reset, setFacet, setPreset, setWindow]);
+  }, [facets.data, href, navigate, onClose, reset, setFacet, setPreset, setWindow]);
 
   const needle = q.trim().toLowerCase();
   const filtered = useMemo(
@@ -131,13 +132,13 @@ export default function Palette({ onClose }: { onClose: () => void }) {
         label: h.title ?? h.id,
         hint: `${h.project} · ${h.hits} matches · ${ago(h.updated)}`,
         run: () => {
-          navigate(`/sessions/${h.id}`);
+          navigate(href(`/sessions/${h.id}`));
           onClose();
         },
       })),
       ...filtered,
     ],
-    [sessionHits, filtered, navigate, onClose]
+    [sessionHits, filtered, href, navigate, onClose]
   );
 
   useEffect(() => setCursor(0), [needle, debounced]);

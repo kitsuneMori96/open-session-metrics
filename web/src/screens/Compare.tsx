@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { Link, useSearchParams } from "react-router";
 import { useAnalytics, useTranscript, type SessionRow, type Turn } from "../lib/api";
-import { useSlice } from "../lib/slice";
+import { useSlice, useSliceHref } from "../lib/slice";
 import { dur, int, pct, rate, shortModel, tok, usd, usdPerM } from "../lib/format";
 import { TimeBars } from "../components/charts/ranks";
 import { DeltaBar } from "../components/charts/ranks";
@@ -121,8 +121,9 @@ function Picker({
 }
 
 function Head({ s, turns }: { s: SessionRow; turns: Turn[] }) {
+  const href = useSliceHref();
   return (
-    <Panel title={<Link to={`/sessions/${s.id}`} className="no-underline hover:underline">{s.title ?? s.firstPrompt ?? s.id}</Link>} right={<span className="tape text-ink-faint">{shortModel(s.model)}</span>}>
+    <Panel title={<Link to={href(`/sessions/${s.id}`)} className="no-underline hover:underline">{s.title ?? s.firstPrompt ?? s.id}</Link>} right={<span className="tape text-ink-faint">{shortModel(s.model)}</span>}>
       <div className="tape text-ink-faint">
         {s.project} · {s.agent ?? "main"} · {int(turns.length)} turns · {tok(s.tokens)} tokens · {s.cost > 0 ? usd(s.cost) : "free"}
       </div>

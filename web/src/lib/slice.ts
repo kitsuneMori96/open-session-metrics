@@ -130,3 +130,36 @@ export function useSlice(): SliceState {
 
 /** The same state, readable from any component under the router. */
 export const windowTimes = (w: WindowSpec, now = Date.now()): { from: number; to: number } => resolveWindow(w, now);
+
+/**
+ * Only these travel between screens. The window is relative to now, so it has to stay
+ * symbolic in the URL (`range=30d`, not two timestamps that age); a brushed window is
+ * absolute and travels as `from`/`to`. `a`, `b`, `q`, `split` belong to one screen.
+ */
+const SLICE_KEYS = ["range", "from", "to", ...FACET_KEYS] as const;
+
+/**
+ * Build hrefs that keep the slice.
+ *
+ * The slice bar sits above every route, so changing screens must not quietly drop back to
+ * the default window — that reads as the app forgetting what you asked for. The params
+ * stay in the URL rather than in memory, so every view is still a link you can copy.
+ */
+export function useSliceHref(): (to: string) => string {
+  const [params] = useSearchParams();
+  return useCallback(
+    (to: string) => {
+      const [path, search = ""] = to.split("?");
+      const next = new URLSearchParams();
+      for (const key of SLICE_KEYS) {
+        const value = params.get(key);
+        if (value !== null) next.set(key, value);
+      }
+      // the target's own params win, e.g. /compare?a=…&b=…
+      for (const [key, value] of new URLSearchParams(search)) next.set(key, value);
+      const query = next.toString();
+      return query ? `${path}?${query}` : path;
+    },
+    [params]
+  );
+}

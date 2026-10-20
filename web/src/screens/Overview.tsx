@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from "react-router";
 import { DEFAULT_PRESET, useAnalytics, type SessionRow } from "../lib/api";
 import { TOKEN_CLASSES, paletteFor } from "../lib/chart";
 import { dur, int, pct, pctInt, rate, shortModel, tok, usd, usdPerM } from "../lib/format";
-import { useSlice } from "../lib/slice";
+import { useSlice, useSliceHref } from "../lib/slice";
 import { SessionScatter } from "../components/charts/scatter";
 import { TimeArea, Sparkline } from "../components/charts/series";
 import { ActivityHeatmap, HourStrip } from "../components/charts/heat";
@@ -25,6 +25,7 @@ export default function Overview() {
   const { window, facets, slice, label, setWindow, setPreset, setFacet } = useSlice();
   const { data, isLoading, isFetching } = useAnalytics(window, facets);
   const [, setParams] = useSearchParams();
+  const href = useSliceHref();
   const navigate = useNavigate();
   const [split, setSplit] = useState<"class" | "model" | "cost">("class");
   const [muted, setMuted] = useState<Set<string>>(new Set());
@@ -69,7 +70,7 @@ export default function Overview() {
   const seriesSessions = series?.buckets.map((b) => b.sessions) ?? [];
   const hasBaseline = slice.from > 0;
 
-  const openSession = (id: string) => navigate(`/sessions/${id}?${params.toString()}`);
+  const openSession = (id: string) => navigate(href(`/sessions/${id}`));
   const apiRate = totals.tools > 0 ? totals.errors / totals.tools : 0;
 
   return (
@@ -107,7 +108,7 @@ export default function Overview() {
             delta={kpis.tools.delta}
             prev={int(kpis.tools.prev)}
             spark={<Sparkline values={tools.map((t) => t.calls)} color="var(--color-ink-soft)" />}
-            onClick={() => navigate("/tools")}
+            onClick={() => navigate(href("/tools"))}
             note="open the tools screen"
           />
           <Tile
@@ -117,6 +118,12 @@ export default function Overview() {
             prev={int(kpis.errors.prev)}
             tone={totals.errors > 0 ? "danger" : "faint"}
             spark={<Sparkline values={seriesErrors} color="var(--color-danger)" />}
+            lowerIsBetter
+            note={
+              hasBaseline
+                ? "failures, so a rise is the bad direction — change against the previous window of equal length"
+                : "failures, so a rise is the bad direction — all time, no earlier window to compare"
+            }
           />
           <Tile
             label="sessions"
@@ -259,7 +266,7 @@ export default function Overview() {
                 right2: dur(t.p95Ms),
                 sub: `${int(t.calls)} calls · ${t.errors} errors · median ${dur(t.p50Ms)} · p95 ${dur(t.p95Ms)}`,
                 color: t.errors > 0 ? "var(--color-warning)" : undefined,
-                onClick: () => navigate(`/tools/${encodeURIComponent(t.name)}?${params.toString()}`),
+                onClick: () => navigate(href(`/tools/${encodeURIComponent(t.name)}`)),
               }))}
               max={toolPeak}
               empty="no tool calls in this window"

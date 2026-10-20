@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router";
+import { useNavigate } from "react-router";
 import { useAnalytics, type SessionRow } from "../lib/api";
-import { useSlice } from "../lib/slice";
+import { useSlice, useSliceHref } from "../lib/slice";
 import { dur, int, pct, shortModel, stamp, tok, usd } from "../lib/format";
 import { modelColor } from "../lib/format";
 import { Caret, DataTable, type Column } from "../components/DataTable";
@@ -25,7 +25,7 @@ export default function Sessions() {
   const { window, facets, slice, label } = useSlice();
   const { data, isLoading } = useAnalytics(window, facets);
   const navigate = useNavigate();
-  const [params] = useSearchParams();
+  const href = useSliceHref();
   const [sorting, setSorting] = useState<SortingState>([{ id: "updated", desc: true }]);
   const [expanded, setExpanded] = useState<ExpandedState>({});
   const [query, setQuery] = useState("");
@@ -263,7 +263,7 @@ export default function Sessions() {
           onSortingChange={(u: Updater<SortingState>) => setSorting((prev) => (typeof u === "function" ? u(prev) : u))}
           expanded={expanded}
           onExpandedChange={(u: Updater<ExpandedState>) => setExpanded((prev) => (typeof u === "function" ? u(prev) : u))}
-          onRowClick={(n) => navigate(`/sessions/${n.id}?${params.toString()}`)}
+          onRowClick={(n) => navigate(href(`/sessions/${n.id}`))}
           onRowHover={(n) => setHover(n?.id ?? null)}
           activeId={hover}
           empty="no session in this slice matches"

@@ -1,8 +1,9 @@
 import { useCallback, useState } from "react";
-import { Navigate, Route, Routes, useNavigate } from "react-router";
+import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { refresh } from "./lib/api";
 import { useKeys } from "./lib/useKeys";
+import { useSliceHref } from "./lib/slice";
 import { NAV, SliceBar, TopBar } from "./components/Chrome";
 import Palette from "./components/Palette";
 import Overview from "./screens/Overview";
@@ -21,6 +22,8 @@ import Compare from "./screens/Compare";
 export default function App() {
   const [palette, setPalette] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
+  const href = useSliceHref();
   const qc = useQueryClient();
 
   const sync = useCallback(async () => {
@@ -35,7 +38,7 @@ export default function App() {
   useKeys((e) => {
     const hit = NAV.find((n) => n.key === e.key);
     if (hit) {
-      navigate(hit.to);
+      navigate(href(hit.to));
       return;
     }
     if (e.key === "/") {
@@ -56,14 +59,14 @@ export default function App() {
       <SliceBar />
       <main className="flex min-h-0 flex-1 flex-col">
         <Routes>
-          <Route path="/" element={<Navigate to="/overview" replace />} />
+          <Route path="/" element={<Navigate to={`/overview${location.search}`} replace />} />
           <Route path="/overview" element={<Overview />} />
           <Route path="/sessions" element={<Sessions />} />
           <Route path="/sessions/:id" element={<SessionDetail />} />
           <Route path="/tools" element={<Tools />} />
           <Route path="/tools/:name" element={<Tools />} />
           <Route path="/compare" element={<Compare />} />
-          <Route path="*" element={<Navigate to="/overview" replace />} />
+          <Route path="*" element={<Navigate to={`/overview${location.search}`} replace />} />
         </Routes>
       </main>
       {palette && <Palette onClose={() => setPalette(false)} />}

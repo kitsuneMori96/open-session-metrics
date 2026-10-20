@@ -4,7 +4,7 @@ import { useCallback, useState } from "react";
 import clsx from "clsx";
 import { PRESETS, useFacets, useStatus } from "../lib/api";
 import { clockSec, int, tok } from "../lib/format";
-import { useSlice } from "../lib/slice";
+import { useSlice, useSliceHref } from "../lib/slice";
 import { Chip, KeyCap } from "./ui";
 
 export const NAV = [
@@ -24,6 +24,7 @@ export function TopBar({ onPalette }: { onPalette: () => void }) {
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
   const location = useLocation();
+  const href = useSliceHref();
 
   const sync = useCallback(async () => {
     setBusy(true);
@@ -50,7 +51,7 @@ export function TopBar({ onPalette }: { onPalette: () => void }) {
           return (
             <NavLink
               key={item.to}
-              to={item.to}
+              to={href(item.to)}
               className={clsx(
                 "tape flex items-center gap-1 px-2 py-[3px] no-underline",
                 active ? "bg-ink font-bold text-paper" : "text-ink-soft hover:bg-ink/5"

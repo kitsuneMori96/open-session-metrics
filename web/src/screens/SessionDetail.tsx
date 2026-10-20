@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router";
+import { Link, useNavigate, useParams } from "react-router";
 import { useAnalytics, useTranscript, type Bucket, type SessionRow, type Turn } from "../lib/api";
 import { TOKEN_CLASSES } from "../lib/chart";
 import {
@@ -17,7 +17,7 @@ import {
   usdPerM,
 } from "../lib/format";
 import { modelColor } from "../lib/format";
-import { useSlice } from "../lib/slice";
+import { useSlice, useSliceHref } from "../lib/slice";
 import Transcript from "../components/Transcript";
 import { Sparkline, StackRule, TimeArea } from "../components/charts/series";
 import { TimeBars } from "../components/charts/ranks";
@@ -40,7 +40,7 @@ export default function SessionDetail() {
   const { data, isLoading } = useTranscript(id);
   const list = useAnalytics(window, facets);
   const navigate = useNavigate();
-  const [params] = useSearchParams();
+  const link = useSliceHref();
 
   const [filter, setFilter] = useState<LineFilter>("all");
   const [query, setQuery] = useState("");
@@ -174,12 +174,12 @@ export default function SessionDetail() {
 
   const s = data.session;
   const title = s.title ?? "untitled session";
-  const href = (sid: string) => `/sessions/${sid}?${params.toString()}`;
+  const href = (sid: string) => link(`/sessions/${sid}`);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <header className="hairline-b flex shrink-0 flex-wrap items-baseline gap-x-3 gap-y-1 bg-paper-raised/60 px-3 py-1.5">
-        <Link to={`/sessions?${params.toString()}`} className="tape shrink-0 text-flow no-underline hover:underline">
+        <Link to={link("/sessions")} className="tape shrink-0 text-flow no-underline hover:underline">
           ← sessions
         </Link>
         <span className="tape min-w-0 shrink truncate font-semibold" title={title}>
@@ -260,7 +260,7 @@ export default function SessionDetail() {
             ) : (
               toolsByName.map(([name, t]) => (
                 <div key={name} className="flex items-baseline gap-2 py-px">
-                  <Link to={`/tools/${encodeURIComponent(name)}?${params.toString()}`} className="tape w-[92px] shrink-0 truncate no-underline hover:underline" title={`open ${name}`}>
+                  <Link to={link(`/tools/${encodeURIComponent(name)}`)} className="tape w-[92px] shrink-0 truncate no-underline hover:underline" title={`open ${name}`}>
                     {name}
                   </Link>
                   <RateBar rate={t.calls > 0 ? t.errors / t.calls : 0} width={54} />
