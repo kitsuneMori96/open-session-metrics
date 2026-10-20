@@ -68,12 +68,20 @@ export const windowKey = (w: WindowSpec): string =>
 
 export const windowLabel = (w: WindowSpec): string => {
   if (w.kind === "preset") return presetOf(w.id)?.label ?? "all";
-  const d = (ts: number) => {
+  const p = (n: number) => String(n).padStart(2, "0");
+  const day = (ts: number) => {
     const x = new Date(ts);
-    const p = (n: number) => String(n).padStart(2, "0");
     return `${p(x.getMonth() + 1)}-${p(x.getDate())}`;
   };
-  return `${d(w.from)} → ${d(w.to)}`;
+  const time = (ts: number) => {
+    const x = new Date(ts);
+    return `${p(x.getHours())}:${p(x.getMinutes())}`;
+  };
+  // A brushed or clicked window is often shorter than a day, where "10-18 → 10-18"
+  // would describe an hour and a month with the same five characters.
+  if (w.to - w.from >= 22 * 3600000) return `${day(w.from)} → ${day(w.to)}`;
+  if (day(w.from) === day(w.to - 1)) return `${day(w.from)} ${time(w.from)}–${time(w.to)}`;
+  return `${day(w.from)} ${time(w.from)} → ${day(w.to)} ${time(w.to)}`;
 };
 
 export const sliceQuery = (s: Slice): string => {

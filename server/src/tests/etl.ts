@@ -335,6 +335,8 @@ async function main() {
   ok("every auto answer fits the budget",
     GRANULARITIES.every((g) => g !== pickGranularity(decadeFrom, decadeTo) || fit(g)));
   ok("auto keeps hourly for three days", pickGranularity(decadeTo - 3 * DAY_MS, decadeTo) === "hour");
+  ok("auto drops to five minutes inside half a day", pickGranularity(decadeTo - 6 * HOUR_MS, decadeTo) === "5m");
+  ok("auto stays hourly for a day", pickGranularity(decadeTo - DAY_MS, decadeTo) === "hour");
   ok("auto keeps daily up to half a year", pickGranularity(decadeTo - 180 * DAY_MS, decadeTo) === "day");
   ok("an explicit five minutes is honoured when it fits",
     pickGranularity(decadeTo - 6 * HOUR_MS, decadeTo, "5m") === "5m");

@@ -200,14 +200,19 @@ export function bucketIndexer(gran: Granularity, starts: number[]): (key: unknow
  * The unit for a window.
  *
  * Without an explicit request the axis stays at the unit a human would pick for that span
- * (hourly up to three days, daily up to half a year, weekly beyond) and only coarsens when
- * that would overflow `MAX_COLS`. An explicit request may be finer — five minutes is
- * reachable that way — but it is still capped, so `gran=5m` over a decade answers monthly
- * instead of shipping a million columns.
+ * (five minutes inside half a day, hourly up to three days, daily up to half a year,
+ * weekly beyond) and only coarsens when that would overflow `MAX_COLS`. An explicit
+ * request may be finer or coarser, but it is still capped, so `gran=5m` over a decade
+ * answers monthly instead of shipping a million columns.
+ *
+ * The five-minute floor is what makes a click on the series a drill-down: zoom into one
+ * day and the axis is hourly, zoom into one hour and it is five-minute — a two-column
+ * "hourly" answer to a one-hour question would be a dead end.
  */
 export function pickGranularity(from: number, to: number, requested: Granularity | null = null): Granularity {
   const span = Math.max(0, to - from);
-  const natural: Granularity = span <= 3 * DAY_MS ? "hour" : span <= 180 * DAY_MS ? "day" : "week";
+  const natural: Granularity =
+    span <= 12 * HOUR_MS ? "5m" : span <= 3 * DAY_MS ? "hour" : span <= 180 * DAY_MS ? "day" : "week";
   let unit = requested ?? natural;
   while (bucketCount(from, to, unit) > MAX_COLS) {
     const next = GRANULARITIES[GRANULARITIES.indexOf(unit) + 1];
