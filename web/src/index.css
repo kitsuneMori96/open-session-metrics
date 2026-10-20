@@ -149,19 +149,36 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* Digit wheels (components/Roll.tsx). The cell stays an inline-block with a text
-   baseline; the outgoing glyph is stacked on top of the one in flow, both are painted the
-   whole time, so nothing here may clip or hide either of them. */
+/* Digit wheels (components/Roll.tsx). The cell stays an inline-block with a text baseline;
+   while rolling, the two moving glyphs live in a band clipped to the digit's ink box, and
+   the glyph in flow is the anchor the band is measured against. */
 .roll-cell {
   display: inline-block;
   position: relative;
 }
-.roll-cur {
-  display: inline-block; /* transforms do not apply to non-replaced inline boxes */
+/* The current glyph stays in flow: it spaces the number and stays readable to assistive
+   tech. While the strip covers it, it is merely left unpainted. */
+.roll-cell.is-rolling .roll-now {
+  color: transparent;
 }
-.roll-out {
+/* The band is the glyph's ink box, not its line box. A digit's ink fills ~0.74 em of a
+   ~1 em line; clipping the moving glyphs to the ink is what lets the departing and
+   arriving digits meet edge to edge instead of leaving a blank stripe between them. */
+.roll-band {
   position: absolute;
-  inset: 0;
+  left: 0;
+  width: 100%;
+  top: var(--ink-top);
+  height: var(--ink-h);
+  overflow: hidden;
+  pointer-events: none;
+}
+.roll-band > span {
+  display: block;
+  /* Cancel the band's own offset: the strip's line box must start at the cell's top, so the
+     glyph inside a band lands exactly where the glyph in flow sits. */
+  margin-top: calc(-1 * var(--ink-top));
+  line-height: inherit;
 }
 
 /* search hit inside a transcript */
