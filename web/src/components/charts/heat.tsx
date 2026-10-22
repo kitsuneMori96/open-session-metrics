@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { int } from "../../lib/format";
 import { Figure, Tip, TipRow, TipTitle, useTip } from "./base";
+import { fingerprint, useWipe } from "../../lib/motion";
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -33,6 +34,7 @@ export function ActivityHeatmap({
       label={label}
       height={height}
       right={right}
+      wipeKey={fingerprint(heat.flat())}
       note={
         <>
           peak {int(peak)} turns in one weekday-hour · column shading is per hour, so a
@@ -136,10 +138,12 @@ export function ActivityHeatmap({
 /** 24-hour profile as a single row of columns, for the corner of a panel. */
 export function HourStrip({ hourly, color = "var(--color-good)", height = 34 }: { hourly: number[]; color?: string; height?: number }) {
   const tip = useTip();
+  const strip = useRef<HTMLDivElement | null>(null);
+  useWipe(strip, fingerprint(hourly));
   const peak = Math.max(1, ...hourly);
   const total = hourly.reduce((a, b) => a + b, 0);
   return (
-    <div className="relative flex items-end gap-px" style={{ height }} onMouseLeave={tip.hide}>
+    <div ref={strip} className="relative flex items-end gap-px" style={{ height }} onMouseLeave={tip.hide}>
       {hourly.map((v, h) => (
         // The hit area is the full column, not the bar: an empty hour draws at zero
         // height and would otherwise be the one hour with no reading at all.

@@ -8,6 +8,7 @@ import type { Bucket } from "../../lib/api";
 import { RULE, RULE_STRONG, SOFT, granLabel, tickIndices, timeTick, timeTooltip, yTicks, type GranularityLike } from "../../lib/chart";
 import { AxisX, AxisY, Figure, Rows, Tip, TipNote, TipRow, TipTitle, useTip, type Box } from "./base";
 import { tok } from "../../lib/format";
+import { fingerprint } from "../../lib/motion";
 
 export interface SeriesKey {
   key: string;
@@ -151,6 +152,7 @@ export function TimeArea({
         </span>
       }
       note={peak === 0 ? "no assistant traffic in this window" : undefined}
+      wipeKey={fingerprint(totals, `${buckets.length}:${buckets[buckets.length - 1]?.ts ?? 0}:${shown.length}`)}
     >
       {(box: Box) => {
         const { margin, inner, width } = box;

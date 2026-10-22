@@ -6,6 +6,7 @@ import { AxisBottom, AxisLeft } from "@visx/axis";
 import type { AxisScale } from "@visx/axis";
 import clsx from "clsx";
 import { FAINT, MARGIN, RULE_STRONG } from "../../lib/chart";
+import { DUR, useWipe } from "../../lib/motion";
 
 /* ------------------------------------------------------------------ *
  * Figure furniture
@@ -31,6 +32,7 @@ export function Figure({
   note,
   children,
   className,
+  wipeKey,
 }: {
   label: ReactNode;
   right?: ReactNode;
@@ -38,8 +40,15 @@ export function Figure({
   note?: ReactNode;
   children: (box: Box) => ReactNode;
   className?: string;
+  /**
+   * A fingerprint of what is plotted. When it changes, the plot is redrawn with
+   * a wipe — never on mount, and never for a poll that returned the same content.
+   */
+  wipeKey?: string | number;
 }) {
   const margin = MARGIN;
+  const plot = useRef<HTMLDivElement | null>(null);
+  useWipe(plot, wipeKey);
   return (
     <div className={clsx("figure min-w-0", className)}>
       <div className="mb-1 flex items-baseline gap-2">
@@ -47,7 +56,7 @@ export function Figure({
         <span className="h-px min-w-2 flex-1 bg-rule" />
         {right && <span className="tape shrink-0 text-ink-faint">{right}</span>}
       </div>
-      <div className="relative" style={{ height }}>
+      <div ref={plot} className="relative" style={{ height }}>
         <ParentSize debounceTime={0}>
           {({ width, height: h }) =>
             width > 0 && h > 0 ? (
@@ -75,14 +84,43 @@ export interface TipState {
   x: number;
   y: number;
   node: ReactNode;
+  /** Set while the card is on its way out; a new `show` cancels the exit. */
+  closing?: boolean;
 }
 
+/**
+ * A tooltip that leaves faster than it arrives.
+ *
+ * The exit is the one place the interface keeps a node mounted for a beat, so
+ * it is also the one place where a stale reading can be on screen after the
+ * pointer has moved. 60ms is short enough that a sweep across a chart replaces
+ * the card before the eye lands on it, and long enough that a deliberate
+ * departure does not just vanish.
+ */
 export function useTip() {
   const [tip, setTip] = useState<TipState | null>(null);
+  const timer = useRef<number | null>(null);
+  const stop = () => {
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current);
+      timer.current = null;
+    }
+  };
+  useEffect(() => stop, []);
   return {
     tip,
-    show: (x: number, y: number, node: ReactNode) => setTip({ x, y, node }),
-    hide: () => setTip(null),
+    show: (x: number, y: number, node: ReactNode) => {
+      stop();
+      setTip({ x, y, node });
+    },
+    hide: () => {
+      stop();
+      setTip((t) => (t ? { ...t, closing: true } : t));
+      timer.current = window.setTimeout(() => {
+        timer.current = null;
+        setTip(null);
+      }, DUR.out);
+    },
   };
 }
 
@@ -163,7 +201,7 @@ export function Tip({ tip }: { tip: TipState | null }) {
       {createPortal(
         <div
           ref={box}
-          className="tip"
+          className={clsx("tip", tip.closing ? "ink-out" : "ink-fast")}
           style={{
             position: "fixed",
             left: pos?.left ?? 0,

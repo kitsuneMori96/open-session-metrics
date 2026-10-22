@@ -5,7 +5,7 @@ import { useSlice, useSliceHref } from "../lib/slice";
 import { dur, int, pct, shortModel, stamp, tok, usd } from "../lib/format";
 import { modelColor } from "../lib/format";
 import { Caret, DataTable, type Column } from "../components/DataTable";
-import { Chip, Panel, RateBar, Spinner } from "../components/ui";
+import { Chip, Panel, RateBar, Skeleton, Spinner } from "../components/ui";
 import { BaseHints, StatusBar } from "../components/Chrome";
 import { StackRule } from "../components/charts/series";
 import type { ExpandedState, SortingState, Updater } from "@tanstack/react-table";
@@ -223,7 +223,7 @@ export default function Sessions() {
     ];
   }, []);
 
-  if (pages.isLoading || analytics.isLoading) return <Spinner label="reading the store" />;
+  if (pages.isLoading || analytics.isLoading) return <Skeleton tiles={4} rows={1} />;
   if (!head) return <Spinner label="no sessions in this window" />;
 
   const sliceSessions = analytics.data?.totals.sessions ?? 0;

@@ -6,7 +6,7 @@ import { useSlice, useSliceHref } from "../lib/slice";
 import { dur, int, pct, stamp, tok } from "../lib/format";
 import { DataTable, type Column } from "../components/DataTable";
 import { Histogram, RankBars, TimeBars } from "../components/charts/ranks";
-import { Chip, Empty, Panel, RateBar, SectionHeader, Spinner, Stat } from "../components/ui";
+import { Chip, Empty, Panel, RateBar, SectionHeader, Skeleton, Spinner, Stat } from "../components/ui";
 import { BaseHints, StatusBar } from "../components/Chrome";
 
 /**
@@ -68,7 +68,7 @@ export default function Tools() {
     []
   );
 
-  if (isLoading || !data) return <Spinner label="reading the store" />;
+  if (isLoading || !data) return <Skeleton tiles={4} rows={1} />;
 
   const active = detail.data;
 

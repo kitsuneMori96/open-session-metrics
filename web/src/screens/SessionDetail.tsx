@@ -21,7 +21,7 @@ import { useSlice, useSliceHref } from "../lib/slice";
 import Transcript from "../components/Transcript";
 import { Sparkline, StackRule, TimeArea } from "../components/charts/series";
 import { TimeBars } from "../components/charts/ranks";
-import { Chip, Empty, Panel, RateBar, SectionHeader, Spinner, Stat } from "../components/ui";
+import { Chip, Empty, Panel, RateBar, SectionHeader, Skeleton, Stat } from "../components/ui";
 import { StatusBar } from "../components/Chrome";
 import type { LineFilter } from "../lib/transcript";
 
@@ -37,7 +37,7 @@ import type { LineFilter } from "../lib/transcript";
 export default function SessionDetail() {
   const { id = "" } = useParams();
   const { window, facets, gran, label } = useSlice();
-  const { data, isLoading } = useTranscript(id);
+  const { data, isLoading, isError } = useTranscript(id);
   const list = useAnalytics(window, facets, gran);
   // The dashboard only carries a sample of sessions; ask for this one's family directly.
   const context = useSessionContext(window, facets, id ?? null);
@@ -172,7 +172,10 @@ export default function SessionDetail() {
     return [...map.entries()].sort((a, b) => b[1].calls - a[1].calls);
   }, [turns]);
 
-  if (isLoading || !data) return <Spinner label="reading the transcript" />;
+  // A transcript that 404s must not look like one that is still loading: the
+  // skeleton breathes, and a breathing screen with nothing behind it never ends.
+  if (isError) return <Empty>no session {id} in the store — it may have been pruned</Empty>;
+  if (isLoading || !data) return <Skeleton tiles={4} rows={1} />;
 
   const s = data.session;
   const title = s.title ?? "untitled session";

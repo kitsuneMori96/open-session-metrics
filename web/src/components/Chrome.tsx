@@ -73,7 +73,12 @@ export function TopBar({ onPalette }: { onPalette: () => void }) {
       </button>
 
       {/* ↻ rather than ⟳: both text faces lack the latter, and a substituted glyph shows. */}
-      <button type="button" onClick={() => void sync()} className="btn" title="re-materialize from opencode.db">
+      <button
+        type="button"
+        onClick={() => void sync()}
+        className={clsx("btn", busy && "pulse")}
+        title="re-materialize from opencode.db"
+      >
         {busy ? "↻ syncing" : "↻ sync"}
       </button>
       {status.data && (

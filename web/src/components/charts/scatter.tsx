@@ -8,6 +8,7 @@ import { FAINT, logRange, logScale, paletteFor, tickIndices, yTicks } from "../.
 import { AxisX, AxisY, Figure, Legend, Rows, Tip, TipNote, TipRow, TipTitle } from "./base";
 import { dayStamp, dur, int, shortModel, stamp, tok, usd } from "../../lib/format";
 import { sessionTitle } from "../../lib/format";
+import { fingerprint } from "../../lib/motion";
 
 export interface ScatterField {
   key: string;
@@ -94,6 +95,7 @@ export function SessionScatter({
     <Figure
       label="sessions"
       height={250}
+      wipeKey={fingerprint(sessions.map((s) => s.tokens), `${sessions.length}:${xKey}:${yKey}:${colorBy}:${log}`)}
       right={
         <span className="flex items-center gap-1">
           <select className="field" value={xKey} onChange={(e) => onAxes(e.target.value, yKey)} title="x axis">

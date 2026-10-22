@@ -6,6 +6,7 @@ import clsx from "clsx";
 import { DANGER, tickIndices, timeTick, timeTooltip, yTicks } from "../../lib/chart";
 import { AxisX, AxisY, Figure, Rows, Tip, TipNote, TipTitle, useTip } from "./base";
 import { int, tok } from "../../lib/format";
+import { fingerprint } from "../../lib/motion";
 import type { GranularityLike } from "../../lib/chart";
 
 /* ------------------------------------------------------------------ *
@@ -174,7 +175,13 @@ export function TimeBars({
   const peak = Math.max(...values.map((v) => v.value), 1);
 
   return (
-    <Figure label={label} height={height} right={right} note={note}>
+    <Figure
+      label={label}
+      height={height}
+      right={right}
+      note={note}
+      wipeKey={fingerprint(values.map((v) => v.value), `${values.length}:${values[0]?.ts ?? 0}`)}
+    >
       {(box) => {
         const { margin, inner, width } = box;
         const plotH = inner.height;
@@ -286,7 +293,7 @@ export function Histogram({
   const peak = Math.max(...bins.map((b) => b.count), 1);
   const total = bins.reduce((a, b) => a + b.count, 0);
   return (
-    <Figure label={label} height={height} right={right} note={note}>
+    <Figure label={label} height={height} right={right} note={note} wipeKey={fingerprint(bins.map((b) => b.count), bins.length)}>
       {(box) => {
         const { margin, inner, width } = box;
         const plotH = inner.height - 12;

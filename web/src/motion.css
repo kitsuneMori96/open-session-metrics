@@ -1,0 +1,109 @@
+/* ------------------------------------------------------------------ *
+ * Motion: one curve, three durations, six verbs.
+ *
+ * The instrument is a plotter, not a phone app. Things do not spring, lift,
+ * bounce or grow into place: ink settles, a rule draws along its length, a
+ * value rolls over, and a panel swaps its contents. Everything below is
+ * derived from the one animation the interface already had — the digit
+ * wheel in components/Roll.tsx — so a number rolling and a chart being
+ * redrawn read as the same hand.
+ *
+ * Rules the rest of the app may rely on:
+ *   - durations are 90 / 120 / 170 / 260 ms, nothing else
+ *   - motion is transform, opacity or clip-path; never width/height/top/left
+ *   - data never animates on first paint, scroll, resize or a background poll
+ *   - no element ever starts from a style it does not already have at rest
+ * ------------------------------------------------------------------ */
+
+:root {
+  --motion-fast: 90ms; /* pointer state: colour, border, focus */
+  --motion-base: 170ms; /* a value changed: roll, row, overlay */
+  --motion-middle: 120ms; /* caret / glyph turn */
+  --motion-slow: 260ms; /* a shape changed: figure redraw */
+  --motion-out: 60ms; /* leaving is always faster than arriving */
+  --ease-mech: cubic-bezier(0.4, 0, 0.2, 1); /* Roll's curve: decisive, clean stop */
+  --ease-track: cubic-bezier(0.65, 0, 0.35, 1); /* reversible: brush, drawer */
+  --stagger: 12ms; /* same interval as the digit wheels */
+}
+
+/* Press — the only pointer motion is ink. No translation, no shadow, no growth:
+   a control that moves under the pointer reads as a toy. */
+button,
+select,
+input,
+a,
+.grid-row,
+.press {
+  transition-property: color, background-color, border-color, box-shadow, opacity;
+  transition-duration: var(--motion-fast);
+  transition-timing-function: var(--ease-mech);
+}
+
+/* Ink — appears in place. Two pixels of rise is enough to say "this just
+   arrived"; anything more reads as a card flying in from off-screen. */
+@keyframes ink-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+}
+@keyframes ink-out {
+  to {
+    opacity: 0;
+    transform: translateY(-1px);
+  }
+}
+.ink {
+  animation: ink-in var(--motion-base) var(--ease-mech) both;
+}
+.ink-fast {
+  animation: ink-in var(--motion-fast) var(--ease-mech) both;
+}
+.ink-out {
+  animation: ink-out var(--motion-out) var(--ease-mech) both;
+}
+
+/* Turn — a glyph that reports direction (caret, sort arrow). Rotation is the
+   only motion a control is allowed: the row itself never moves. */
+.turn {
+  display: inline-block;
+  /* Tailwind v4 rotates with the `rotate` property, not `transform`; both are
+     listed so a glyph turns whichever one the utility writes. */
+  transition:
+    rotate var(--motion-middle) var(--ease-mech),
+    transform var(--motion-middle) var(--ease-mech),
+    opacity var(--motion-fast) var(--ease-mech);
+}
+
+/* Pulse — the one loop in the interface. It marks work in progress (a sync,
+   a first read), never the quiet refresh of data that is already on screen. */
+@keyframes m-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+.pulse {
+  animation: m-pulse 1.6s var(--ease-track) infinite;
+}
+
+/* Hairline placeholder for a first read. A skeleton made of blocks would be a
+   different material; these are the same rules the page will draw, dimmed. */
+.skel {
+  background: var(--color-rule-strong);
+  opacity: 0.5;
+}
+
+/* Wipe is driven from lib/motion.ts (WAAPI) because it has to restart on a
+   data key, not on mount — see useWipe(). */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    transition-delay: 0ms !important;
+  }
+}

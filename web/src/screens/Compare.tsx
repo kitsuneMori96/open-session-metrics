@@ -5,7 +5,7 @@ import { useSlice, useSliceHref } from "../lib/slice";
 import { dur, int, pct, rate, shortModel, tok, usd, usdPerM } from "../lib/format";
 import { TimeBars } from "../components/charts/ranks";
 import { DeltaBar } from "../components/charts/ranks";
-import { Empty, Panel, Spinner, Stat } from "../components/ui";
+import { Empty, Panel, Skeleton, Stat } from "../components/ui";
 import { StatusBar } from "../components/Chrome";
 
 /**
@@ -44,7 +44,7 @@ export default function Compare() {
       return next;
     }, { replace: true });
 
-  if (isLoading || !data) return <Spinner label="reading the store" />;
+  if (isLoading || !data) return <Skeleton tiles={4} rows={1} />;
 
   const sa = sessions.find((s) => s.id === a) ?? ctxA.data?.rows.find((r) => r.id === a);
   const sb = sessions.find((s) => s.id === b) ?? ctxB.data?.rows.find((r) => r.id === b);

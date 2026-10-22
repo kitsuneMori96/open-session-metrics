@@ -212,7 +212,45 @@ export function KeyCap({ children }: { children: ReactNode }) {
 }
 
 export function Spinner({ label = "loading" }: { label?: string }) {
-  return <div className="micro px-1 py-3 animate-pulse">{label}…</div>;
+  return <div className="micro px-1 py-3">{label}…</div>;
+}
+
+/**
+ * A first read.
+ *
+ * Placeholders are the page's own hairlines, dimmed and breathing, rather than
+ * gray boxes: a skeleton in a different material promises a different screen.
+ * Only the first read of a screen gets this — a filter that keeps the previous
+ * frame on screen (`keepPreviousData`) has nothing to hide.
+ */
+export function Skeleton({ tiles = 6, rows = 2 }: { tiles?: number; rows?: number }) {
+  return (
+    <div className="pulse flex-1 px-3 pt-3" aria-busy="true" aria-label="reading the store">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
+        {Array.from({ length: tiles }, (_, i) => (
+          <div key={i} className="panel px-2 py-2">
+            <div className="skel h-[6px]" style={{ width: `${52 + (i % 3) * 13}%` }} />
+            <div className="skel mt-2 h-[14px]" style={{ width: `${40 + (i % 2) * 18}%` }} />
+            <div className="skel mt-3 h-px w-full" />
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 grid grid-cols-1 gap-3">
+        {Array.from({ length: rows }, (_, i) => (
+          <div key={i} className="panel p-2">
+            <div className="flex items-center gap-2">
+              <div className="skel h-[6px] w-24" />
+              <span className="h-px flex-1 bg-rule" />
+              <div className="skel h-[6px] w-12" />
+            </div>
+            {[86, 64, 42].map((w, k) => (
+              <div key={k} className="skel mt-2 h-px" style={{ width: `${w}%` }} />
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export function Empty({ children }: { children: ReactNode }) {

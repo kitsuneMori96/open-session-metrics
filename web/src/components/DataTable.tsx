@@ -135,7 +135,16 @@ export function DataTable<T extends RowData>({
                       title="sort"
                     >
                       {flexRender(h.column.columnDef.header, h.getContext())}
-                      <span className="text-[8px] text-flow">{sorted === "asc" ? "▲" : sorted === "desc" ? "▼" : ""}</span>
+                      {/* One glyph that turns, so asc/desc is a direction rather than a swap. */}
+                      <span
+                        className={clsx(
+                          "turn text-[8px] text-flow",
+                          sorted === "desc" && "rotate-180",
+                          !sorted && "opacity-0"
+                        )}
+                      >
+                        ▲
+                      </span>
                     </button>
                   ) : (
                     <span className="micro truncate">{flexRender(h.column.columnDef.header, h.getContext())}</span>
@@ -199,7 +208,7 @@ export function Caret({ open, hasChildren, onToggle }: { open?: boolean; hasChil
       className="inline-block w-[12px] shrink-0 text-[9px] text-ink-faint hover:text-ink"
       title={open ? "collapse sub-agents" : "expand sub-agents"}
     >
-      {open ? "▾" : "▸"}
+      <span className={clsx("turn", open && "rotate-90")}>▸</span>
     </button>
   );
 }

@@ -10,7 +10,7 @@ import { TimeArea, Sparkline } from "../components/charts/series";
 import { ActivityHeatmap, HourStrip } from "../components/charts/heat";
 import { RankBars, TimeBars, DeltaBar } from "../components/charts/ranks";
 import { Legend } from "../components/charts/base";
-import { Chip, Panel, SectionHeader, Spinner, Stat, Tile, toneColor } from "../components/ui";
+import { Chip, Panel, SectionHeader, Skeleton, Stat, Tile, toneColor } from "../components/ui";
 import { BaseHints, StatusBar } from "../components/Chrome";
 
 /**
@@ -73,7 +73,7 @@ export default function Overview() {
     }) as unknown as typeof series.buckets;
   }, [series, split]);
 
-  if (isLoading || !data) return <Spinner label="reading the store" />;
+  if (isLoading || !data) return <Skeleton />;
 
   const { totals, kpis, efficiency, tools, projects, models, agents, sessions } = data;
   const toolPeak = Math.max(1, ...tools.map((t) => t.calls));

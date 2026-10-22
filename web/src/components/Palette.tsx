@@ -6,6 +6,7 @@ import { useSlice, useSliceHref } from "../lib/slice";
 import { PRESETS } from "../lib/api";
 import { ago, int } from "../lib/format";
 import clsx from "clsx";
+import { STAGGER } from "../lib/motion";
 
 interface Command {
   id: string;
@@ -149,9 +150,9 @@ export default function Palette({ onClose }: { onClose: () => void }) {
   }, [cursor]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-ink/20 pt-[10vh]" onClick={onClose}>
+    <div className="ink-fast fixed inset-0 z-50 flex items-start justify-center bg-ink/20 pt-[10vh]" onClick={onClose}>
       <div
-        className="hairline w-[min(720px,92vw)] bg-paper-raised shadow-[0_2px_0_var(--color-rule-strong)]"
+        className="ink hairline w-[min(720px,92vw)] bg-paper-raised shadow-[0_2px_0_var(--color-rule-strong)]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 border-b border-rule px-2 py-1.5">
@@ -198,10 +199,13 @@ export default function Palette({ onClose }: { onClose: () => void }) {
                   data-i={i}
                   onMouseEnter={() => setCursor(i)}
                   onClick={item.run}
+                  /* The list arrives as a list: 12ms apart, five at most, then the
+                     rest are simply there. */
                   className={clsx(
-                    "flex w-full items-baseline gap-2 px-2 py-1 text-left",
+                    "ink-fast flex w-full items-baseline gap-2 px-2 py-1 text-left",
                     i === cursor ? "bg-flow/10" : "hover:bg-ink/5"
                   )}
+                  style={{ animationDelay: `${Math.min(i, 4) * STAGGER}ms` }}
                 >
                   <span className="tape min-w-0 flex-1 truncate">{item.label}</span>
                   {item.hint && <span className="tape shrink-0 text-ink-faint">{item.hint}</span>}
