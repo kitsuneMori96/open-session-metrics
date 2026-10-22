@@ -34,7 +34,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       # prepack builds web/dist and server/dist, so the tarball is always fresh.
-      - name: Publish to npm
-        run: npm publish --access public ${{ inputs.dry_run && '--dry-run' || '' }}
+      # The token is 2FA-bypass, which npm now restricts to staged publishing;
+      # stage here, then approve with an OTP (`npm stage approve <id>`).
+      - name: Stage on npm
+        run: npm stage publish . --access public ${{ inputs.dry_run && '--dry-run' || '' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
