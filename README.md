@@ -4,11 +4,28 @@
 再用一个 Web 面板回看自己的编码会话：跑了哪些会话、花了多少 Token、调用了哪些工具、
 每个工具失败过几次、钱花在哪个项目上。
 
-功能范围对齐 [`opencode-top`](docs/opencode-top-parity.md)（Sessions / Tools / Overview
+功能范围对齐 [`opencode-top`](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/opencode-top-parity.md)（Sessions / Tools / Overview
 三屏加正文面板），呈现方式按浏览器重排：**一个页面、一条全局切片、图表之间互相下钻**。
 窗口、过滤器、对比对象、散点坐标轴都写在 URL 里，链接可以直接发给别人或存进书签。
 
 数据只在本机流转，API 默认绑定 `127.0.0.1`。
+
+## 安装
+
+```bash
+npm i -g opencode-holo-cockpit
+osm                     # 起服务并打开浏览器
+osm status              # 谁在跑、数据在哪
+osm logs                # 跟踪服务日志
+osm stop                # 停掉后台服务
+```
+
+要求 **Node 24+**（使用内置 `node:sqlite`，无原生依赖），且本机已有
+`~/.local/share/opencode/opencode.db`。全局安装把指标库写在
+`~/.local/share/opencode-holo-cockpit`（`OSM_DATA_DIR` 或 `osm --data` 可改），
+升级包不会动到它。`osm run` 前台运行，`--port` / `--host` 改绑定。
+
+从源码运行见[快速开始](#快速开始)。
 
 ## 界面
 
@@ -19,32 +36,32 @@
 KPI 行（各带与上一等长窗口的对比）、按模型堆叠的 Token 时间序列、7×24 活跃热力图、
 按小时的轮次分布、会话散点、项目 / 模型 / 工具 / agent 排行、效率面板、最重会话。
 
-![Overview](docs/overview.png)
+![Overview](https://raw.githubusercontent.com/kitsuneMori96/opencode-session-metrics/master/docs/overview.png)
 
 ### Sessions — 全部会话一张表
 
 可排序、可展开（根会话下挂子代理会话）；过滤、排序、翻页都由 SQL 完成，
 一次取 100 个根会话（连它们的子树），「load more」接着下一段。点一行进详情。
 
-![Sessions](docs/sessions.png)
+![Sessions](https://raw.githubusercontent.com/kitsuneMori96/opencode-session-metrics/master/docs/sessions.png)
 
 ### Session 详情 — 时间线、工具、正文
 
 逐轮 Token、上下文填充、输出 Token 三条曲线与正文面板共享一个游标；框选时间线只留选中的轮次。
 
-![Session 详情](docs/session.png)
+![Session 详情](https://raw.githubusercontent.com/kitsuneMori96/opencode-session-metrics/master/docs/session.png)
 
 ### Tools — 工具取证
 
 左侧工具表，右侧选中工具的调用时间桶、延迟直方图、agent / 项目分布、错误文案聚类与原文。
 
-![Tools](docs/tools.png)
+![Tools](https://raw.githubusercontent.com/kitsuneMori96/opencode-session-metrics/master/docs/tools.png)
 
 ### Compare — 两个会话并排
 
 逐项差值表、按轮次序号对齐的输出曲线、工具构成对比。
 
-![Compare](docs/compare.png)
+![Compare](https://raw.githubusercontent.com/kitsuneMori96/opencode-session-metrics/master/docs/compare.png)
 
 ## 功能
 
@@ -125,7 +142,7 @@ Wipe（图表按内容指纹重画）。
 
 不弹、不放大、不滑整页；首屏、轮询、滚动追加都不播动画；框选、提示卡跟随、
 坐标轴刻度这几处逐帧跟手的地方一律不做缓动。`prefers-reduced-motion` 下全部降到 1ms。
-规则与实现见 [docs/motion.md](docs/motion.md)，`pnpm -F @osm/web test` 会跑一遍静态审计。
+规则与实现见 [docs/motion.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/motion.md)，`pnpm -F @osm/web test` 会跑一遍静态审计。
 
 ## 工作原理
 
@@ -168,11 +185,11 @@ opencode.db (只读)                    .data/metrics.db (查询用)
 
 ## 快速开始
 
-要求 Node 24+（使用内置 `node:sqlite`，无原生依赖）、pnpm，且本机已存在 `opencode.db`。
+从源码运行：要求 Node 24+、pnpm，且本机已存在 `opencode.db`。
 
 ```bash
 pnpm install
-pnpm build            # 构建 Web 面板到 web/dist
+pnpm build            # web/dist + server/dist
 pnpm materialize --full
 pnpm start            # http://127.0.0.1:8787
 ```
@@ -185,19 +202,18 @@ pnpm dev              # API :8787 · Web :5174
 
 首次启动若无指标库会自动物化；之后按水位增量更新。表结构变更后需要 `--full` 重建。
 
-装成一条命令后，任意目录都能起：
+仓库里的 `bin/osm.js` 与 npm 包里的 `osm` 是同一个脚本，数据目录为仓库的 `.data`：
 
 ```bash
-ln -sfn "$PWD/bin/osm" ~/.local/bin/osm
-osm                     # 缺包时先构建 web/dist，再起服务，最后打开浏览器
-osm stop                # 停掉后台服务
-osm status              # 谁在跑、bundle 是什么时候的
-osm logs                # 跟踪服务日志
+node bin/osm.js         # 起服务并开浏览器
+node bin/osm.js stop
+node bin/osm.js status
+node bin/osm.js logs
 ```
 
 `osm` 只起一个进程：Express 同时托管 API 与 `web/dist`，没有第二个端口，也不需要
-另开 Vite。`OSM_HOME` / `OSM_HOST` / `OSM_PORT` 覆盖仓库路径、绑定地址和端口，
-`OSM_NO_OPEN=1` 只起服务不开浏览器。pid 与日志落在 `.data/osm.{pid,log}`。
+另开 Vite。`OSM_HOST` / `OSM_PORT` 覆盖绑定地址和端口，`--no-open` 只起服务不开浏览器。
+pid 与日志落在数据目录的 `osm.{pid,log}`。
 
 ## API
 
@@ -226,7 +242,7 @@ osm logs                # 跟踪服务日志
   父会话静默时，挂在它下面的子会话会一并退出统计，而且按 model / agent 过滤在那种规则下
   没有意义。这里的规则是可加的、可交叉过滤的，代价是「一个跨窗口的长会话」在按天看时
   会出现在多个桶里。两套口径的差异见
-  [docs/opencode-top-parity.md](docs/opencode-top-parity.md)。
+  [docs/opencode-top-parity.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/opencode-top-parity.md)。
 - **上下文占用**（`context`）= input + cache_read + cache_write，对整会话求和后除以模型窗口。
   这是一个「上下文流量」指标而不是瞬时占用：长会话会数倍于一个窗口（面板在这种情况下
   显示 `×N`）。`fill` 是另一回事：发送时的 prompt_total / context_window，用于定位压缩触发点。
@@ -302,7 +318,7 @@ pnpm materialize --full     # 全量重建（写入临时文件后原子替换�
 ## 目录结构
 
 ```
-bin/osm                   # 一条命令启动：按需构建、起服务、开浏览器
+bin/osm.js                # npm 入口：起服务、开浏览器、stop/status/logs
 server/src/
 ├── index.ts              # 启动、静态托管、水位驱动的刷新循环
 ├── api.ts                # REST 端点
@@ -327,7 +343,7 @@ web/src/
 
 ## 相关文档
 
-- [docs/opencode-top-parity.md](docs/opencode-top-parity.md) — 与 `opencode-top` 的功能对照，
+- [docs/opencode-top-parity.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/opencode-top-parity.md) — 与 `opencode-top` 的功能对照，
   以及两处有意的口径差异
-- [docs/backend-refactor.md](docs/backend-refactor.md) — 2026-10 后端重构的接口变更明细
-- [docs/motion.md](docs/motion.md) — 动效令牌、六个动词、交互对照与静态审计的规则
+- [docs/backend-refactor.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/backend-refactor.md) — 2026-10 后端重构的接口变更明细
+- [docs/motion.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/motion.md) — 动效令牌、六个动词、交互对照与静态审计的规则

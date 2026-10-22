@@ -3,7 +3,21 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-export const DATA_DIR = process.env.OSM_DATA_DIR ?? path.join(ROOT, ".data");
+
+/**
+ * A global install lives under `node_modules/`, where writing state is wrong:
+ * the next `npm i -g` would delete it, and the directory is not the user's.
+ * Keep dev checkouts on `<repo>/.data`, put packaged installs on the XDG data
+ * dir. `OSM_DATA_DIR` (and `osm --data`) always wins.
+ */
+const INSTALLED = `${path.sep}node_modules${path.sep}`;
+const USER_DATA_DIR = path.join(
+  process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share"),
+  "opencode-holo-cockpit"
+);
+export const DATA_DIR =
+  process.env.OSM_DATA_DIR ??
+  (ROOT.includes(INSTALLED) ? USER_DATA_DIR : path.join(ROOT, ".data"));
 export const METRICS_DB = path.join(DATA_DIR, "metrics.db");
 export const SOURCE_DB =
   process.env.OSM_SOURCE_DB ?? path.join(os.homedir(), ".local", "share", "opencode", "opencode.db");

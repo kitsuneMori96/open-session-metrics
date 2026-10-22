@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "esbuild src/index.ts --bundle --packages=external --platform=node --format=esm --target=node24 --outfile=dist/index.js --log-level=warning",
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "materialize": "tsx src/cli/materialize.ts",
@@ -20,6 +21,7 @@
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
     "@types/node": "^24.0.0",
+    "esbuild": "^0.28.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }

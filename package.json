@@ -1,16 +1,53 @@
 {
-  "name": "opencode-session-metrics",
+  "name": "opencode-holo-cockpit",
   "version": "0.1.0",
-  "private": true,
+  "description": "A local-first web cockpit for OpenCode session metrics: tokens, cost, tools, and transcripts.",
   "type": "module",
-  "description": "Materialize OpenCode session data into a metrics store and serve it over an analytics API",
+  "license": "MIT",
+  "author": "kitsuneMori96",
+  "homepage": "https://github.com/kitsuneMori96/opencode-session-metrics#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kitsuneMori96/opencode-session-metrics.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kitsuneMori96/opencode-session-metrics/issues"
+  },
+  "keywords": [
+    "opencode",
+    "session",
+    "metrics",
+    "analytics",
+    "tokens",
+    "cost",
+    "dashboard",
+    "cli"
+  ],
+  "bin": {
+    "osm": "bin/osm.js"
+  },
+  "files": [
+    "bin/",
+    "server/dist/",
+    "web/dist/"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "dev": "concurrently -n server,web -c cyan,magenta \"pnpm -F @osm/server dev\" \"pnpm -F @osm/web dev\"",
+    "build": "pnpm -F @osm/web build && pnpm -F @osm/server build",
+    "build:web": "pnpm -F @osm/web build",
+    "build:server": "pnpm -F @osm/server build",
+    "prepack": "pnpm build",
     "materialize": "pnpm -F @osm/server materialize",
-    "build": "pnpm -F @osm/web build",
     "start": "pnpm -F @osm/server start",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.1.0"
   },
   "devDependencies": {
     "concurrently": "^9.2.1"
