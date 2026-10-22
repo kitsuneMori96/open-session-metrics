@@ -128,6 +128,12 @@ async function main() {
       if (!kinds.has("text")) return "no assistant text parts";
       const ordered = j.turns.every((t: any, i: number) => i === 0 || t.created >= j.turns[i - 1].created);
       if (!ordered) return "turns are not in chronological order";
+      // The transcript's default filter is prompts + replies, so the prompt half has to
+      // be on the wire, in order, with its body.
+      if (!Array.isArray(j.prompts)) return "the payload has no prompts array";
+      if (!j.prompts.length) return "no user prompts in the transcript";
+      if (j.prompts.some((p: any) => typeof p.created !== "number" || !p.text)) return "a prompt has no body or time";
+      if (!j.prompts.every((p: any, i: number) => i === 0 || p.created >= j.prompts[i - 1].created)) return "prompts are out of order";
       // The per-turn timeline the session page draws needs a context reading per turn.
       if (!j.turns.some((t: any) => t.contextWindow > 0 && t.occupancy > 0)) return "no context occupancy per turn";
       return null;

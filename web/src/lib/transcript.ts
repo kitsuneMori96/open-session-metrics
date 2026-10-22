@@ -1,4 +1,4 @@
-import type { Part, ToolPart, Turn } from "./api";
+import type { Part, PromptLine, ToolPart, Turn } from "./api";
 
 /**
  * The transcript as a flat list of rows.
@@ -8,14 +8,20 @@ import type { Part, ToolPart, Turn } from "./api";
  * nest, so a tool call stays a single row with a body that opens under it. The list is
  * therefore short enough to virtualize, and "jump to the next match" means scrolling to
  * a row index rather than repainting a viewport.
+ *
+ * User prompts are rows too, even though they live in their own table: a transcript that
+ * starts at the model's first reply is a transcript with the other half of the
+ * conversation missing. Each prompt is attached to the assistant turn it opened, so the
+ * timeline brush and the cursor behave the same on both halves.
  */
 
-export type RowKind = "turn" | "text" | "reasoning" | "tool";
+export type RowKind = "turn" | "prompt" | "text" | "reasoning" | "tool";
 
 export interface Row {
   id: string;
   kind: RowKind;
-  turn: Turn;
+  /** Null only for a prompt in a session with no assistant turn yet. */
+  turn: Turn | null;
   turnIndex: number;
   text: string;
   part: ToolPart | null;
@@ -36,10 +42,29 @@ export const FILTERS: LineFilter[] = ["all", "errors", "tools", "text"];
 
 export const toolKey = (turnId: string, p: ToolPart): string => p.callId || `${turnId}:${p.ordinal}`;
 
-export function buildRows(turns: Turn[]): Row[] {
+export function buildRows(turns: Turn[], prompts: PromptLine[] = []): Row[] {
   const rows: Row[] = [];
   let cum = 0;
+  let next = 0;
+  /** Prompts that arrived before `until` opened the turn at `turnIndex`. */
+  const pushPrompts = (until: number, turnIndex: number) => {
+    while (next < prompts.length && prompts[next].created <= until) {
+      const p = prompts[next++];
+      const text = p.text.trim();
+      if (!text) continue;
+      rows.push({
+        id: `prompt-${p.id}`,
+        kind: "prompt",
+        turn: turns[turnIndex] ?? null,
+        turnIndex,
+        text,
+        part: null,
+        cumTokens: cum,
+      });
+    }
+  };
   turns.forEach((turn, turnIndex) => {
+    pushPrompts(turn.created, turnIndex);
     cum += turn.tokens.input + turn.tokens.cacheRead + turn.tokens.output;
     rows.push({ id: `turn-${turn.id}`, kind: "turn", turn, turnIndex, text: "", part: null, cumTokens: cum });
     for (const part of turn.parts as Part[]) {
@@ -62,6 +87,9 @@ export function buildRows(turns: Turn[]): Row[] {
       }
     }
   });
+  // A prompt sent after the last reply belongs to that turn: it is the next question,
+  // and hiding it would make a session look like it ended with the model talking.
+  pushPrompts(Infinity, Math.max(0, turns.length - 1));
   return rows;
 }
 
@@ -71,7 +99,8 @@ export function rowMatches(row: Row, filter: LineFilter, query: string, from: nu
   if (filter !== "all" && row.kind !== "turn") {
     if (filter === "errors" && !(row.part && row.part.status === "error")) return false;
     if (filter === "tools" && row.kind !== "tool") return false;
-    if (filter === "text" && row.kind !== "text") return false;
+    // "text" is the readable conversation: what the user asked and what the model said.
+    if (filter === "text" && row.kind !== "text" && row.kind !== "prompt") return false;
   }
   const q = query.trim().toLowerCase();
   if (!q) return true;
@@ -81,6 +110,7 @@ export function rowMatches(row: Row, filter: LineFilter, query: string, from: nu
 export function searchText(row: Row): string {
   switch (row.kind) {
     case "text":
+    case "prompt":
       return row.text.toLowerCase();
     case "reasoning":
       return row.text.toLowerCase();

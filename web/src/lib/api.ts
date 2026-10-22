@@ -354,6 +354,12 @@ export interface Turn {
   parts: Part[];
 }
 
+export interface PromptLine {
+  id: string;
+  created: number;
+  text: string;
+}
+
 export interface Transcript {
   session: {
     id: string;
@@ -369,6 +375,8 @@ export interface Transcript {
     firstPrompt: string | null;
   };
   turns: Turn[];
+  /** The user's own messages, in order; they carry no tokens and no parts. */
+  prompts: PromptLine[];
 }
 
 export interface SearchHit {

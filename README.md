@@ -91,10 +91,12 @@ KPI 行（各带与上一等长窗口的对比）、按模型堆叠的 Token 时
 
 ### 正文面板（Session 详情）
 
-助手轮次逐条展开：轮次头（模型、agent、输入/输出、耗时、时刻、ctx 占用）、
-助手正文、推理块（折叠成一行预览）、每次工具调用一行（`✓ / × / ◌` + 名称 + 标题 +
-耗时），展开后看入参与回显（回显最多 40 行）。工具栏给出 `rows 起–止/总`、
-过滤循环与命中数。
+用户 prompt（`>` 起头）与助手轮次交替展开：轮次头（模型、agent、输入/输出、耗时、
+时刻、ctx 占用）、助手正文、推理块（折叠成一行预览）、每次工具调用一行
+（`✓ / × / ◌` + 名称 + 标题 + 耗时），展开后看入参与回显（回显最多 40 行）。
+
+默认过滤是 `text`——只留两侧的正文，不含思考与工具；`all` 才展开全部内容，
+`tools` / `errors` 只留工具行。工具栏给出 `rows 起–止/总`、过滤循环与命中数。
 
 ### 键盘
 
@@ -106,7 +108,7 @@ KPI 行（各带与上一等长窗口的对比）、按模型堆叠的 Token 时
 | `esc` | 关闭面板 / 复位焦点 |
 | `j` `k` `g` `G` | 正文面板里移动游标（虚拟滚动，只渲染可见行） |
 | `n` `N` | 跳到下一个 / 上一个命中 |
-| `f` | 过滤循环 `all → errors → tools → text` |
+| `f` | 过滤循环 `text → all → errors → tools`（默认 `text`：prompt + 正文） |
 | `Enter` | 展开 / 折叠当前行的工具调用或推理块 |
 | `e` | 只看游标所在的那一轮（正文面板内的轮次过滤） |
 
@@ -204,7 +206,7 @@ osm logs                # 跟踪服务日志
 | `GET /api/top/analytics?from=&to=&project=&model=&agent=` | 当前切片的全部面板数据：totals、KPI 对比、时间桶与模型堆叠、热力图、效率百分位、四张排行表、最重的 200 个会话 |
 | `GET /api/top/sessions?...&q=&order=&dir=&limit=&cursor=` | 会话表：`limit` 个根会话及其子树（默认且上限 500），`cursor` 续上一页；`focus=<id>` 换成该会话的族谱 |
 | `GET /api/top/tool?name=` | 单个工具的调用桶、延迟直方图、agent/项目分布、参数签名、最近错误 |
-| `GET /api/top/session/:id/messages` | 单会话的助手轮次与内容流（唯一返回正文的端点） |
+| `GET /api/top/session/:id/messages` | 单会话的助手轮次与内容流，外加 `prompts`（用户提问，按时间与轮次交错）——唯一返回正文的端点 |
 | `GET /api/top/search?q=` | 跨会话正文检索，返回命中会话与命中数 |
 | `POST /api/refresh` | 手动重建，`{full:true}` 为全量 |
 
@@ -239,7 +241,7 @@ osm logs                # 跟踪服务日志
 
 | 表 | 粒度 | 主要字段 |
 | --- | --- | --- |
-| `turns` | 每轮 LLM 调用 | 各类 Token、成本、`fill` / `fill_after`、改动增量与 `write_lines`、预计算的 `bucket` / `day` / `hour` |
+| `turns` | 每条消息（`role` = assistant / user） | 各类 Token、成本、`fill` / `fill_after`、改动增量与 `write_lines`、预计算的 `bucket` / `day` / `hour`；user 行只带 `text`（正文面板的提问行） |
 | `tools` | 每次工具调用 | 状态、耗时、错误文本、改动与写入行数、调用签名、`target_session`（task 子会话） |
 | `parts` | 每条助手内容 | `kind`（text / reasoning / tool）、`ordinal`、正文或工具入参/回显、`exit_code`、是否截断 |
 | `events` | 每个事件 | 类型、`at` / `end_at`、`count`、`fill`、JSON 详情 |

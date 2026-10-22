@@ -94,8 +94,13 @@ export function createApp(deps: {
   });
 
   /**
-   * One session's assistant turns in order, each with its content parts. This is the
-   * only endpoint that returns bodies, and it is fetched per session on demand.
+   * One session's assistant turns in order, each with its content parts, plus the user
+   * prompts that opened them. This is the only endpoint that returns bodies, and it is
+   * fetched per session on demand.
+   *
+   * Prompts travel beside `turns` rather than inside it: every other consumer of a turn
+   * (the timeline, the spend panel, the session totals) means "what the model did", and a
+   * user row has no tokens, no cost and no parts.
    */
   app.get("/api/top/session/:id/messages", (req, res) => {
     const id = req.params.id;
@@ -112,6 +117,12 @@ export function createApp(deps: {
               cache_read, cache_write, cost, dur_ms, finish, tool_calls, tool_errors,
               project, occupancy, context_window, fill, fill_after, additions, deletions, write_lines, has_error
        FROM turns WHERE session_id = ? AND role = 'assistant'
+       ORDER BY created ASC, seq ASC`,
+      id
+    );
+    const prompts = q<any>(
+      `SELECT id, created, text FROM turns
+       WHERE session_id = ? AND role = 'user' AND length(trim(coalesce(text, ''))) > 0
        ORDER BY created ASC, seq ASC`,
       id
     );
@@ -189,6 +200,7 @@ export function createApp(deps: {
         hasError: Number(t.has_error ?? 0) === 1,
         parts: byTurn.get(t.id) ?? [],
       })),
+      prompts: prompts.map((p) => ({ id: p.id, created: Number(p.created ?? 0), text: p.text ?? "" })),
     });
   });
 

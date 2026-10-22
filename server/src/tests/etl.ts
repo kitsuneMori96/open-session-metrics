@@ -243,6 +243,14 @@ async function main() {
   const firstTurnParts = rows("SELECT * FROM parts WHERE turn_id=? ORDER BY ordinal", firstTurn.id);
   ok("a turn's parts keep their content order", firstTurnParts.map((p) => p.kind).join(",") === "reasoning,text,tool,tool",
     firstTurnParts.map((p) => p.kind).join(","));
+  // The transcript renders the human's half too; it is stored as a `turns` row with
+  // role=user, text only, and no parts.
+  const prompts = rows("SELECT id, created, text FROM turns WHERE role='user' ORDER BY created");
+  ok("user prompts are kept as turns rows", prompts.length === 2 && prompts.every((p) => (p.text ?? "").length > 0),
+    `got ${prompts.length}`);
+  const firstAssistantAt = one("SELECT created FROM turns WHERE session_id='ses_parent' AND role='assistant' ORDER BY created LIMIT 1").created;
+  ok("prompts precede their assistant turn", prompts[0].created <= firstAssistantAt, JSON.stringify({ p: prompts[0]?.created, t: firstAssistantAt }));
+
   const failPart = one("SELECT * FROM parts WHERE kind='tool' AND name='bash' AND status='error'");
   ok("a failed tool part carries its output", /exit 1/.test(failPart?.output ?? ""), JSON.stringify(failPart));
   const editPart = one("SELECT * FROM parts WHERE kind='tool' AND name='edit' AND input LIKE '%oldString%'");

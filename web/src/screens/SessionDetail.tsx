@@ -44,7 +44,7 @@ export default function SessionDetail() {
   const navigate = useNavigate();
   const link = useSliceHref();
 
-  const [filter, setFilter] = useState<LineFilter>("all");
+  const [filter, setFilter] = useState<LineFilter>("text");
   const [query, setQuery] = useState("");
   const [range, setRange] = useState<[number, number] | null>(null);
   const [activeTurn, setActiveTurn] = useState<number | null>(null);
@@ -383,6 +383,7 @@ export default function SessionDetail() {
             <div className="flex h-[62vh] min-h-[380px] flex-col overflow-hidden">
               <Transcript
                 turns={turns}
+                prompts={data?.prompts}
                 filter={filter}
                 onFilter={setFilter}
                 query={query}

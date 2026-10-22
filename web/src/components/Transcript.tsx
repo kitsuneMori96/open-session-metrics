@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import clsx from "clsx";
-import type { Turn } from "../lib/api";
+import type { PromptLine, Turn } from "../lib/api";
 import { clockSec, durInline, int, tok } from "../lib/format";
 import { modelColor, shortModel } from "../lib/format";
 import {
@@ -21,6 +21,14 @@ import { Chip, Mark } from "./ui";
 
 const ROW_RULE = "var(--color-rule)";
 
+/** What each filter leaves in the column. `text` is the readable conversation. */
+const FILTER_HINT: Record<LineFilter, string> = {
+  all: "prompts, replies, reasoning and tool calls",
+  errors: "failed tool calls",
+  tools: "tool calls",
+  text: "prompts and replies — no reasoning, no tool calls",
+};
+
 /**
  * The transcript.
  *
@@ -33,6 +41,7 @@ const ROW_RULE = "var(--color-rule)";
  */
 export default function Transcript({
   turns,
+  prompts,
   filter,
   onFilter,
   query,
@@ -44,6 +53,8 @@ export default function Transcript({
   keyboard = true,
 }: {
   turns: Turn[];
+  /** The user's own messages; they render as rows between the turns they opened. */
+  prompts?: PromptLine[];
   filter: LineFilter;
   onFilter: (f: LineFilter) => void;
   query: string;
@@ -59,7 +70,7 @@ export default function Transcript({
   const [cursor, setCursor] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const all = useMemo(() => buildRows(turns), [turns]);
+  const all = useMemo(() => buildRows(turns, prompts), [turns, prompts]);
   const matched = useMemo(
     () => all.filter((r) => rowMatches(r, filter, query, turnRange[0], turnRange[1])),
     [all, filter, query, turnRange]
@@ -141,11 +152,11 @@ export default function Transcript({
       if (e.key === "f") return onFilter(NEXT_FILTER[filter]);
       if (e.key === "Enter") {
         const row = rows[cursor];
-        if (row?.kind === "tool" && row.part) return toggleTool(toolKey(row.turn.id, row.part));
+        if (row?.kind === "tool" && row.part && row.turn) return toggleTool(toolKey(row.turn.id, row.part));
         if (row?.kind === "reasoning") return toggleReasoning(row.id);
         return;
       }
-      if (e.key === "e" && rows[cursor]?.kind === "turn") {
+      if (e.key === "e" && (rows[cursor]?.kind === "turn" || rows[cursor]?.kind === "prompt")) {
         onTurnRange([rows[cursor].turnIndex, rows[cursor].turnIndex]);
         return;
       }
@@ -160,7 +171,9 @@ export default function Transcript({
       setExpandedReasoning(new Set());
       return;
     }
-    setExpandedTools(new Set(rows.filter((r) => r.kind === "tool" && r.part).map((r) => toolKey(r.turn.id, r.part!))));
+    setExpandedTools(
+      new Set(rows.flatMap((r) => (r.kind === "tool" && r.part && r.turn ? [toolKey(r.turn.id, r.part)] : [])))
+    );
     setExpandedReasoning(new Set(rows.filter((r) => r.kind === "reasoning").map((r) => r.id)));
   };
 
@@ -173,7 +186,7 @@ export default function Transcript({
       <div className="hairline-b flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 bg-paper-raised/60 px-2 py-1">
         <span className="micro shrink-0">filter</span>
         {FILTERS.map((f) => (
-          <Chip key={f} active={filter === f} onClick={() => onFilter(f)} title={`f cycles filters`}>
+          <Chip key={f} active={filter === f} onClick={() => onFilter(f)} title={FILTER_HINT[f]}>
             {f}
           </Chip>
         ))}
@@ -228,11 +241,13 @@ export default function Transcript({
                   style={{ transform: `translateY(${item.start}px)`, borderTop: item.index === 0 ? undefined : `1px solid ${ROW_RULE}` }}
                   onClick={() => {
                     setCursor(item.index);
-                    if (row.kind === "turn") onActiveTurn?.(row.turnIndex);
+                    if (row.kind === "turn" || row.kind === "prompt") onActiveTurn?.(row.turnIndex);
                   }}
                 >
                   {row.kind === "turn" ? (
                     <TurnHeader row={row} active={activeTurn === row.turnIndex} query={query} />
+                  ) : row.kind === "prompt" ? (
+                    <PromptRow row={row} query={query} />
                   ) : row.kind === "text" ? (
                     <div className="tape max-w-[92ch] whitespace-pre-wrap text-ink">
                       <Mark text={row.text} query={query} />
@@ -248,8 +263,8 @@ export default function Transcript({
                   ) : (
                     <ToolRow
                       row={row}
-                      open={expandedTools.has(row.part ? toolKey(row.turn.id, row.part) : "")}
-                      onToggle={() => row.part && toggleTool(toolKey(row.turn.id, row.part))}
+                      open={expandedTools.has(row.part && row.turn ? toolKey(row.turn.id, row.part) : "")}
+                      onToggle={() => row.part && row.turn && toggleTool(toolKey(row.turn.id, row.part))}
                       query={query}
                     />
                   )}
@@ -287,6 +302,7 @@ export default function Transcript({
 
 function TurnHeader({ row, active, query }: { row: Row; active: boolean; query: string }) {
   const t = row.turn;
+  if (!t) return null;
   return (
     <div className={clsx("flex flex-wrap items-baseline gap-x-2 gap-y-[2px]", active && "font-semibold")}>
       <span className="tape tabular shrink-0 text-ink-faint">#{row.turnIndex + 1}</span>
@@ -321,6 +337,25 @@ function TurnHeader({ row, active, query }: { row: Row; active: boolean; query: 
           <span className="text-good">+{t.additions}</span> <span className="text-danger">−{t.deletions}</span>
         </span>
       )}
+    </div>
+  );
+}
+
+/**
+ * The human's half of the transcript.
+ *
+ * `>` is the TUI's prompt marker and, unlike a decorative icon, it carries meaning: it
+ * separates "what I asked" from "what it answered" without giving the row a colour the
+ * palette has not budgeted for. The body keeps the assistant's measure so the two halves
+ * read as one column.
+ */
+function PromptRow({ row, query }: { row: Row; query: string }) {
+  return (
+    <div className="flex gap-2">
+      <span className="tape shrink-0 select-none text-ink-soft">&gt;</span>
+      <div className="tape max-w-[92ch] whitespace-pre-wrap text-ink">
+        <Mark text={row.text} query={query} />
+      </div>
     </div>
   );
 }
