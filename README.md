@@ -112,6 +112,17 @@ KPI 行（各带与上一等长窗口的对比）、按模型堆叠的 Token 时
 
 底部状态栏给出当前屏可用的动作。
 
+### 动效
+
+一套语言，取自数字滚轮那条曲线：一条 `cubic-bezier(0.4,0,0.2,1)`、四档时长
+（90 / 120 / 170 / 260ms）、六个动词——Roll（数字）、Press（指针态只变色）、
+Ink（提示卡与面板落位）、Turn（字形转向）、Pulse（只给同步与首屏骨架）、
+Wipe（图表按内容指纹重画）。
+
+不弹、不放大、不滑整页；首屏、轮询、滚动追加都不播动画；框选、提示卡跟随、
+坐标轴刻度这几处逐帧跟手的地方一律不做缓动。`prefers-reduced-motion` 下全部降到 1ms。
+规则与实现见 [docs/motion.md](docs/motion.md)，`pnpm -F @osm/web test` 会跑一遍静态审计。
+
 ## 工作原理
 
 ```
@@ -315,3 +326,4 @@ web/src/
 - [docs/opencode-top-parity.md](docs/opencode-top-parity.md) — 与 `opencode-top` 的功能对照，
   以及两处有意的口径差异
 - [docs/backend-refactor.md](docs/backend-refactor.md) — 2026-10 后端重构的接口变更明细
+- [docs/motion.md](docs/motion.md) — 动效令牌、六个动词、交互对照与静态审计的规则
