@@ -8,6 +8,7 @@ import {
   buildRows,
   describeParams,
   FILTERS,
+  foldRows,
   NEXT_FILTER,
   OUT_ROWS,
   rowMatches,
@@ -67,6 +68,8 @@ export default function Transcript({
 }) {
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const [expandedReasoning, setExpandedReasoning] = useState<Set<string>>(new Set());
+  /** Gap rows that have been unfolded back into per-turn headers. */
+  const [openGaps, setOpenGaps] = useState<Set<string>>(new Set());
   const [cursor, setCursor] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -81,16 +84,20 @@ export default function Transcript({
    * which is exactly the orientation the header exists to provide.
    */
   const rows = useMemo(() => {
-    if (!query.trim()) return matched;
-    const survives = new Set(matched.map((r) => r.id));
-    const withHit = new Set(matched.filter((r) => r.kind !== "turn").map((r) => r.turnIndex));
-    return all.filter((r) => survives.has(r.id) || (r.kind === "turn" && withHit.has(r.turnIndex)));
-  }, [all, matched, query]);
+    const base = !query.trim()
+      ? matched
+      : (() => {
+          const survives = new Set(matched.map((r) => r.id));
+          const withHit = new Set(matched.filter((r) => r.kind !== "turn").map((r) => r.turnIndex));
+          return all.filter((r) => survives.has(r.id) || (r.kind === "turn" && withHit.has(r.turnIndex)));
+        })();
+    return foldRows(base, filter, openGaps);
+  }, [all, matched, query, filter, openGaps]);
 
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return [] as number[];
-    return rows.map((r, i) => (r.kind === "turn" ? -1 : i)).filter((i) => i >= 0);
+    return rows.map((r, i) => (r.kind === "turn" || r.kind === "gap" ? -1 : i)).filter((i) => i >= 0);
   }, [rows, query]);
   const virt = useVirtualizer({
     count: rows.length,
@@ -103,6 +110,15 @@ export default function Transcript({
 
   const toggleReasoning = useCallback((id: string) => {
     setExpandedReasoning((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleGap = useCallback((id: string) => {
+    setOpenGaps((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -154,6 +170,7 @@ export default function Transcript({
         const row = rows[cursor];
         if (row?.kind === "tool" && row.part && row.turn) return toggleTool(toolKey(row.turn.id, row.part));
         if (row?.kind === "reasoning") return toggleReasoning(row.id);
+        if (row?.kind === "gap") return toggleGap(row.id);
         return;
       }
       if (e.key === "e" && (rows[cursor]?.kind === "turn" || rows[cursor]?.kind === "prompt")) {
@@ -246,6 +263,8 @@ export default function Transcript({
                 >
                   {row.kind === "turn" ? (
                     <TurnHeader row={row} active={activeTurn === row.turnIndex} query={query} />
+                  ) : row.kind === "gap" ? (
+                    <GapRow row={row} open={openGaps.has(row.id)} onToggle={() => toggleGap(row.id)} />
                   ) : row.kind === "prompt" ? (
                     <PromptRow row={row} query={query} />
                   ) : row.kind === "text" ? (
@@ -348,6 +367,39 @@ function TurnHeader({ row, active, query }: { row: Row; active: boolean; query: 
 }
 
 /**
+ * A stretch of turns with nothing the filter asked for: one line instead of their
+ * headers. Unfolding keeps the summary line on top — it is the control that folds it
+ * back, the same label-plus-body shape as a reasoning block or a tool call.
+ */
+function GapRow({ row, open, onToggle }: { row: Row; open: boolean; onToggle: () => void }) {
+  const g = row.gap;
+  if (!g) return null;
+  // Zero counts earn no pixel: a stretch of empty turns reads as one turn and a time.
+  const label = [
+    `${g.turns} ${g.turns === 1 ? "turn" : "turns"}`,
+    g.tools > 0 ? `${g.tools} ${g.tools === 1 ? "tool" : "tools"}` : "",
+    g.from === g.to ? clockSec(g.from) : `${clockSec(g.from)}–${clockSec(g.to)}`,
+    g.tokens > 0 ? `+${tok(g.tokens)} tok` : "",
+    g.cost > 0 ? `$${g.cost.toFixed(4)}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      title={open ? "fold these turns" : "these turns produced no prose — unfold their headers"}
+      className="flex w-full items-baseline gap-2 text-left hover:bg-ink/5"
+    >
+      <span className="tape shrink-0 text-ink-faint">
+        <span className={clsx("turn", open && "rotate-90")}>▸</span>
+      </span>
+      <span className="tape min-w-0 truncate text-ink-faint">{label}</span>
+    </button>
+  );
+}
+
+/**
  * The human's half of the transcript.
  *
  * `>` is the TUI's prompt marker and, unlike a decorative icon, it carries meaning: it
@@ -382,7 +434,9 @@ function ReasoningRow({
   return (
     <div className="border-l-2 border-rule pl-2">
       <button type="button" onClick={onToggle} className="flex w-full items-baseline gap-2 text-left hover:bg-ink/5">
-        <span className="tape shrink-0 text-ink-faint">{open ? "▾" : "▸"} reasoning</span>
+        <span className="tape shrink-0 text-ink-faint">
+          <span className={clsx("turn", open && "rotate-90")}>▸</span> reasoning
+        </span>
         <span className="tape min-w-0 truncate text-ink-soft">{open ? "" : <Mark text={preview} query={query} />}</span>
         <span className="tape shrink-0 text-ink-faint">{int(row.text.length)} chars</span>
       </button>
@@ -420,9 +474,10 @@ function ToolRow({ row, open, onToggle, query }: { row: Row; open: boolean; onTo
         {p.exitCode !== null && p.exitCode !== 0 && <span className="tape shrink-0 text-danger">exit {p.exitCode}</span>}
         {p.started && p.ended && <span className="tape shrink-0 tabular text-ink-faint">{durInline(p.ended - p.started)}</span>}
         <span className="tape shrink-0 tabular text-ink-faint">{int(p.chars)} ch</span>
-        <span className="tape shrink-0 text-ink-faint">{open ? "▾" : "▸"}</span>
+        <span className="tape shrink-0 text-ink-faint">
+          <span className={clsx("turn", open && "rotate-90")}>▸</span>
+        </span>
       </button>
-
       {open && (
         <div className="mt-1 ml-3 border-l border-rule pl-2">
           {params.length > 0 && (

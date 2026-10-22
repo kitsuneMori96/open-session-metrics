@@ -8,7 +8,7 @@
  *
  * Node 24 strips the types; the module only imports types at runtime.
  */
-import { buildRows, rowMatches } from "../src/lib/transcript.ts";
+import { buildRows, foldRows, rowMatches } from "../src/lib/transcript.ts";
 
 let failures = 0;
 const ok = (name, cond, detail = "") => {
@@ -31,8 +31,8 @@ const turn = (id, created, parts = [], tokens = { input: 1000, cacheRead: 0, out
   cost: 0,
   durMs: 1000,
   finish: "stop",
-  tools: 0,
-  errors: 0,
+  tools: parts.filter((p) => p.kind === "tool").length,
+  errors: parts.filter((p) => p.kind === "tool" && p.status === "error").length,
   project: "p",
   occupancy: 0,
   contextWindow: 0,
@@ -102,6 +102,48 @@ ok("the cursor's turn keeps its prompt and header", onlySecond.join(",") === "pr
 const trailing = rows.at(-1);
 ok("a prompt before the first turn carries no tokens", rows[0].cumTokens === 0);
 ok("a trailing prompt carries the whole session", trailing.cumTokens === 2 * 1200, String(trailing.cumTokens));
+
+/* A header with nothing under it is a dangling label: every filter drops it. */
+const silentTurns = [
+  turn("a", T0, [text(0, "hello")]),
+  turn("b", T0 + MIN, [tool(0)]),
+  turn("c", T0 + 2 * MIN, [reason(0, "hmm"), tool(1)]),
+  turn("d", T0 + 3 * MIN, [text(0, "bye")]),
+];
+const silentRows = buildRows(silentTurns, []);
+const pick = (r, f, x = new Set()) => foldRows(r.filter((row) => rowMatches(row, f, "", 0, 3)), f, x).map((row) => row.kind);
+ok("tools drops headers of turns that called nothing", pick(silentRows, "tools").join(",") === "turn,tool,turn,tool", pick(silentRows, "tools").join(","));
+ok("errors drops headers of turns that did not fail", pick(silentRows, "errors").join(",") === "", pick(silentRows, "errors").join(","));
+
+/* `text` folds a prose-less stretch into one line instead of a header per turn. */
+const folded = foldRows(silentRows.filter((r) => rowMatches(r, "text", "", 0, 3)), "text");
+ok("text folds prose-less turns into one gap row", folded.map((r) => r.kind).join(",") === "turn,text,gap,turn,text", folded.map((r) => r.kind).join(","));
+const gap = folded.find((r) => r.kind === "gap");
+ok("the gap row counts what it hides", gap.gap.turns === 2 && gap.gap.tools === 2, JSON.stringify(gap.gap));
+ok("the gap row carries the run's own tokens", gap.gap.tokens === 2400, JSON.stringify(gap.gap));
+ok("the gap row spans the turns it hides", gap.gap.from < gap.gap.to, JSON.stringify(gap.gap));
+const unfolded = foldRows(silentRows.filter((r) => rowMatches(r, "text", "", 0, 3)), "text", new Set([gap.id]));
+ok("unfolding keeps the summary and adds the headers", unfolded.map((r) => r.kind).join(",") === "turn,text,gap,turn,turn,turn,text", unfolded.map((r) => r.kind).join(","));
+
+/* An opening prompt is shown above the header it opened, not as that header's content. */
+const opened = buildRows([turn("g", T0, [tool(0)])], [{ id: "q", created: T0 - MIN, text: "go" }]);
+ok(
+  "a prompt does not rescue the header below it",
+  foldRows(opened.filter((r) => rowMatches(r, "text", "", 0, 0)), "text").map((r) => r.kind).join(",") === "prompt,gap",
+  foldRows(opened.filter((r) => rowMatches(r, "text", "", 0, 0)), "text").map((r) => r.kind).join(",")
+);
+/* A trailing prompt does sit under its turn's header. */
+const tailPrompt = buildRows([turn("h", T0, [tool(0)])], [{ id: "r", created: T0 + MIN, text: "next?" }]);
+ok(
+  "a trailing prompt keeps its header",
+  foldRows(tailPrompt.filter((r) => rowMatches(r, "text", "", 0, 0)), "text").map((r) => r.kind).join(",") === "turn,prompt",
+  foldRows(tailPrompt.filter((r) => rowMatches(r, "text", "", 0, 0)), "text").map((r) => r.kind).join(",")
+);
+
+/* A failing turn keeps its header under `errors`. */
+const withFailure = [turn("e", T0, [{ ...tool(0), status: "error" }]), turn("f", T0 + MIN, [text(0, "ok")])];
+const errors = foldRows(buildRows(withFailure, []).filter((r) => rowMatches(r, "errors", "", 0, 1)), "errors").map((r) => r.kind);
+ok("errors keeps the header it belongs to", errors.join(",") === "turn,tool", errors.join(","));
 
 /* A session can hold a prompt before its first reply; the panel still shows it. */
 const lonely = buildRows([], prompts);
