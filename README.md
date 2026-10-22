@@ -170,6 +170,20 @@ pnpm dev              # API :8787 · Web :5174
 
 首次启动若无指标库会自动物化；之后按水位增量更新。表结构变更后需要 `--full` 重建。
 
+装成一条命令后，任意目录都能起：
+
+```bash
+ln -sfn "$PWD/bin/osm" ~/.local/bin/osm
+osm                     # 缺包时先构建 web/dist，再起服务，最后打开浏览器
+osm stop                # 停掉后台服务
+osm status              # 谁在跑、bundle 是什么时候的
+osm logs                # 跟踪服务日志
+```
+
+`osm` 只起一个进程：Express 同时托管 API 与 `web/dist`，没有第二个端口，也不需要
+另开 Vite。`OSM_HOME` / `OSM_HOST` / `OSM_PORT` 覆盖仓库路径、绑定地址和端口，
+`OSM_NO_OPEN=1` 只起服务不开浏览器。pid 与日志落在 `.data/osm.{pid,log}`。
+
 ## API
 
 | 端点 | 说明 |
@@ -273,6 +287,7 @@ pnpm materialize --full     # 全量重建（写入临时文件后原子替换�
 ## 目录结构
 
 ```
+bin/osm                   # 一条命令启动：按需构建、起服务、开浏览器
 server/src/
 ├── index.ts              # 启动、静态托管、水位驱动的刷新循环
 ├── api.ts                # REST 端点
