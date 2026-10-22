@@ -13,7 +13,7 @@
 ## 安装
 
 ```bash
-npm i -g @kitsunemori/opencode-session-metrics
+npm i -g @kitsunemori96/opencode-session-metrics
 osm                     # 起服务并打开浏览器
 osm status              # 谁在跑、数据在哪
 osm logs                # 跟踪服务日志
