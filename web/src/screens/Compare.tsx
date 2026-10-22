@@ -5,7 +5,7 @@ import { useSlice, useSliceHref } from "../lib/slice";
 import { dur, int, pct, rate, shortModel, tok, usd, usdPerM } from "../lib/format";
 import { TimeBars } from "../components/charts/ranks";
 import { DeltaBar } from "../components/charts/ranks";
-import { Empty, Panel, Skeleton, Stat } from "../components/ui";
+import { Empty, Panel, Select, Skeleton, Stat } from "../components/ui";
 import { StatusBar } from "../components/Chrome";
 
 /**
@@ -122,7 +122,7 @@ function Picker({
   return (
     <label className="flex min-w-0 shrink items-center gap-1">
       <span className="micro shrink-0 text-flow">{label}</span>
-      <select className="field max-w-[320px]" value={value} onChange={(e) => onChange(e.target.value)}>
+      <Select className="max-w-[320px]" value={value} onChange={(e) => onChange(e.target.value)}>
         {extra && !sessions.some((s) => s.id === extra.id) && (
           <option value={extra.id}>
             {(extra.title ?? extra.firstPrompt ?? extra.id).slice(0, 60)} · {extra.project}
@@ -133,7 +133,7 @@ function Picker({
             {(s.title ?? s.firstPrompt ?? s.id).slice(0, 60)} · {s.project}
           </option>
         ))}
-      </select>
+      </Select>
     </label>
   );
 }

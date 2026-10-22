@@ -261,6 +261,41 @@ body {
   color: var(--color-ink-faint);
 }
 
+/* Selects: the arrow is drawn here, not by the OS (see components/ui.tsx Select).
+   A clip-path triangle takes currentColor, so it sits in the field's ink, and it
+   turns over while the list is open. */
+select.field {
+  appearance: none;
+  padding-right: 16px;
+}
+.field-wrap {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+}
+.field-wrap::after {
+  content: "";
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  width: 7px;
+  height: 4px;
+  margin-top: -2px;
+  background: currentColor;
+  opacity: 0.55;
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+  pointer-events: none;
+  transition:
+    rotate var(--motion-middle) var(--ease-mech),
+    opacity var(--motion-fast) var(--ease-mech);
+}
+/* `:open` is the select's own report that its list is up. Browsers without it
+   simply keep the arrow still — the same triangle, one state fewer. */
+.field-wrap:has(select:open)::after {
+  rotate: 180deg;
+  opacity: 1;
+}
+
 /* Bars drawn as text-accurate rules rather than cells. */
 .rule-h {
   height: 1px;

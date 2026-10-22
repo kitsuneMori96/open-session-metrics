@@ -8,6 +8,7 @@ import { FAINT, logRange, logScale, paletteFor, tickIndices, yTicks } from "../.
 import { AxisX, AxisY, Figure, Legend, Rows, Tip, TipNote, TipRow, TipTitle } from "./base";
 import { dayStamp, dur, int, shortModel, stamp, tok, usd } from "../../lib/format";
 import { sessionTitle } from "../../lib/format";
+import { Select } from "../ui";
 import { fingerprint } from "../../lib/motion";
 
 export interface ScatterField {
@@ -98,20 +99,20 @@ export function SessionScatter({
       wipeKey={fingerprint(sessions.map((s) => s.tokens), `${sessions.length}:${xKey}:${yKey}:${colorBy}:${log}`)}
       right={
         <span className="flex items-center gap-1">
-          <select className="field" value={xKey} onChange={(e) => onAxes(e.target.value, yKey)} title="x axis">
+          <Select value={xKey} onChange={(e) => onAxes(e.target.value, yKey)} title="x axis">
             {FIELDS.map((f) => (
               <option key={f.key} value={f.key}>
                 x: {f.label}
               </option>
             ))}
-          </select>
-          <select className="field" value={yKey} onChange={(e) => onAxes(xKey, e.target.value)} title="y axis">
+          </Select>
+          <Select value={yKey} onChange={(e) => onAxes(xKey, e.target.value)} title="y axis">
             {FIELDS.map((f) => (
               <option key={f.key} value={f.key}>
                 y: {f.label}
               </option>
             ))}
-          </select>
+          </Select>
           <button
             type="button"
             className={usableLog ? "btn btn-on" : "btn"}
@@ -120,11 +121,11 @@ export function SessionScatter({
           >
             log
           </button>
-          <select className="field" value={colorBy} onChange={(e) => setColorBy(e.target.value as typeof colorBy)} title="colour">
+          <Select value={colorBy} onChange={(e) => setColorBy(e.target.value as typeof colorBy)} title="colour">
             <option value="project">by project</option>
             <option value="model">by model</option>
             <option value="agent">by agent</option>
-          </select>
+          </Select>
         </span>
       }
       note={

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ChangeEvent, CSSProperties, ReactNode } from "react";
 import clsx from "clsx";
 import { signed } from "../lib/format";
 import { Roll } from "./Roll";
@@ -202,6 +202,38 @@ export function Chip({
     >
       {children}
     </button>
+  );
+}
+
+/**
+ * A select that draws its own arrow.
+ *
+ * The UA arrow was the last glyph in the interface the OS got to invent: a
+ * different weight on every browser, and it cannot turn. This one is a CSS
+ * triangle in the field's ink, and it turns over while the list is open —
+ * `:open` on the select, so no JS has to guess when the native popup closed.
+ */
+export function Select({
+  value,
+  onChange,
+  title,
+  className,
+  style,
+  children,
+}: {
+  value: string;
+  onChange: (e: ChangeEvent<HTMLSelectElement>) => void;
+  title?: string;
+  className?: string;
+  style?: CSSProperties;
+  children: ReactNode;
+}) {
+  return (
+    <span className="field-wrap">
+      <select className={clsx("field", className)} value={value} title={title} style={style} onChange={onChange}>
+        {children}
+      </select>
+    </span>
   );
 }
 

@@ -5,7 +5,7 @@ import clsx from "clsx";
 import { GRANULARITIES, PRESETS, useFacets, useStatus, type Granularity } from "../lib/api";
 import { clockSec, int, tok } from "../lib/format";
 import { useSlice, useSliceHref } from "../lib/slice";
-import { Chip, KeyCap } from "./ui";
+import { Chip, KeyCap, Select } from "./ui";
 
 export const NAV = [
   { to: "/overview", label: "Overview", key: "1" },
@@ -176,8 +176,8 @@ function GranSelect({ value, onChange }: { value: Granularity | null; onChange: 
   return (
     <label className="flex shrink-0 items-center gap-1">
       <span className={clsx("micro", value ? "text-flow" : "text-ink-faint")}>by</span>
-      <select
-        className="field"
+      <Select
+        className="max-w-[92px]"
         value={value ?? ""}
         onChange={(e) => onChange((e.target.value || null) as Granularity | null)}
         title="time-axis unit — auto picks the finest one the window can afford"
@@ -189,7 +189,7 @@ function GranSelect({ value, onChange }: { value: Granularity | null; onChange: 
             {g}
           </option>
         ))}
-      </select>
+      </Select>
     </label>
   );
 }
@@ -209,8 +209,8 @@ function FacetSelect({
   return (
     <label className={clsx("flex shrink-0 items-center gap-1", active && "font-bold")}>
       <span className={clsx("micro", active ? "text-flow" : "text-ink-faint")}>{label}</span>
-      <select
-        className="field max-w-[190px]"
+      <Select
+        className="max-w-[190px]"
         value={value ?? ""}
         onChange={(e) => onChange(e.target.value || null)}
         style={active ? { borderColor: "var(--color-flow)", color: "var(--color-flow)" } : undefined}
@@ -221,7 +221,7 @@ function FacetSelect({
             {o.label}
           </option>
         ))}
-      </select>
+      </Select>
     </label>
   );
 }
