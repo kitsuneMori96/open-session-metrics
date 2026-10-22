@@ -6,7 +6,7 @@ import { curveLinear } from "@visx/curve";
 import { scaleLinear } from "@visx/scale";
 import type { Bucket } from "../../lib/api";
 import { RULE, RULE_STRONG, SOFT, granLabel, tickIndices, timeTick, timeTooltip, yTicks, type GranularityLike } from "../../lib/chart";
-import { AxisX, AxisY, Figure, Rows, Tip, TipNote, TipTitle, type Box } from "./base";
+import { AxisX, AxisY, Figure, Rows, Tip, TipNote, TipRow, TipTitle, useTip, type Box } from "./base";
 import { tok } from "../../lib/format";
 
 export interface SeriesKey {
@@ -375,21 +375,32 @@ export function StackRule({
   height?: number;
   onHover?: (label: string | null) => void;
 }) {
+  const tip = useTip();
   const total = segments.reduce((a, s) => a + Math.max(0, s.value), 0);
   if (total <= 0) return <span className="block" style={{ width, height, background: "var(--color-rule)" }} />;
   return (
-    <span className="flex overflow-hidden" style={{ width, height }}>
+    <span className="relative flex overflow-hidden" style={{ width, height }} onMouseLeave={tip.hide}>
       {segments
         .filter((s) => s.value > 0)
         .map((s) => (
           <i
             key={s.label}
-            title={s.label}
-            onMouseEnter={onHover ? () => onHover(s.label) : undefined}
+            onMouseEnter={(e) => {
+              const host = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
+              tip.show(e.clientX - host.left, e.clientY - host.top, (
+                <>
+                  <TipTitle>{s.label}</TipTitle>
+                  <TipRow label="tokens" value={tok(s.value)} />
+                  <TipRow label="share" value={`${((s.value / total) * 100).toFixed(1)}%`} />
+                </>
+              ));
+              if (onHover) onHover(s.label);
+            }}
             onMouseLeave={onHover ? () => onHover(null) : undefined}
             style={{ background: s.color, width: `${(Math.max(0, s.value) / total) * 100}%` }}
           />
         ))}
+      <Tip tip={tip.tip} />
     </span>
   );
 }

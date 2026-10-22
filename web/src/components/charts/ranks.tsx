@@ -4,7 +4,7 @@ import { scaleLinear } from "@visx/scale";
 import { useState } from "react";
 import clsx from "clsx";
 import { DANGER, tickIndices, timeTick, timeTooltip, yTicks } from "../../lib/chart";
-import { AxisX, AxisY, Figure, Rows, Tip, TipNote, TipTitle } from "./base";
+import { AxisX, AxisY, Figure, Rows, Tip, TipNote, TipTitle, useTip } from "./base";
 import { int, tok } from "../../lib/format";
 import type { GranularityLike } from "../../lib/chart";
 
@@ -48,6 +48,7 @@ export function RankBars({
   empty?: string;
   track?: number;
 }) {
+  const tip = useTip();
   const peak = Math.max(max ?? 0, ...rows.map((r) => r.value), 1);
   if (rows.length === 0) return <div className="tape py-px text-ink-faint">{empty}</div>;
 
@@ -63,7 +64,7 @@ export function RankBars({
   const cols = `minmax(0,1fr) ${track}px ${w1}ch${split ? ` 1ch ${w2}ch` : ""}`;
 
   return (
-    <div>
+    <div className="relative" onMouseLeave={tip.hide}>
       {rows.map((r) => {
         const pct = Math.max(r.value > 0 ? 2 : 0, (r.value / peak) * 100);
         return (
@@ -71,8 +72,23 @@ export function RankBars({
             key={r.key}
             type="button"
             onClick={r.onClick}
-            disabled={!r.onClick}
-            title={r.sub}
+            // Not `disabled`: a disabled control swallows the pointer, and the row's
+            // subtitle would then only ever be reachable on rows that happen to be links.
+            tabIndex={r.onClick ? undefined : -1}
+            aria-disabled={r.onClick ? undefined : true}
+            onMouseEnter={
+              r.sub
+                ? (e) => {
+                    const host = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
+                    tip.show(e.clientX - host.left, e.clientY - host.top, (
+                      <>
+                        <TipTitle>{r.label}</TipTitle>
+                        <TipNote>{r.sub}</TipNote>
+                      </>
+                    ));
+                  }
+                : undefined
+            }
             className={clsx(
               "grid w-full items-center gap-x-1.5 py-[3px] text-left",
               r.onClick && "cursor-pointer hover:bg-ink/5",
@@ -101,6 +117,7 @@ export function RankBars({
           </button>
         );
       })}
+      <Tip tip={tip.tip} />
     </div>
   );
 }

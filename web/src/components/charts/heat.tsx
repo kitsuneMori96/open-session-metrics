@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { int } from "../../lib/format";
-import { Figure, Tip, TipTitle } from "./base";
+import { Figure, Tip, TipRow, TipTitle, useTip } from "./base";
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -135,17 +135,37 @@ export function ActivityHeatmap({
 
 /** 24-hour profile as a single row of columns, for the corner of a panel. */
 export function HourStrip({ hourly, color = "var(--color-good)", height = 34 }: { hourly: number[]; color?: string; height?: number }) {
+  const tip = useTip();
   const peak = Math.max(1, ...hourly);
+  const total = hourly.reduce((a, b) => a + b, 0);
   return (
-    <div className="flex items-end gap-px" style={{ height }}>
+    <div className="relative flex items-end gap-px" style={{ height }} onMouseLeave={tip.hide}>
       {hourly.map((v, h) => (
-        <i
+        // The hit area is the full column, not the bar: an empty hour draws at zero
+        // height and would otherwise be the one hour with no reading at all.
+        <span
           key={h}
-          title={`${String(h).padStart(2, "0")}:00 — ${int(v)} turns`}
-          className="flex-1"
-          style={{ height: `${Math.max(v > 0 ? 4 : 0, (v / peak) * 100)}%`, background: v > 0 ? color : "var(--color-rule)" }}
-        />
+          className="flex h-full flex-1 items-end"
+          onMouseEnter={(e) => {
+            // The strip is the reference frame for both the anchor and the readout, so the
+            // tip lands on the bar that was pointed at rather than on the figure's corner.
+            const host = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
+            tip.show(e.clientX - host.left, e.clientY - host.top, (
+              <>
+                <TipTitle>{String(h).padStart(2, "0")}:00</TipTitle>
+                <TipRow label="turns" value={int(v)} />
+                <TipRow label="share of day" value={total > 0 ? `${((v / total) * 100).toFixed(1)}%` : "—"} />
+              </>
+            ));
+          }}
+        >
+          <i
+            className="w-full"
+            style={{ height: `${Math.max(v > 0 ? 4 : 0, (v / peak) * 100)}%`, background: v > 0 ? color : "var(--color-rule)" }}
+          />
+        </span>
       ))}
+      <Tip tip={tip.tip} />
     </div>
   );
 }
