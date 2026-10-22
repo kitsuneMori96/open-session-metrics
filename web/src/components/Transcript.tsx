@@ -330,7 +330,13 @@ function TurnHeader({ row, active, query }: { row: Row; active: boolean; query: 
         Σ {tok(row.cumTokens)}
       </span>
       <span className="tape tabular shrink-0 text-ink-faint">{t.cost > 0 ? `$${t.cost.toFixed(4)}` : ""}</span>
-      {t.finish && t.finish !== "stop" && <span className="tape shrink-0 text-warning">{t.finish}</span>}
+      {t.finish && t.finish !== "stop" && t.finish !== "tool-calls" && (
+        // `tool-calls` is not an outcome, it is the normal way a turn continues: the
+        // model stopped talking because it had work to hand off. Under `all` the tool
+        // rows below say so; under `text` the word would name content the filter just
+        // removed. Only the finishes that actually ended something early are shown.
+        <span className="tape shrink-0 text-warning">{t.finish}</span>
+      )}
       {t.errors > 0 && <span className="tape shrink-0 text-danger">{t.errors}×</span>}
       {t.additions + t.deletions > 0 && (
         <span className="tape shrink-0">
