@@ -13,7 +13,7 @@ export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const INSTALLED = `${path.sep}node_modules${path.sep}`;
 const USER_DATA_DIR = path.join(
   process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share"),
-  "opencode-holo-cockpit"
+  "opencode-session-metrics"
 );
 export const DATA_DIR =
   process.env.OSM_DATA_DIR ??

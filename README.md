@@ -13,7 +13,7 @@
 ## 安装
 
 ```bash
-npm i -g opencode-holo-cockpit
+npm i -g @kitsunemori/opencode-session-metrics
 osm                     # 起服务并打开浏览器
 osm status              # 谁在跑、数据在哪
 osm logs                # 跟踪服务日志
@@ -22,7 +22,7 @@ osm stop                # 停掉后台服务
 
 要求 **Node 24+**（使用内置 `node:sqlite`，无原生依赖），且本机已有
 `~/.local/share/opencode/opencode.db`。全局安装把指标库写在
-`~/.local/share/opencode-holo-cockpit`（`OSM_DATA_DIR` 或 `osm --data` 可改），
+`~/.local/share/opencode-session-metrics`（`OSM_DATA_DIR` 或 `osm --data` 可改），
 升级包不会动到它。`osm run` 前台运行，`--port` / `--host` 改绑定。
 
 从源码运行见[快速开始](#快速开始)。

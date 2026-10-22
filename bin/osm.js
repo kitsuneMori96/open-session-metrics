@@ -9,7 +9,7 @@
 //   osm logs            follow the server log
 //
 // One process, one port: Express serves both the API and the built web bundle.
-// State goes to the XDG data dir (`~/.local/share/opencode-holo-cockpit`), never
+// State goes to the XDG data dir (`~/.local/share/opencode-session-metrics`), never
 // into the package directory, so `npm i -g` upgrades cannot delete it.
 import { spawn } from "node:child_process";
 import {
@@ -31,6 +31,12 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PKG = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8"));
 const SERVER_ENTRY = path.join(ROOT, "server", "dist", "index.js");
 const WEB_INDEX = path.join(ROOT, "web", "dist", "index.html");
+
+// `osm status | head` must exit quietly instead of throwing EPIPE.
+process.stdout.on("error", (error) => {
+  if (error.code === "EPIPE") process.exit(0);
+  throw error;
+});
 
 const USAGE = `osm ${PKG.version} — local web cockpit for OpenCode session metrics
 
@@ -109,8 +115,10 @@ if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) fail(`invalid port: ${f
 // Same rule as server/src/config.ts: a checkout keeps state in `<repo>/.data`,
 // a global install goes to the XDG data dir.
 const INSTALLED = `${path.sep}node_modules${path.sep}`;
+// Fixed data-dir name: the package is scoped, but a scope must not become a
+// subdirectory of the XDG data dir.
 const DEFAULT_DATA_DIR = ROOT.includes(INSTALLED)
-  ? path.join(process.env.XDG_DATA_HOME || path.join(homedir(), ".local", "share"), PKG.name)
+  ? path.join(process.env.XDG_DATA_HOME || path.join(homedir(), ".local", "share"), "opencode-session-metrics")
   : path.join(ROOT, ".data");
 const DATA_DIR = path.resolve(flags.data ?? process.env.OSM_DATA_DIR ?? DEFAULT_DATA_DIR);
 const SOURCE_DB =
