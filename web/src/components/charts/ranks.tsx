@@ -4,7 +4,7 @@ import { scaleLinear } from "@visx/scale";
 import { useState } from "react";
 import clsx from "clsx";
 import { DANGER, tickIndices, timeTick, timeTooltip, yTicks } from "../../lib/chart";
-import { AxisX, AxisY, Figure, Rows, Tip, TipNote, TipTitle, useTip } from "./base";
+import { AxisX, AxisY, Figure, Rows, Tip, TipNote, TipRow, TipTitle, useTip } from "./base";
 import { int, tok } from "../../lib/format";
 import { fingerprint } from "../../lib/motion";
 import type { GranularityLike } from "../../lib/chart";
@@ -154,6 +154,7 @@ export function TimeBars({
   right,
   note,
   xFormat,
+  tipExtra,
 }: {
   label: string;
   values: TimeValue[];
@@ -170,6 +171,8 @@ export function TimeBars({
    * number is the only coordinate the reader actually has.
    */
   xFormat?: (index: number) => string;
+  /** The counts behind the plotted value — a rate of 0% needs its denominator. */
+  tipExtra?: (index: number) => { label: string; value: string }[];
 }) {
   const [hover, setHover] = useState<{ x: number; y: number; i: number } | null>(null);
   const peak = Math.max(...values.map((v) => v.value), 1);
@@ -192,6 +195,9 @@ export function TimeBars({
         const labelIdx = tickIndices(n, Math.max(2, Math.floor(inner.width / 76)));
         const step = n > 1 ? inner.width / (n - 1) : inner.width;
         const barW = Math.max(1, Math.min(step * 0.72, 18));
+        // The target is the axis column, not the mark: a 2px bar would otherwise ask for a
+        // pixel of aim, and a line chart has nothing to aim at at all.
+        const hitW = n > 1 ? step : inner.width;
 
         return (
           <>
@@ -203,11 +209,21 @@ export function TimeBars({
                 const rect = e.currentTarget.getBoundingClientRect();
                 const px = e.clientX - rect.left - margin.left;
                 const i = Math.round((px / Math.max(1, inner.width)) * (n - 1));
-                if (i >= 0 && i < n) setHover({ x: e.clientX - rect.left, y: e.clientY - rect.top, i });
+                setHover(px >= 0 && i >= 0 && i < n ? { x: e.clientX - rect.left, y: e.clientY - rect.top, i } : null);
               }}
             >
               <Group top={margin.top} left={margin.left}>
                 <Rows ticks={yt} y={(v) => y(v)} left={0} width={inner.width} />
+                {hover && (
+                  <rect
+                    x={Math.max(0, Math.min(inner.width - hitW, x(hover.i) - hitW / 2))}
+                    y={0}
+                    width={Math.min(hitW, inner.width)}
+                    height={plotH}
+                    fill="var(--color-ink)"
+                    fillOpacity={0.05}
+                  />
+                )}
                 {mode === "line" && (
                   <polyline
                     points={values.map((v, i) => `${x(i)},${y(v.value)}`).join(" ")}
@@ -239,7 +255,9 @@ export function TimeBars({
                   format={(v) => (xFormat ? xFormat(Math.round(v)) : timeTick(values[Math.round(v)]?.ts ?? 0, gran))}
                 />
                 {hover && (
-                  <line className="crosshair" x1={margin.left + x(hover.i)} x2={margin.left + x(hover.i)} y1={margin.top} y2={margin.top + plotH} />
+                  // Plot coordinates: this used to add the margin again inside the group,
+                  // which drew the crosshair 46px right and 10px low of the bucket.
+                  <line className="crosshair" x1={x(hover.i)} x2={x(hover.i)} y1={0} y2={plotH} />
                 )}
               </Group>
             </svg>
@@ -252,11 +270,10 @@ export function TimeBars({
                       node: (
                         <>
                           <TipTitle>{xFormat ? xFormat(hover.i) : timeTooltip(values[hover.i].ts, gran)}</TipTitle>
-                          <div className="tip-row">
-                            <span className="tip-key">{label}</span>
-                            <span className="tip-val">{format(values[hover.i].value)}</span>
-                          </div>
-                          <TipNote>{n} buckets</TipNote>
+                          <TipRow label={label} value={format(values[hover.i].value)} />
+                          {tipExtra?.(hover.i).map((r) => (
+                            <TipRow key={r.label} label={r.label} value={r.value} />
+                          ))}
                         </>
                       ),
                     }
@@ -289,7 +306,7 @@ export function Histogram({
   right?: React.ReactNode;
   note?: React.ReactNode;
 }) {
-  const [hover, setHover] = useState<number | null>(null);
+  const [hover, setHover] = useState<{ i: number; x: number; y: number } | null>(null);
   const peak = Math.max(...bins.map((b) => b.count), 1);
   const total = bins.reduce((a, b) => a + b.count, 0);
   return (
@@ -300,62 +317,73 @@ export function Histogram({
         const band = inner.width / Math.max(1, bins.length);
         const bw = Math.max(2, band * 0.7);
         const y = scaleLinear<number>({ domain: [0, peak], range: [plotH, 0] });
+        const at = hover ? bins[hover.i] : null;
+        const below = hover ? bins.slice(0, hover.i + 1).reduce((a, b) => a + b.count, 0) : 0;
+        const share = (n: number) => `${total > 0 ? ((n / total) * 100).toFixed(1) : "0.0"}%`;
         return (
-          <svg width={width} height={box.height}>
-            <Group top={margin.top} left={margin.left}>
-              <Rows ticks={yTicks(peak, 2)} y={(v) => y(v)} left={0} width={inner.width} />
-              {bins.map((b, i) => (
-                <VisxBar
-                  key={b.label}
-                  x={i * band + (band - bw) / 2}
-                  y={y(b.count)}
-                  width={bw}
-                  height={Math.max(b.count > 0 ? 1 : 0, plotH - y(b.count))}
-                  fill={color}
-                  fillOpacity={hover === null || hover === i ? 0.85 : 0.3}
-                  onMouseEnter={() => setHover(i)}
-                  onMouseLeave={() => setHover(null)}
-                />
-              ))}
-              <line x1={0} x2={inner.width} y1={plotH} y2={plotH} stroke="var(--color-rule-strong)" strokeWidth={1} />
-              {bins.map((b, i) => (
-                <text
-                  key={b.label}
-                  x={i * band + band / 2}
-                  y={plotH + 10}
-                  textAnchor="middle"
-                  fill={hover === i ? "var(--color-ink)" : "var(--color-ink-faint)"}
-                  fontSize={8}
-                  fontFamily="JetBrains Mono, monospace"
-                >
-                  {b.label}
-                </text>
-              ))}
-            </Group>
+          <>
+            <svg
+              width={width}
+              height={box.height}
+              onMouseLeave={() => setHover(null)}
+              onMouseMove={(e) => {
+                const rect = e.currentTarget.getBoundingClientRect();
+                const px = e.clientX - rect.left - margin.left;
+                const i = Math.floor(px / band);
+                setHover(px >= 0 && i >= 0 && i < bins.length ? { i, x: e.clientX - rect.left, y: e.clientY - rect.top } : null);
+              }}
+            >
+              <Group top={margin.top} left={margin.left}>
+                {hover && (
+                  <rect x={hover.i * band} y={0} width={band} height={plotH} fill="var(--color-ink)" fillOpacity={0.05} />
+                )}
+                <Rows ticks={yTicks(peak, 2)} y={(v) => y(v)} left={0} width={inner.width} />
+                {bins.map((b, i) => (
+                  <VisxBar
+                    key={b.label}
+                    x={i * band + (band - bw) / 2}
+                    y={y(b.count)}
+                    width={bw}
+                    height={Math.max(b.count > 0 ? 1 : 0, plotH - y(b.count))}
+                    fill={color}
+                    fillOpacity={hover === null || hover.i === i ? 0.85 : 0.3}
+                  />
+                ))}
+                <line x1={0} x2={inner.width} y1={plotH} y2={plotH} stroke="var(--color-rule-strong)" strokeWidth={1} />
+                {bins.map((b, i) => (
+                  <text
+                    key={b.label}
+                    x={i * band + band / 2}
+                    y={plotH + 10}
+                    textAnchor="middle"
+                    fill={hover?.i === i ? "var(--color-ink)" : "var(--color-ink-faint)"}
+                    fontSize={8}
+                    fontFamily="JetBrains Mono, monospace"
+                  >
+                    {b.label}
+                  </text>
+                ))}
+              </Group>
+            </svg>
             <Tip
               tip={
-                hover === null
-                  ? null
-                  : {
-                      x: margin.left + hover * band + band / 2,
-                      y: margin.top + y(bins[hover].count),
+                hover && at
+                  ? {
+                      x: hover.x,
+                      y: hover.y,
                       node: (
                         <>
-                          <TipTitle>{bins[hover].label}</TipTitle>
-                          <div className="tip-row">
-                            <span className="tip-key">calls</span>
-                            <span className="tip-val">{int(bins[hover].count)}</span>
-                          </div>
-                          <div className="tip-row">
-                            <span className="tip-key">share</span>
-                            <span className="tip-val">{total > 0 ? ((bins[hover].count / total) * 100).toFixed(1) : "0.0"}%</span>
-                          </div>
+                          <TipTitle>{at.label}</TipTitle>
+                          <TipRow label="calls" value={int(at.count)} />
+                          <TipRow label="share" value={share(at.count)} />
+                          <TipRow label="at or below" value={share(below)} />
                         </>
                       ),
                     }
+                  : null
               }
             />
-          </svg>
+          </>
         );
       }}
     </Figure>

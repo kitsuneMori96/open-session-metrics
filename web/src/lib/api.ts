@@ -279,7 +279,7 @@ export interface ToolDetail {
   latency: { label: string; count: number; upperMs: number }[];
   agents: { agent: string; calls: number; errors: number }[];
   projects: { project: string; calls: number; errors: number }[];
-  signatures: { sig: string; count: number; sample: string }[];
+  signatures: { message: string; count: number; sample: string }[];
   recentErrors: { at: number; session: string; error: string }[];
   edited: { additions: number; deletions: number; files: number; chars: number };
 }

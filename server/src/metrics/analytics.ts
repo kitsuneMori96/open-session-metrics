@@ -1035,10 +1035,28 @@ export interface ToolDetail {
   latency: { label: string; count: number; upperMs: number }[];
   agents: { agent: string; calls: number; errors: number }[];
   projects: { project: string; calls: number; errors: number }[];
-  signatures: { sig: string; count: number; sample: string }[];
+  signatures: { message: string; count: number; sample: string }[];
   recentErrors: { at: number; session: string; error: string }[];
   /** Whatever the tool wrote back into the tree, summed over the slice. */
   edited: { additions: number; deletions: number; files: number; chars: number };
+}
+
+/**
+ * The shape of a failure rather than the instance of it.
+ *
+ * URL, path, hash and number are what differ between two runs of the same failure, so
+ * they are replaced before grouping: "403 GET <url>" counts twelve times instead of
+ * producing twelve signatures of one. The verbatim first line is what the panel shows.
+ */
+export function errorKey(message: string): string {
+  return message
+    .split("\n")[0]
+    .trim()
+    .replace(/https?:\/\/\S+/g, "<url>")
+    .replace(/(?<![\w.])\/(?:[\w.@+-]+\/)*[\w.@+-]*/g, "<path>")
+    .replace(/\b[0-9a-f]{7,}\b/gi, "<hash>")
+    .replace(/\d+(?:[.,:]\d+)*/g, "<n>")
+    .slice(0, 160);
 }
 
 const LAT_BINS: [string, number, number][] = [
@@ -1059,7 +1077,7 @@ export function toolDetail(db: DatabaseSync, raw: Slice, name: string): ToolDeta
   const rows = db
     .prepare(
       `SELECT tl.name name, COALESCE(tl.dur_ms,0) ms, tl.status status,
-              COALESCE(tl.started,0) started, COALESCE(tl.sig,'') sig,
+              COALESCE(tl.started,0) started,
               COALESCE(tl.error,'') error, COALESCE(tl.session_id,'') session,
               COALESCE(t.agent,'main') agent, COALESCE(t.project,'—') project,
               COALESCE(tl.additions,0) adds, COALESCE(tl.deletions,0) dels,
@@ -1083,7 +1101,7 @@ export function toolDetail(db: DatabaseSync, raw: Slice, name: string): ToolDeta
   const latency = LAT_BINS.map(([label, lo, hi]) => ({ label, count: 0, upperMs: hi }));
   const agents = new Map<string, { agent: string; calls: number; errors: number }>();
   const projects = new Map<string, { project: string; calls: number; errors: number }>();
-  const signatures = new Map<string, { sig: string; count: number; sample: string }>();
+  const signatures = new Map<string, { message: string; count: number; sample: string }>();
   const recentErrors: ToolDetail["recentErrors"] = [];
   let additions = 0;
   let deletions = 0;
@@ -1123,11 +1141,15 @@ export function toolDetail(db: DatabaseSync, raw: Slice, name: string): ToolDeta
     if (isError) p.errors++;
     projects.set(project, p);
 
-    const sig = String(r.sig) || "(no signature)";
-    const s = signatures.get(sig) ?? { sig, count: 0, sample: String(r.error).slice(0, 400) };
-    s.count++;
-    if (!s.sample && r.error) s.sample = String(r.error).slice(0, 400);
-    signatures.set(sig, s);
+    if (isError) {
+      // Only failures are signatures. Grouping every call by its input hash is what made
+      // the panel read as `2× webfetch:1uubvz4`: a successful repeat with no message at all.
+      const body = String(r.error ?? "").trim() || "tool error";
+      const key = errorKey(body);
+      const s = signatures.get(key);
+      if (s) s.count++;
+      else signatures.set(key, { message: body.split("\n")[0].slice(0, 160), count: 1, sample: body.slice(0, 400) });
+    }
 
     if (isError && String(r.error) && recentErrors.length < 12) {
       recentErrors.push({ at: num(r.started), session: String(r.session), error: String(r.error).slice(0, 400) });

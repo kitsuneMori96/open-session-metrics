@@ -110,8 +110,25 @@ async function main() {
     if (j.buckets.reduce((a: number, b: any) => a + b.calls, 0) !== j.totals.calls)
       return "the time buckets do not account for every call";
     if (!j.agents?.length || !j.projects?.length) return "missing the agent or project split";
+    if (j.totals.errors === 0 && j.signatures.length) return "a tool with no failures has error signatures";
     return null;
   });
+
+  // The error panel groups failures by message, so its rows are readable text: the input
+  // hash it used to print is an id, and a successful call is not a signature at all.
+  const failing = (all?.tools ?? []).find((t: any) => t.errors > 0);
+  if (failing) {
+    await check(`tool error signatures (${failing.name})`, `/api/top/tool?name=${encodeURIComponent(failing.name)}`, (j) => {
+      if (!j.signatures.length) return "a tool with failures has no signatures";
+      if (j.signatures.some((s: any) => !s.message || !s.sample)) return "a signature has no message";
+      const counted = j.signatures.reduce((a: number, s: any) => a + s.count, 0);
+      if (counted > j.totals.errors) return `signatures count ${counted} of ${j.totals.errors} failures`;
+      return null;
+    });
+  } else {
+    failures++;
+    console.log("FAIL tool error signatures: no tool with failures in the slice");
+  }
 
   // The transcript endpoint is the reason `parts` exists: assert a real one comes back.
   const busiest = [...(all?.sessions ?? [])].sort((a: any, b: any) => b.tools - a.tools)[0];

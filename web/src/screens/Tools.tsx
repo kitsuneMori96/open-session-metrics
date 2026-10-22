@@ -138,6 +138,10 @@ export default function Tools() {
                 color="var(--color-ink)"
                 height={92}
                 format={(v) => int(v)}
+                tipExtra={(i) => {
+                  const b = active.buckets[i];
+                  return b && b.errors > 0 ? [{ label: "failures", value: int(b.errors) }] : [];
+                }}
               />
               <TimeBars
                 label="failure rate"
@@ -148,6 +152,13 @@ export default function Tools() {
                 height={78}
                 format={(v) => pct(v, 0)}
                 note={`${active.totals?.errors ?? 0} failures across ${active.buckets.length} buckets`}
+                tipExtra={(i) => {
+                  const b = active.buckets[i];
+                  return b ? [
+                    { label: "failures", value: int(b.errors) },
+                    { label: "calls", value: int(b.calls) },
+                  ] : [];
+                }}
               />
               <Histogram
                 label="latency distribution"
@@ -189,16 +200,15 @@ export default function Tools() {
                 </Panel>
               </div>
 
-              <Panel title="error signatures" right={<span className="tape text-ink-faint">grouped by hash</span>}>
+              <Panel title="error signatures" right={<span className="tape text-ink-faint">grouped by message</span>}>
                 {active.signatures.length === 0 ? (
                   <Empty>this tool has not failed in the window</Empty>
                 ) : (
                   active.signatures.map((sig) => (
-                    <div key={sig.sig} className="border-b border-rule/60 py-1 last:border-b-0">
+                    <div key={sig.message} className="border-b border-rule/60 py-1 last:border-b-0">
                       <div className="flex items-baseline gap-2">
                         <span className="tape tabular shrink-0 text-danger">{int(sig.count)}×</span>
-                        <span className="tape shrink-0 text-ink-faint">{sig.sig.slice(0, 16)}</span>
-                        <span className="tape min-w-0 flex-1 truncate text-ink-soft">{sig.sample.split("\n")[0]}</span>
+                        <span className="tape min-w-0 flex-1 truncate text-ink">{sig.message}</span>
                       </div>
                       {sig.sample.includes("\n") && (
                         <pre className="out mt-1 max-h-[120px] overflow-auto border border-rule bg-paper/60 p-2 text-[10px]">{sig.sample}</pre>
