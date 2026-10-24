@@ -1,8 +1,14 @@
 # OpenCode Session Metrics
 
-把 OpenCode 的本机数据库（`~/.local/share/opencode/opencode.db`）物化成一张指标库，
-再用一个 Web 面板回看自己的编码会话：跑了哪些会话、花了多少 Token、调用了哪些工具、
-每个工具失败过几次、钱花在哪个项目上。
+把本机 CLI 的编码会话物化成指标库，再用一个 Web 面板回看：跑了哪些会话、花了多少
+Token / 积分、调用了哪些工具、每个工具失败过几次、成本落在哪个项目上。
+
+支持两种数据源，两库并存、页眉一处切换：
+
+- **OpenCode**：`~/.local/share/opencode/opencode.db`（SQLite，只读），成本单位美元；
+- **Qoder CLI**：`~/.qoder/projects/**/*.jsonl`（逐行转录），成本单位积分。
+
+两种来源归一成同一套会话 / 轮次 / 工具记录，聚合、切片、图表与正文面板完全共用。
 
 功能范围对齐 [`opencode-top`](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/opencode-top-parity.md)（Sessions / Tools / Overview
 三屏加正文面板），呈现方式按浏览器重排：**一个页面、一条全局切片、图表之间互相下钻**。
@@ -20,8 +26,10 @@ osm logs                # 跟踪服务日志
 osm stop                # 停掉后台服务
 ```
 
-要求 **Node 24+**（使用内置 `node:sqlite`，无原生依赖），且本机已有
-`~/.local/share/opencode/opencode.db`。全局安装把指标库写在
+要求 **Node 24+**（使用内置 `node:sqlite`，无原生依赖），且本机至少有一种数据源：
+`~/.local/share/opencode/opencode.db`（OpenCode）或 `~/.qoder/projects`（Qoder CLI）。
+默认源自动探测，也可以 `OSM_SOURCE=qoder osm` 指定，或启动后在页眉切换
+（见[数据源](#数据源)）。全局安装把指标库写在
 `~/.local/share/opencode-session-metrics`（`OSM_DATA_DIR` 或 `osm --data` 可改），
 升级包不会动到它。`osm run` 前台运行，`--port` / `--host` 改绑定。
 
@@ -29,7 +37,9 @@ osm stop                # 停掉后台服务
 
 ## 界面
 
-下面的截图取自本机的真实数据，不是合成图；截图为了看清面板用的是 30 天切片（默认窗口是 24 小时）。
+下面的截图取自本机的真实数据（OpenCode 源），不是合成图；截图为了看清面板用的是 30 天切片（默认窗口是 24 小时）。
+Qoder 源读同一套面板：成本列由 `$` 换成 `cr`、`$/Mtok` 换成 `cr/Mctx`，没有 token class 的库
+堆叠维度默认按模型（Token 语义见[指标定义](#指标定义)）。
 
 ### Overview — 总量与形状
 
@@ -41,7 +51,7 @@ KPI 行（各带与上一等长窗口的对比）、按模型堆叠的 Token 时
 ### Sessions — 全部会话一张表
 
 可排序、可展开（根会话下挂子代理会话）；过滤、排序、翻页都由 SQL 完成，
-一次取 100 个根会话（连它们的子树），「load more」接着下一段。点一行进详情。
+一次取 500 个根会话（连它们的子树），「load more」接着下一段。点一行进详情。
 
 ![Sessions](https://raw.githubusercontent.com/kitsuneMori96/opencode-session-metrics/master/docs/sessions.png)
 
@@ -146,28 +156,30 @@ Wipe（图表按内容指纹重画）。
 
 ## 工作原理
 
+两种源各有一个适配器，产出同一套归一化记录；适配器之上（聚合、rollup、正文、API）
+不知道会话来自哪个 CLI：
+
 ```
-opencode.db (只读)                    .data/metrics.db (查询用)
-┌──────────────────────┐   增量物化    ┌──────────────────────────┐
-│ session_v2           │ ────────────▶ │ turns · tools · parts     │
-│ session_message      │  约 100ms/次  │ events · sessions         │
-│ part · project       │               │ flow · heat · models      │
-└──────────────────────┘               │ 日滚存 roll_cell / hour /  │
-                                       │ tool（按天、按会话）       │
-                                       └──────────┬───────────────┘
-                                                  │ node:sqlite
-                                      ┌───────────▼──────────┐
-                                      │ Express API :8787    │
-                                      └───────────┬──────────┘
-                                      ┌───────────▼──────────┐
-                                      │ Web 面板 (Vite/React) │
-                                      └──────────────────────┘
+OpenCode  opencode.db (只读) ──▸ SourceReader ──┐
+                                               ├──▸ SrcSession / SrcTurn / SrcTool
+Qoder CLI ~/.qoder/projects/*.jsonl ─▸ QoderSource ─┘        （归一化记录）
+                                                               │ 物化
+                                               ┌───────────────┴───────────────┐
+                                         metrics.db（美元）          metrics-qoder.db（积分）
+                                               └───────────────┬───────────────┘
+                                                               │ node:sqlite
+                                                     Express API :8787
+                                                               │
+                                                     Web 面板 (Vite/React)
 ```
 
-指标不从源库实时计算：图表要的每个数字（时间桶、模型堆叠、热力图、百分位、
-会话排行）都在服务端用 SQL 聚合好，一次请求返回当前切片的完整快照，
-浏览器只负责画。物化由源库水位驱动（`MAX(消息时间, 会话更新时间)`），
-只有源库出现新数据时才重建，且只重算受影响的会话。兼容源库 v1 与 v2 两代 schema。
+每个指标库里有 `turns · tools · parts · events · sessions · flow · heat · models`，
+以及按天滚存的派生表（见[数据表](#数据表)）。指标不从源库实时计算：图表要的每个数字
+（时间桶、模型堆叠、热力图、百分位、会话排行）都在服务端用 SQL 聚合好，
+一次请求返回当前切片的完整快照，浏览器只负责画。物化由源库水位驱动，只有源库出现
+新数据时才重建，且只重算受影响的会话：OpenCode 的水位是 `MAX(消息时间, 会话更新时间)`，
+Qoder 是会话文件的 mtime——不维护偏移文件，避免与 CLI 自己的写入竞争；子代理转录
+随父会话一起重建。OpenCode 兼容源库 v1 与 v2 两代 schema。
 
 查询不直接扫 `turns`。宽窗口（按天及更粗的分桶）读的是按天滚存的四张派生表：
 （会话 × 天 × 项目/模型/agent）的合计、按小时的轮次、按天的工具调用与延迟直方图。
@@ -204,12 +216,14 @@ opencode.db (只读)                    .data/metrics.db (查询用)
 Qoder 没有会话数据库，转录是逐行 JSONL。两条格式陷阱决定了解析方式：一次模型响应会被
 拆成 2–4 个 `assistant` 事件（只有最后一条带 `usage`，必须按 `message.id` 合并），
 子代理的转录写在 `<sessionId>/subagents/` 下（`sessionId` 仍是父会话，必须并入父会话而不是
-另起一个会话）。token 字段恒为 0，上下文占用由 `context_usage_ratio × contextWindow` 还原；
-积分按整数微积分（`credits_micro`，×1e6）入库，`cost` 列存同一数值供现有聚合使用。
+另起一个会话）。token 字段恒为 0，上下文占用由 `context_usage_ratio` 乘该模型的分母还原
+（`runtime-config` 钉过窗口就取钉的值，否则取模型目录的 `max_input_tokens`——
+Qwen 180K、DeepSeek 1M，不是选择器显示的 200K）；积分按整数微积分
+（`credits_micro`，×1e6）入库，`cost` 列存同一数值供现有聚合使用。
 完整规则与验收门见 [docs/qoder-source.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/qoder-source.md)。
 
-成本单位由 `meta.unit` 声明、`/api/status` 透出，面板在渲染任何数字之前按当前库的单位把
-`$` 换成 `cr`，不需要手工切换。
+成本单位由 `meta.unit` 声明、`/api/sources` 与 `/api/status` 透出，面板在渲染任何数字之前
+按当前库的单位把 `$` 换成 `cr`，不需要手工切换。
 
 ## 快速开始
 
@@ -230,7 +244,7 @@ pnpm serve            # 构建 web+server，重启在 http://127.0.0.1:8787，�
 回落到 `index.html`。只换前端不换后端时，新 bundle 请求 `/api/sources` 收到 200 HTML，
 解析失败后静默降级——页眉的数据源控件会退化成纯文本。`pnpm serve` 从根上消掉这种错配。
 
-首次启动若无指标库会自动物化（全量，几分钟内完成）；之后按水位增量更新。
+首次启动若无指标库会自动物化（OpenCode 全量几分钟，Qoder 约 4 秒）；之后按水位增量更新。
 
 ```bash
 pnpm serve -- --no-open   # 不打开浏览器
@@ -270,6 +284,7 @@ pid 与日志落在数据目录的 `osm.{pid,log}`。
 | 端点 | 说明 |
 | --- | --- |
 | `GET /api/status` | 物化状态、水位、各表行数 |
+| `GET /api/sources` | 两库的可用性、原始路径、成本单位（`usd` / `credit`）、行数与物化时间 |
 | `GET /api/top/facets` | 过滤器取值：项目 / 模型 / agent / 工具，加时间跨度与总行数 |
 | `GET /api/top/analytics?from=&to=&project=&model=&agent=` | 当前切片的全部面板数据：totals、KPI 对比、时间桶与模型堆叠、热力图、效率百分位、四张排行表、最重的 200 个会话 |
 | `GET /api/top/sessions?...&q=&order=&dir=&limit=&cursor=` | 会话表：`limit` 个根会话及其子树（默认且上限 500），`cursor` 续上一页；`focus=<id>` 换成该会话的族谱 |
@@ -279,13 +294,23 @@ pid 与日志落在数据目录的 `osm.{pid,log}`。
 | `POST /api/refresh` | 手动重建，`{full:true}` 为全量 |
 
 `from` / `to` 是 epoch 毫秒；`from=0` 表示从最早的数据开始。非数字或 `from >= to` 返回 400。
-`analytics` 的响应与历史长度无关：时间轴按列预算取整，会话只带最重的 200 个
-（全历史约 200KB）。会话表本身用 `cursor` 翻页，每页大小固定。
+两库并存：请求头 `x-osm-source: opencode\|qoder` 选库（页眉切换时自动带上），省略则用
+启动时的默认源；未物化的库在第一次被选中时按需建好。`analytics` 的响应与历史长度无关：
+时间轴按列预算取整，会话只带最重的 200 个（全历史约 200KB）。会话表本身用 `cursor`
+翻页，每页大小固定。
 
 ## 指标定义
 
 - **Token 总量**（`total`）= input + output + cache_read + cache_write，**不含 reasoning**。
   推理 Token 单独给出。这套口径与 `opencode-top` 的 `TokenUsage.total` 相同。
+- **Qoder 的 Token 口径**：CLI 不写 input / output / cache_*（恒为 0），唯一可还原的是
+  `context_usage_ratio`。`input` 存「本轮累积上下文」= `ratio × 该模型的分母`
+  （Qwen 180K / DeepSeek 1M，未知模型回落 200K），其余四类为 0，`total` 即上下文流量；
+  图轴写 context 而不是 input。输出 token 不做估算，所以输出曲线恒为 0；生成速度、
+  缓存命中这类按输出 / 缓存定义的指标在 Qoder 上没有可用值。压缩事件改在 token 空间
+  判定（相邻两轮上下文回落 > 50K tok），不随分母漂移。成本列存积分：整数微积分
+  （`credits_micro`，×1e6）是精确源，`cost` 存同一数值以复用现有聚合，面板把
+  `$` / `$/Mtok` 换成 `cr` / `cr/Mctx`。
 - **切片口径**（与 `opencode-top` 有意不同）：统计「自己的 `created` 落在窗口内，
   且自己的 `project` / `model` / `agent` 命中过滤器」的助手轮次。原版的规则是
   「先选出窗口内活跃过的根会话，再补上它们的全部后代，最后只统计 cutoff 之后的轮次」——
@@ -309,7 +334,7 @@ pid 与日志落在数据目录的 `osm.{pid,log}`。
 
 | 表 | 粒度 | 主要字段 |
 | --- | --- | --- |
-| `turns` | 每条消息（`role` = assistant / user） | 各类 Token、成本、`fill` / `fill_after`、改动增量与 `write_lines`、预计算的 `bucket` / `day` / `hour`；user 行只带 `text`（正文面板的提问行） |
+| `turns` | 每条消息（`role` = assistant / user） | 各类 Token、成本（Qoder 另有 `credits_micro` 整数微积分）、`fill` / `fill_after`、改动增量与 `write_lines`、预计算的 `bucket` / `day` / `hour`；user 行只带 `text`（正文面板的提问行） |
 | `tools` | 每次工具调用 | 状态、耗时、错误文本、改动与写入行数、调用签名、`target_session`（task 子会话） |
 | `parts` | 每条助手内容 | `kind`（text / reasoning / tool）、`ordinal`、正文或工具入参/回显、`exit_code`、是否截断 |
 | `events` | 每个事件 | 类型、`at` / `end_at`、`count`、`fill`、JSON 详情 |
@@ -317,7 +342,7 @@ pid 与日志落在数据目录的 `osm.{pid,log}`。
 | `flow` | 项目 × 5 分钟 | `tokens_gen`、`tokens_cache_read`、成本、主导模型 |
 | `heat` | 项目 × 本地日 × 小时 | Token、成本、轮次数 |
 | `models` | 每模型 | 价目、上下文窗口（models.dev 缓存 + 手工覆盖） |
-| `meta` | — | 水位、物化时间、源库路径 |
+| `meta` | — | 水位、物化时间、源库路径、成本单位（`usd` / `credit`） |
 
 ## 开发
 
@@ -325,8 +350,8 @@ pid 与日志落在数据目录的 `osm.{pid,log}`。
 pnpm dev                    # server + web
 pnpm serve                  # 构建 + 重启 8787（见「快速开始」）
 pnpm typecheck              # 两个包 tsc --noEmit
-pnpm test                   # ETL 测试（离线 fixture，36 项断言，无需服务与网络）
-pnpm -F @osm/server test:smoke   # HTTP 冒烟测试（需服务在线，9 项）
+pnpm test                   # ETL / Qoder / 数据源 / 不变量测试（离线 fixture，无需服务与网络）
+pnpm -F @osm/server test:smoke   # HTTP 冒烟测试（需服务在线）
 pnpm materialize            # 增量物化
 pnpm materialize --full     # 全量重建（写入临时文件后原子替换）
 pnpm materialize --source qoder --full   # 只重建 Qoder 库
@@ -351,7 +376,7 @@ pnpm plans                  # 按两库实测单价算套餐性价比（见 docs
 
 ## 实测性能
 
-测试数据集：562MB 源库 · 222 会话 · 25,352 轮 · 25,686 次工具调用 · 52,264 条正文。
+OpenCode 测试数据集：562MB 源库 · 222 会话 · 25,352 轮 · 25,686 次工具调用 · 52,264 条正文。
 
 | 项目 | 数值 |
 | --- | --- |
@@ -366,6 +391,10 @@ pnpm plans                  # 按两库实测单价算套餐性价比（见 docs
 | 会话正文 | 0.1–2.4MB，按需加载 |
 | 会话表（224 个会话一次给全） | 20ms / 169KB |
 
+Qoder 的语料是另一套量级：67MB 逐行转录 · 24 个会话（含 8 个子代理转录）· 6,204 轮 ·
+6,765 次工具调用 · 689.965 积分。首次全量物化约 4 秒；之后按会话文件 mtime 增量，
+改一个会话只重建那一个。
+
 另用合成十年库（46.6 万轮、40 万次工具调用、618MB）压过同一套查询：全历史
 1.5s（加滚存前 11.8s），响应 177KB；会话分页 93ms（此前 1.4s）。该库由脚本生成，
 不含真实内容，只用来验证「响应体积与历史长度无关」。
@@ -376,13 +405,16 @@ pnpm plans                  # 按两库实测单价算套餐性价比（见 docs
 bin/osm.js                # npm 入口：起服务、开浏览器、stop/status/logs
 server/src/
 ├── index.ts              # 启动、静态托管、水位驱动的刷新循环
-├── api.ts                # REST 端点
-├── source.ts             # 源库 v1/v2 解析（含正文抽取）
-├── config.ts             # 路径、端口、时间桶宽度
+├── api.ts                # REST 端点（每库一份，x-osm-source 选库）
+├── config.ts             # 路径、端口、时间桶宽度、默认源解析
+├── source.ts             # OpenCode 源库 v1/v2 解析（含正文抽取）
+├── source-qoder.ts       # Qoder JSONL：按 message.id 合并、子代理并入、积分与上下文
+├── source-select.ts      # 按数据源绑定适配器
+├── cli/                  # osm materialize / plans
 └── metrics/
-    ├── schema.ts         # 指标库表结构
+    ├── schema.ts         # 指标库表结构（两库同构）
     ├── build.ts          # 物化逻辑（轮次指标、正文、事件探针、聚合）
-    ├── store.ts          # 增量编排、原子替换
+    ├── store.ts          # 增量编排、原子替换（两库各一份）
     ├── analytics.ts      # 切片聚合：dashboard / toolDetail / facets
     └── catalog.ts        # 模型价目（缓存 + 手工覆盖）
 web/src/
@@ -393,7 +425,7 @@ web/src/
 │   ├── Transcript.tsx    # 虚拟化正文面板
 │   ├── Palette.tsx       # ⌘K 命令面板
 │   └── charts/           # 时间序列、排行条、热力图、散点
-└── lib/                  # API 客户端、切片状态、格式化、图表工具、正文行模型
+└── lib/                  # API 客户端、切片与数据源作用域、格式化、图表工具、正文行模型
 ```
 
 ## 相关文档
