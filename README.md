@@ -406,3 +406,5 @@ web/src/
   作用域定位、页眉线框与像素账、两库契约、切片归属、验收门
 - [docs/backend-refactor.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/backend-refactor.md) — 2026-10 后端重构的接口变更明细
 - [docs/motion.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/motion.md) — 动效令牌、六个动词、交互对照与静态审计的规则
+- [docs/markdown-transcript.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/markdown-transcript.md) — transcript 的 Markdown 子集：
+  映射表、语料实测、表格判据、搜索投影、验收门与已知边界

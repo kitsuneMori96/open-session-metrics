@@ -8,7 +8,7 @@
  *
  * Node 24 strips the types; the module only imports types at runtime.
  */
-import { buildRows, foldRows, rowMatches } from "../src/lib/transcript.ts";
+import { buildRows, foldRows, plainText, rowMatches } from "../src/lib/transcript.ts";
 
 let failures = 0;
 const ok = (name, cond, detail = "") => {
@@ -148,6 +148,31 @@ ok("errors keeps the header it belongs to", errors.join(",") === "turn,tool", er
 /* A session can hold a prompt before its first reply; the panel still shows it. */
 const lonely = buildRows([], prompts);
 ok("prompts survive a session with no turns", lonely.length === 3 && lonely.every((r) => r.kind === "prompt" && r.turn === null && r.turnIndex === 0));
+
+/* ---- the projection the filter reads when Markdown is rendered ---- */
+
+ok(
+  "a prose row is searched without its syntax",
+  plainText("## 现有功能\n1. `a` 与 **b**\n- c") === "现有功能\n1. a 与 b\n· c",
+  JSON.stringify(plainText("## 现有功能\n1. `a` 与 **b**\n- c"))
+);
+ok(
+  "a table's pipes do not survive into the haystack",
+  !plainText("| x | y |\n|---|---|\n| 1 | 2 |").includes("|"),
+  JSON.stringify(plainText("| x | y |\n|---|---|\n| 1 | 2 |"))
+);
+const mdRow = buildRows([turn("md", T0, [text(0, "`a` 与 **b**")])], [], )[1];
+ok("the row under test is prose", mdRow.kind === "text", mdRow.kind);
+ok(
+  "a search for what is on screen finds the row",
+  rowMatches(mdRow, "all", "a 与 b", 0, 0, true),
+  JSON.stringify(plainText(mdRow.text))
+);
+ok(
+  "the same search misses the stored form",
+  !rowMatches(mdRow, "all", "a 与 b", 0, 0, false),
+  JSON.stringify(mdRow.text)
+);
 
 console.log(failures ? `\ntranscript: ${failures} check(s) failed` : "\ntranscript: row model clean");
 process.exit(failures ? 1 : 0);

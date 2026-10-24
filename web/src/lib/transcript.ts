@@ -102,7 +102,14 @@ export function buildRows(turns: Turn[], prompts: PromptLine[] = []): Row[] {
  * turn that did not fail, under `tools` one that called nothing, under `text` one that
  * only thought and ran commands. Under `all` nothing is hidden and every header stays.
  */
-export function rowMatches(row: Row, filter: LineFilter, query: string, from: number, to: number): boolean {
+export function rowMatches(
+  row: Row,
+  filter: LineFilter,
+  query: string,
+  from: number,
+  to: number,
+  md = false
+): boolean {
   if (row.turnIndex < from || row.turnIndex > to) return false;
   if (filter !== "all" && row.kind !== "turn") {
     if (filter === "errors" && !(row.part && row.part.status === "error")) return false;
@@ -112,7 +119,26 @@ export function rowMatches(row: Row, filter: LineFilter, query: string, from: nu
   }
   const q = query.trim().toLowerCase();
   if (!q) return true;
-  return searchText(row).includes(q);
+  return haystack(row, md).includes(q);
+}
+
+/**
+ * What the filter searches.
+ *
+ * A prose row is rendered through the Markdown subset, so the reader sees text without
+ * backticks and hashes; searching the stored form would miss the sentence they are
+ * looking at. `plainText` is memoised per row because the rows are stable across
+ * keystrokes and the projection costs ~8 ms for the largest transcript.
+ */
+const projected = new WeakMap<Row, string>();
+
+function haystack(row: Row, md: boolean): string {
+  if (!md || row.kind !== "text") return searchText(row);
+  const hit = projected.get(row);
+  if (hit !== undefined) return hit;
+  const next = plainText(searchText(row));
+  projected.set(row, next);
+  return next;
 }
 
 /**
@@ -251,3 +277,29 @@ export const OUT_ROWS = 40;
  * neither face and was being drawn by whatever font the OS offered instead.
  */
 export const statusGlyph = (status: string): string => (status === "completed" ? "✓" : status === "error" ? "×" : "◌");
+
+/**
+ * The text as it is *read*, with the markers gone.
+ *
+ * Search matches stored text, and the stored text still carries its syntax. With the
+ * subset on, a reader who searches for what is on screen — `1. opencode-terminal-progress
+ * - 显示` — would otherwise get no row back, because the stored line is
+ * ``1. **`opencode-terminal-progress`** - 显示``: the markers sit between the words they
+ * typed. So when rendering is on, the filter runs against this projection instead.
+ *
+ * It never runs on tool input/output: those are not rendered as Markdown, so their
+ * pipes, stars and hashes are content, not syntax.
+ */
+export function plainText(src: string): string {
+  return src
+    .replace(/^ {0,3}(?:`{3,}|~{3,}).*$/gm, "")
+    .replace(/^ {0,3}#{1,6}[ \t]+/gm, "")
+    // An unordered marker is drawn as `·`, an ordered one keeps its number, so the
+    // projection does the same: searching "1." has to find a numbered item.
+    .replace(/^([ \t]*)[-*+][ \t]+/gm, "$1· ")
+    .replace(/^ {0,3}>[ \t]?/gm, "")
+    .replace(/^[ \t]*\|?[ \t:|-]+\|$/gm, "")
+    .replace(/\|/g, " ")
+    .replace(/\*\*/g, "")
+    .replace(/`/g, "");
+}

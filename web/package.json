@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "node scripts/motion-audit.mjs && node scripts/transcript-check.mjs"
+    "test": "node scripts/motion-audit.mjs && node scripts/transcript-check.mjs && node scripts/md-check.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.62.0",

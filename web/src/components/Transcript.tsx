@@ -19,8 +19,10 @@ import {
 } from "../lib/transcript";
 import { useKeys } from "../lib/useKeys";
 import { Chip, Mark } from "./ui";
+import Md from "./Md";
 
 const ROW_RULE = "var(--color-rule)";
+const MD_KEY = "osm.md";
 
 /** What each filter leaves in the column. `text` is the readable conversation. */
 const FILTER_HINT: Record<LineFilter, string> = {
@@ -70,13 +72,25 @@ export default function Transcript({
   const [expandedReasoning, setExpandedReasoning] = useState<Set<string>>(new Set());
   /** Gap rows that have been unfolded back into per-turn headers. */
   const [openGaps, setOpenGaps] = useState<Set<string>>(new Set());
+  /**
+   * Render the Markdown subset. On by default, because 30% of the corpus carries
+   * inline markers and 20% carries block structure, and both are noise in a tape.
+   * The toggle stays: it is the escape hatch for the one construct the subset got
+   * wrong, and the A/B is how it was judged in the first place.
+   */
+  const [md, setMd] = useState(() => localStorage.getItem(MD_KEY) !== "0");
+  const toggleMd = () =>
+    setMd((v) => {
+      localStorage.setItem(MD_KEY, v ? "0" : "1");
+      return !v;
+    });
   const [cursor, setCursor] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const all = useMemo(() => buildRows(turns, prompts), [turns, prompts]);
   const matched = useMemo(
-    () => all.filter((r) => rowMatches(r, filter, query, turnRange[0], turnRange[1])),
-    [all, filter, query, turnRange]
+    () => all.filter((r) => rowMatches(r, filter, query, turnRange[0], turnRange[1], md)),
+    [all, filter, query, turnRange, md]
   );
   /**
    * A search keeps the header of any turn that still has a hit under it. Without this
@@ -234,6 +248,13 @@ export default function Transcript({
             ✕ turns {turnRange[0] + 1}–{turnRange[1] + 1}
           </Chip>
         )}
+        <Chip
+          active={md}
+          onClick={toggleMd}
+          title="render the Markdown subset: faint markers, bold ink, no new size or colour"
+        >
+          md
+        </Chip>
         <Chip onClick={() => setExpandedAll(true)} title="expand every tool body and reasoning block">
           expand all
         </Chip>
@@ -269,7 +290,7 @@ export default function Transcript({
                     <PromptRow row={row} query={query} />
                   ) : row.kind === "text" ? (
                     <div className="tape max-w-[92ch] whitespace-pre-wrap text-ink">
-                      <Mark text={row.text} query={query} />
+                      {md ? <Md text={row.text} query={query} /> : <Mark text={row.text} query={query} />}
                     </div>
                   ) : row.kind === "reasoning" ? (
                     <ReasoningRow
