@@ -8,6 +8,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "materialize": "tsx src/cli/materialize.ts",
+    "plans": "tsx src/cli/plans.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx src/tests/etl.ts && tsx src/tests/qoder.ts && tsx src/tests/sources.ts && tsx src/tests/invariants.ts",
     "test:smoke": "tsx src/tests/run.ts",

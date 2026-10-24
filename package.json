@@ -42,6 +42,7 @@
     "prepack": "pnpm build",
     "serve": "pnpm build && node bin/osm.js restart",
     "materialize": "pnpm -F @osm/server materialize",
+    "plans": "pnpm -F @osm/server plans",
     "start": "pnpm -F @osm/server start",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test"

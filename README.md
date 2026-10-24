@@ -330,6 +330,7 @@ pnpm -F @osm/server test:smoke   # HTTP 冒烟测试（需服务在线，9 项�
 pnpm materialize            # 增量物化
 pnpm materialize --full     # 全量重建（写入临时文件后原子替换）
 pnpm materialize --source qoder --full   # 只重建 Qoder 库
+pnpm plans                  # 按两库实测单价算套餐性价比（见 docs/plan-value.md）
 ```
 
 前端图表用 `@visx/*`（d3 的无样式原语）与 `@tanstack/react-table` +
