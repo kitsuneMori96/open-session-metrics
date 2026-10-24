@@ -185,15 +185,21 @@ opencode.db (只读)                    .data/metrics.db (查询用)
 
 ## 数据源
 
-同一个面板可以读两种来源，由 `OSM_SOURCE` 或自动探测决定：
+面板可以读两种来源，两库并存、随时切换：
 
-| 来源 | 位置 | 成本单位 |
-| --- | --- | --- |
-| OpenCode | `~/.local/share/opencode/opencode.db`（SQLite，只读） | 美元 |
-| Qoder CLI | `~/.qoder/projects/<encoded-cwd>/<sessionId>.jsonl`（JSONL） | 积分 |
+| 来源 | 位置 | 成本单位 | 物化库 |
+| --- | --- | --- | --- |
+| OpenCode | `~/.local/share/opencode/opencode.db`（SQLite，只读） | 美元 | `metrics.db` |
+| Qoder CLI | `~/.qoder/projects/<encoded-cwd>/<sessionId>.jsonl`（JSONL） | 积分 | `metrics-qoder.db` |
 
-选择顺序：`OSM_SOURCE=opencode\|qoder` → 显式给了 `OSM_SOURCE_DB`（按 OpenCode 处理）→
-存在 `opencode.db` → 存在 `~/.qoder/projects`。
+数据源是**作用域**，不是筛选器：它是面板最高一层决定（高于路由、窗口、facet），在页眉右端
+一次性选定并记住，不写进 URL。两库各存一份切片，切回来还是原来的窗口与筛选。
+完整设计（线框、像素账、API 契约、验收门）见
+[docs/source-scope.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/source-scope.md)。
+
+启动时的默认源：`OSM_SOURCE=opencode\|qoder` → 显式给了 `OSM_SOURCE_DB`（按 OpenCode 处理）→
+存在 `opencode.db` → 存在 `~/.qoder/projects`。启动只物化默认源；另一个库在你第一次切过去时
+才建（Qoder 约 4 秒），之后由 2 分钟一轮的增量同步跟着走。
 
 Qoder 没有会话数据库，转录是逐行 JSONL。两条格式陷阱决定了解析方式：一次模型响应会被
 拆成 2–4 个 `assistant` 事件（只有最后一条带 `usage`，必须按 `message.id` 合并），
@@ -202,8 +208,8 @@ Qoder 没有会话数据库，转录是逐行 JSONL。两条格式陷阱决定�
 积分按整数微积分（`credits_micro`，×1e6）入库，`cost` 列存同一数值供现有聚合使用。
 完整规则与验收门见 [docs/qoder-source.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/qoder-source.md)。
 
-成本单位由 `meta.unit` 声明、`/api/status` 透出，面板启动时据此把 `$` 换成 `cr`，
-不需要手工切换。
+成本单位由 `meta.unit` 声明、`/api/status` 透出，面板在渲染任何数字之前按当前库的单位把
+`$` 换成 `cr`，不需要手工切换。
 
 ## 快速开始
 
@@ -300,6 +306,7 @@ pnpm test                   # ETL 测试（离线 fixture，36 项断言，无�
 pnpm -F @osm/server test:smoke   # HTTP 冒烟测试（需服务在线，9 项）
 pnpm materialize            # 增量物化
 pnpm materialize --full     # 全量重建（写入临时文件后原子替换）
+pnpm materialize --source qoder --full   # 只重建 Qoder 库
 ```
 
 前端图表用 `@visx/*`（d3 的无样式原语）与 `@tanstack/react-table` +
@@ -310,10 +317,10 @@ pnpm materialize --full     # 全量重建（写入临时文件后原子替换�
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `OSM_SOURCE` | 自动 | 数据源：`opencode` 或 `qoder`；不设则自动探测 |
+| `OSM_SOURCE` | 自动 | 默认数据源：`opencode` 或 `qoder`（页眉可切换，不设则自动探测） |
 | `OSM_SOURCE_DB` | `~/.local/share/opencode/opencode.db` | OpenCode 源库路径（只读） |
 | `OSM_QODER_HOME` | `~/.qoder` | Qoder 数据根目录（读其下 `projects/` 与 `logs/`） |
-| `OSM_DATA_DIR` | `<项目根>/.data` | 指标库与价目缓存目录（已 gitignore） |
+| `OSM_DATA_DIR` | `<项目根>/.data` | 两库（`metrics.db` / `metrics-qoder.db`）与价目缓存目录（已 gitignore） |
 | `OSM_HOST` | `127.0.0.1` | API 监听地址 |
 | `OSM_PORT` | `8787` | API 端口 |
 | `OSM_OFFLINE` | — | 设为 `1` 时不访问 models.dev，价目走缓存或零值兜底 |
@@ -371,5 +378,7 @@ web/src/
   以及两处有意的口径差异
 - [docs/qoder-source.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/qoder-source.md) — Qoder CLI 数据源：
   实测证据、解析规则、单位与模型映射、验收门
+- [docs/source-scope.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/source-scope.md) — 数据源切换：
+  作用域定位、页眉线框与像素账、两库契约、切片归属、验收门
 - [docs/backend-refactor.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/backend-refactor.md) — 2026-10 后端重构的接口变更明细
 - [docs/motion.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/motion.md) — 动效令牌、六个动词、交互对照与静态审计的规则

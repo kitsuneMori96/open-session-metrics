@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { BUCKET_MS } from "../config";
+import { BUCKET_MS, type SourceKind } from "../config";
 import { type SrcTurn, type SrcSession, type SrcTool } from "../source";
 import { openSource } from "../source-select";
 import { initSchema, setMeta } from "./schema";
@@ -109,11 +109,11 @@ export function accountOf(path: string | null | undefined): string | null {
  */
 export async function build(
   db: DatabaseSync,
-  opts: { sessionIds?: Set<string>; mode?: "full" | "incremental" } = {}
+  opts: { sessionIds?: Set<string>; mode?: "full" | "incremental"; kind?: SourceKind } = {}
 ): Promise<BuildReport> {
   const t0 = Date.now();
   const mode = opts.mode ?? "full";
-  const src = openSource();
+  const src = openSource(opts.kind);
   try {
     initSchema(db, { drop: mode === "full" });
     ensureRollups(db);

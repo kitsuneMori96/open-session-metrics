@@ -13,7 +13,7 @@ Qoder CLI **没有会话数据库**。会话以 JSONL 写在 `~/.qoder/projects/
 接入方式因此是**新增一个 JSONL 数据源适配器**，而不是读数据库：
 
 ```
-Qoder JSONL ──► QoderSource ──► SrcSession / SrcTurn / SrcTool ──► metrics.db ──► 现有 API/UI
+Qoder JSONL ──► QoderSource ──► SrcSession / SrcTurn / SrcTool ──► metrics-qoder.db ──► 现有 API/UI
                  (本设计)          (与 SourceReader 同构)
 ```
 
@@ -223,11 +223,13 @@ interface SourceLike {
 }
 ```
 
-选择顺序：
+选择顺序（决定的是**默认源**，页眉可随时切另一份）：
 
 1. `OSM_SOURCE=opencode|qoder`
 2. `OSM_SOURCE_DB` 显式给出 → `opencode`
 3. 自动：`~/.local/share/opencode/opencode.db` 存在 → opencode；否则 `~/.qoder/projects` 存在 → qoder
+
+两库并存与切换的完整设计见 [source-scope.md](./source-scope.md)。
 
 Qoder 根目录：`OSM_QODER_HOME`（默认 `~/.qoder`）。
 

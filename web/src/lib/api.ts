@@ -1,16 +1,23 @@
 import { keepPreviousData, useInfiniteQuery, useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { BASE } from "./base";
+import { committedSource } from "./scope";
 
 /**
- * The bundle talks to its own origin: `osm` serves the API and the web build from
- * one process, and `vite dev` proxies `/api` to the server. Pinning a port here
- * would break every `OSM_PORT` override — the page would load from :8899 and query
- * whatever stale server happened to hold :8787. `VITE_OSM_API` still overrides for
- * split deployments.
+ * Every request names the store it reads.
+ *
+ * The header is the *only* carrier: the scope is not linkable, so it cannot ride
+ * in the URL. When nothing has been committed yet the header is omitted and the
+ * server answers with its default store.
  */
-const BASE = (import.meta.env.VITE_OSM_API as string | undefined) ?? "";
+function headers(extra?: HeadersInit): Headers {
+  const h = new Headers(extra);
+  const kind = committedSource();
+  if (kind) h.set("x-osm-source", kind);
+  return h;
+}
 
 async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, { signal });
+  const res = await fetch(`${BASE}${path}`, { signal, headers: headers() });
   if (!res.ok) throw new Error(`${path} → HTTP ${res.status}`);
   return (await res.json()) as T;
 }
@@ -395,6 +402,8 @@ export interface SearchHit {
 }
 
 export interface Status {
+  /** False when this source has never been materialized: every count below is zero. */
+  ready: boolean;
   sourceDb: string | null;
   sourceSchema: string | null;
   sourceKind: string | null;
@@ -521,7 +530,7 @@ export const useSearch = (q: string) =>
 export async function refresh(full = false): Promise<{ ok: boolean; report?: unknown }> {
   const res = await fetch(`${BASE}/api/refresh`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: headers({ "content-type": "application/json" }),
     body: JSON.stringify({ full }),
   });
   return (await res.json()) as { ok: boolean; report?: unknown };

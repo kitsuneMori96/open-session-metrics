@@ -1,7 +1,15 @@
 import express from "express";
 import cors from "cors";
 import type { DatabaseSync } from "node:sqlite";
-import { BUCKET_MS } from "./config";
+import {
+  BUCKET_MS,
+  SOURCE_KIND,
+  SOURCE_KINDS,
+  metricsDbPath,
+  sourceAvailable,
+  sourceProbe,
+  type SourceKind,
+} from "./config";
 import { getMeta, getMetaNumber } from "./metrics/schema";
 import {
   dashboard,
@@ -18,16 +26,39 @@ import { isGranularity } from "./metrics/buckets";
 import type { BuildReport } from "./metrics/build";
 
 export function createApp(deps: {
-  db: () => DatabaseSync;
-  refresh: (full: boolean) => Promise<BuildReport | undefined>;
+  db: (kind: SourceKind) => DatabaseSync;
+  hasStore: (kind: SourceKind) => boolean;
+  refresh: (kind: SourceKind, full: boolean) => Promise<BuildReport | undefined>;
 }) {
   const app = express();
-  app.use(cors());
+  app.use(cors({ exposedHeaders: ["x-osm-source"] }));
   app.use(express.json());
 
-  const q = <T,>(sql: string, ...args: unknown[]): T[] => deps.db().prepare(sql).all(...(args as any[])) as T[];
-  const one = <T,>(sql: string, ...args: unknown[]): T | undefined =>
-    deps.db().prepare(sql).get(...(args as any[])) as T | undefined;
+  /**
+   * The source a request reads.
+   *
+   * It arrives in a header, not in the URL: the source is a scope, so it must not
+   * be linkable (`/overview?src=qoder` would be a link to someone else's store, and
+   * the slice bar would then have to carry it in every href). `?src=` is honoured
+   * only as a debugging affordance for curl.
+   */
+  const kindOf = (req: express.Request): SourceKind => {
+    const raw = String(req.get("x-osm-source") ?? req.query.src ?? "").trim().toLowerCase();
+    return raw === "qoder" || raw === "opencode" ? raw : SOURCE_KIND;
+  };
+
+  /** The store this request reads, or `null` after answering 503 for an unmaterialized source. */
+  const storeOf = (req: express.Request, res: express.Response): DatabaseSync | null => {
+    const kind = kindOf(req);
+    if (deps.hasStore(kind)) return deps.db(kind);
+    res.status(503).json({ error: "source not materialized", source: kind });
+    return null;
+  };
+
+  const q = <T,>(db: DatabaseSync, sql: string, ...args: unknown[]): T[] =>
+    db.prepare(sql).all(...(args as any[])) as T[];
+  const one = <T,>(db: DatabaseSync, sql: string, ...args: unknown[]): T | undefined =>
+    db.prepare(sql).get(...(args as any[])) as T | undefined;
 
   /** `?from=` is a cutoff in epoch ms; 0 or absent means all time. */
   const cutoffOf = (req: express.Request): number => {
@@ -57,17 +88,43 @@ export function createApp(deps: {
     };
   };
 
-  app.get("/api/status", (_req, res) => {
-    const db = deps.db();
-    const count = (t: string) => (one<{ c: number }>(`SELECT COUNT(*) c FROM ${t}`)?.c ?? 0);
+  /**
+   * What the shell needs before it draws anything: which store is in scope, what
+   * it holds, and what it is denominated in.
+   *
+   * An unmaterialized source answers 200 with `ready: false` rather than an error:
+   * "this store has never been built" is a state the header renders (and then
+   * triggers a build for), not a failure.
+   */
+  app.get("/api/status", (req, res) => {
+    const kind = kindOf(req);
+    if (!deps.hasStore(kind)) {
+      return res.json({
+        ready: false,
+        sourceDb: sourceProbe(kind),
+        sourceSchema: null,
+        sourceKind: kind,
+        unit: null,
+        sourceMaxTime: 0,
+        materializedAt: 0,
+        mode: null,
+        bucketMs: BUCKET_MS,
+        extent: { from: 0, to: Date.now() },
+        counts: { sessions: 0, turns: 0, tools: 0, parts: 0, events: 0, models: 0 },
+      });
+    }
+    const db = deps.db(kind);
+    const count = (t: string) => (one<{ c: number }>(db, `SELECT COUNT(*) c FROM ${t}`)?.c ?? 0);
     const extent =
       one<{ from_ts: number | null; to_ts: number | null }>(
+        db,
         `SELECT MIN(created) AS from_ts, MAX(COALESCE(updated, created)) AS to_ts FROM sessions`
       ) ?? { from_ts: null, to_ts: null };
     res.json({
+      ready: true,
       sourceDb: getMeta(db, "sourceDb"),
       sourceSchema: getMeta(db, "sourceSchema"),
-      sourceKind: getMeta(db, "sourceKind") ?? "opencode",
+      sourceKind: getMeta(db, "sourceKind") ?? kind,
       unit: getMeta(db, "unit") ?? "usd",
       sourceMaxTime: getMetaNumber(db, "sourceMaxTime"),
       materializedAt: getMetaNumber(db, "materializedAt"),
@@ -85,11 +142,45 @@ export function createApp(deps: {
     });
   });
 
+  /**
+   * Every source this machine could show, and whether it can.
+   *
+   * One call answers the whole menu: which sources exist on disk, which have a
+   * store, what each store holds and what unit it bills in. `default` is the only
+   * opinion the server keeps — the browser decides per session and remembers it.
+   */
+  app.get("/api/sources", (_req, res) => {
+    const describe = (kind: SourceKind) => {
+      const available = sourceAvailable(kind);
+      const ready = deps.hasStore(kind);
+      const base = {
+        kind,
+        label: kind,
+        available,
+        ready,
+        path: sourceProbe(kind),
+        store: metricsDbPath(kind),
+      };
+      if (!ready) return { ...base, unit: null, sourceSchema: null, materializedAt: 0, counts: null };
+      const db = deps.db(kind);
+      const count = (t: string) => (one<{ c: number }>(db, `SELECT COUNT(*) c FROM ${t}`)?.c ?? 0);
+      return {
+        ...base,
+        unit: getMeta(db, "unit") ?? "usd",
+        sourceSchema: getMeta(db, "sourceSchema"),
+        materializedAt: getMetaNumber(db, "materializedAt"),
+        counts: { sessions: count("sessions"), turns: count("turns"), tools: count("tools") },
+      };
+    };
+    res.json({ default: SOURCE_KIND, sources: SOURCE_KINDS.map(describe) });
+  });
+
   app.post("/api/refresh", async (req, res) => {
     try {
       const full = req.body?.full === true;
-      const report = await deps.refresh(full);
-      res.json({ ok: true, full, report });
+      const kind = kindOf(req);
+      const report = await deps.refresh(kind, full);
+      res.json({ ok: true, full, source: kind, report });
     } catch (e) {
       res.status(500).json({ ok: false, error: (e as Error).message });
     }
@@ -105,8 +196,11 @@ export function createApp(deps: {
    * user row has no tokens, no cost and no parts.
    */
   app.get("/api/top/session/:id/messages", (req, res) => {
+    const db = storeOf(req, res);
+    if (!db) return;
     const id = req.params.id;
     const session = one<any>(
+      db,
       `SELECT id, parent_id, project, title, agent, model, provider, created, updated,
               t_input, t_output, t_reasoning, t_cache_read, t_cache_write, cost, turns, first_prompt
        FROM sessions WHERE id = ?`,
@@ -115,6 +209,7 @@ export function createApp(deps: {
     if (!session) return res.status(404).json({ error: "unknown session" });
 
     const turns = q<any>(
+      db,
       `SELECT id, seq, model, provider, agent, created, completed, input, output, reasoning,
               cache_read, cache_write, cost, dur_ms, finish, tool_calls, tool_errors,
               project, occupancy, context_window, fill, fill_after, additions, deletions, write_lines, has_error
@@ -123,12 +218,14 @@ export function createApp(deps: {
       id
     );
     const prompts = q<any>(
+      db,
       `SELECT id, created, text FROM turns
        WHERE session_id = ? AND role = 'user' AND length(trim(coalesce(text, ''))) > 0
        ORDER BY created ASC, seq ASC`,
       id
     );
     const parts = q<any>(
+      db,
       `SELECT turn_id, ordinal, kind, text, name, call_id, status, title, input, output,
               exit_code, truncated, started, ended, chars
        FROM parts WHERE session_id = ? ORDER BY turn_id, ordinal, id`,
@@ -211,8 +308,10 @@ export function createApp(deps: {
    * the project / model / agent dimensions with their sizes, plus the data extent so a
    * relative window ("last 30 days") can be anchored to what actually exists.
    */
-  app.get("/api/top/facets", (_req, res) => {
-    res.json(facets(deps.db()));
+  app.get("/api/top/facets", (req, res) => {
+    const db = storeOf(req, res);
+    if (!db) return;
+    res.json(facets(db));
   });
 
   /**
@@ -221,7 +320,9 @@ export function createApp(deps: {
    * without another round trip.
    */
   app.get("/api/top/analytics", (req, res) => {
-    res.json(dashboard(deps.db(), sliceOf(req)));
+    const db = storeOf(req, res);
+    if (!db) return;
+    res.json(dashboard(db, sliceOf(req)));
   });
 
   /**
@@ -231,17 +332,19 @@ export function createApp(deps: {
    * `limit` roots at a time, with `cursor` resuming exactly where the last page stopped.
    */
   app.get("/api/top/sessions", (req, res) => {
+    const db = storeOf(req, res);
+    if (!db) return;
     const focus = str(req, "focus");
     const slice = sliceOf(req);
     if (focus) {
-      const rows = sessionContext(deps.db(), slice, focus);
+      const rows = sessionContext(db, slice, focus);
       if (!rows.length) return res.status(404).json({ error: "session not in this window" });
       return res.json({ rows, matching: rows.length, roots: 0, next: null, totals: null });
     }
     const order = str(req, "order");
     const limit = Number(req.query.limit ?? MAX_PAGE_ROOTS);
     res.json(
-      sessionsPage(deps.db(), slice, {
+      sessionsPage(db, slice, {
         q: str(req, "q"),
         order: (SESSION_ORDERS as string[]).includes(order ?? "") ? (order as SessionOrder) : "updated",
         dir: req.query.dir === "asc" ? "asc" : "desc",
@@ -253,9 +356,11 @@ export function createApp(deps: {
 
   /** Per-tool forensics: volume, latency distribution, error signatures, call sites. */
   app.get("/api/top/tool", (req, res) => {
+    const db = storeOf(req, res);
+    if (!db) return;
     const name = str(req, "name");
     if (!name) return res.status(400).json({ error: "name is required" });
-    const detail = toolDetail(deps.db(), sliceOf(req), name);
+    const detail = toolDetail(db, sliceOf(req), name);
     if (!detail.totals || detail.totals.calls === 0) return res.status(404).json({ error: "no calls for that tool in this window" });
     res.json(detail);
   });
@@ -265,10 +370,13 @@ export function createApp(deps: {
    * "which sessions mention this" without shipping every transcript to the browser.
    */
   app.get("/api/top/search", (req, res) => {
+    const db = storeOf(req, res);
+    if (!db) return;
     const raw = typeof req.query.q === "string" ? req.query.q.trim() : "";
     if (raw.length < 2) return res.json({ query: raw, hits: [] });
     const like = `%${raw.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
     const rows = q<any>(
+      db,
       `SELECT s.id, s.title, s.project, s.updated,
               (SELECT COUNT(*) FROM parts p WHERE p.session_id = s.id
                  AND (p.text LIKE ? ESCAPE '\\' OR p.name LIKE ? ESCAPE '\\'

@@ -19,7 +19,6 @@ const USER_DATA_DIR = path.join(
 export const DATA_DIR =
   process.env.OSM_DATA_DIR ??
   (ROOT.includes(INSTALLED) ? USER_DATA_DIR : path.join(ROOT, ".data"));
-export const METRICS_DB = path.join(DATA_DIR, "metrics.db");
 export const SOURCE_DB =
   process.env.OSM_SOURCE_DB ?? path.join(os.homedir(), ".local", "share", "opencode", "opencode.db");
 
@@ -37,11 +36,16 @@ export const QODER_LOGS = path.join(QODER_HOME, "logs", "sessions");
 
 export type SourceKind = "opencode" | "qoder";
 
+export const SOURCE_KINDS: readonly SourceKind[] = ["opencode", "qoder"];
+
 /**
  * Which reader to bind. Precedence:
  *   1. `OSM_SOURCE` (explicit, also what tests use)
  *   2. `OSM_SOURCE_DB` — naming a database implies OpenCode
  *   3. auto: an OpenCode db exists, else a Qoder projects dir
+ *
+ * This is the *default* source. The browser may pick the other one per session
+ * (see `x-osm-source` in api.ts) without this process being restarted.
  */
 export function resolveSourceKind(): SourceKind {
   const explicit = process.env.OSM_SOURCE?.trim();
@@ -53,6 +57,33 @@ export function resolveSourceKind(): SourceKind {
 }
 
 export const SOURCE_KIND: SourceKind = resolveSourceKind();
+
+/* ------------------------------------------------------------------ *
+ * One store per source
+ *
+ * Two independent databases live side by side in `DATA_DIR`. The source is a
+ * property of the store, never a column: switching never re-materializes, and
+ * every query keeps grouping over one tool's sessions only.
+ *
+ * `metrics.db` keeps its historical name so an existing OpenCode install does
+ * not pay for a 232-session rebuild after an upgrade.
+ * ------------------------------------------------------------------ */
+const METRICS_DB_BY_KIND: Record<SourceKind, string> = {
+  opencode: path.join(DATA_DIR, "metrics.db"),
+  qoder: path.join(DATA_DIR, "metrics-qoder.db"),
+};
+
+export const metricsDbPath = (kind: SourceKind): string => METRICS_DB_BY_KIND[kind];
+
+/** The OpenCode store, for callers that predate the second source (`osm materialize`). */
+export const METRICS_DB = METRICS_DB_BY_KIND.opencode;
+
+/** Where this source keeps its raw data — the path the UI prints in the menu. */
+export const sourceProbe = (kind: SourceKind): string => (kind === "qoder" ? QODER_PROJECTS : SOURCE_DB);
+
+/** True when this source exists on this machine — an unmaterialized store is still available. */
+export const sourceAvailable = (kind: SourceKind): boolean => existsSync(sourceProbe(kind));
+
 export const MODEL_CATALOG = path.join(DATA_DIR, "model-catalog.json");
 export const MODEL_OVERRIDES = path.join(DATA_DIR, "model-overrides.json");
 /** Bind to loopback by default — the payload contains your raw prompts. */

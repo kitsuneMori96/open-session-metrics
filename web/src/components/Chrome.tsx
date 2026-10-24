@@ -1,9 +1,10 @@
 import { NavLink, useLocation } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import clsx from "clsx";
-import { GRANULARITIES, PRESETS, useFacets, useStatus, type Granularity } from "../lib/api";
+import { GRANULARITIES, PRESETS, refresh, useFacets, useStatus, type Granularity } from "../lib/api";
 import { clockSec, int, tok } from "../lib/format";
+import { useScope, tilde, type SourceView } from "../lib/scope";
 import { useSlice, useSliceHref } from "../lib/slice";
 import { Chip, KeyCap, Select } from "./ui";
 
@@ -15,53 +16,39 @@ export const NAV = [
 ] as const;
 
 /* ------------------------------------------------------------------ *
- * Top bar: identity, navigation, and the two actions that are not a view
- * (search the corpus, re-materialize the store).
+ * Top bar: identity, navigation, and the three things that are not a view
+ * (which store is in scope, search the corpus, re-materialize the store).
+ *
+ * The scope control trades one word for another in a column that already
+ * existed — `mode` moved into the tooltip — so a fourth level of state costs
+ * zero pixels of height and does not add a second row.
  * ------------------------------------------------------------------ */
 
 export function TopBar({ onPalette }: { onPalette: () => void }) {
-  const status = useStatus();
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
-  const location = useLocation();
-  const href = useSliceHref();
+  const { reload, active } = useScope();
 
   const sync = useCallback(async () => {
     setBusy(true);
     try {
-      await fetch(`${(import.meta.env.VITE_OSM_API as string | undefined) ?? "http://127.0.0.1:8787"}/api/refresh`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ full: false }),
-      });
+      await refresh(false);
       await qc.invalidateQueries();
+      await reload();
     } catch {
       // The panel keeps the last good snapshot; the button just stops spinning.
     } finally {
       setBusy(false);
     }
-  }, [qc]);
+  }, [qc, reload]);
 
   return (
-    <header className="hairline-b flex h-9 shrink-0 items-center gap-3 bg-paper-raised/85 px-2 backdrop-blur-[2px]">
+    <header className="hairline-b relative z-30 flex h-9 shrink-0 items-center gap-3 bg-paper-raised/85 px-2 backdrop-blur-[2px]">
       <span className="tape shrink-0 font-bold tracking-[0.18em]">◆ OSM</span>
       <nav className="flex shrink-0 items-center gap-0">
-        {NAV.map((item) => {
-          const active = location.pathname.startsWith(item.to);
-          return (
-            <NavLink
-              key={item.to}
-              to={href(item.to)}
-              className={clsx(
-                "tape flex items-center gap-1 px-2 py-[3px] no-underline",
-                active ? "bg-ink font-bold text-paper" : "text-ink-soft hover:bg-ink/5"
-              )}
-            >
-              <span className={clsx("text-[8px]", active ? "text-paper/70" : "text-ink-faint")}>{item.key}</span>
-              {item.label}
-            </NavLink>
-          );
-        })}
+        {NAV.map((item) => (
+          <NavItem key={item.to} to={item.to} label={item.label} keyCap={item.key} />
+        ))}
       </nav>
 
       <div className="flex-1" />
@@ -77,16 +64,168 @@ export function TopBar({ onPalette }: { onPalette: () => void }) {
         type="button"
         onClick={() => void sync()}
         className={clsx("btn", busy && "pulse")}
-        title="re-materialize from opencode.db"
+        title={`re-materialize from ${tilde(active?.path ?? "?")}`}
       >
         {busy ? "↻ syncing" : "↻ sync"}
       </button>
-      {status.data && (
-        <span className="tape shrink-0 text-ink-faint" title={`source: ${status.data.sourceDb ?? "?"}`}>
-          {status.data.mode ?? "—"} · {clockSec(status.data.materializedAt)}
-        </span>
-      )}
+
+      <SourceControl />
     </header>
+  );
+}
+
+function NavItem({ to, label, keyCap }: { to: string; label: string; keyCap: string }) {
+  const location = useLocation();
+  const href = useSliceHref();
+  const active = location.pathname.startsWith(to);
+  return (
+    <NavLink
+      to={href(to)}
+      className={clsx(
+        "tape flex items-center gap-1 px-2 py-[3px] no-underline",
+        active ? "bg-ink font-bold text-paper" : "text-ink-soft hover:bg-ink/5"
+      )}
+    >
+      <span className={clsx("text-[8px]", active ? "text-paper/70" : "text-ink-faint")}>{keyCap}</span>
+      {label}
+    </NavLink>
+  );
+}
+
+/**
+ * The source scope, in the only place that costs nothing.
+ *
+ * It replaces the `mode · time` readout that used to sit here: `full`/`incremental`
+ * is a property of the last build, so it belongs in the tooltip; which store you
+ * are reading is the one thing the header must answer without a click.
+ *
+ * Three states, and one deliberate non-state:
+ *   - two sources available → a menu (this control);
+ *   - one source available  → plain text, no caret, not a button: nothing to switch to;
+ *   - the scope's store has never been built → `◌ first build` while it is materialized.
+ */
+function SourceControl() {
+  const scope = useScope();
+  const status = useStatus();
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!wrap.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const active = scope.active;
+  const when = status.data?.materializedAt ?? active?.materializedAt ?? 0;
+  const ready = status.data ? status.data.ready : !!active?.ready;
+  const live = scope.list.sources.filter((s) => s.available);
+
+  const title = [
+    `source: ${active?.path ?? "?"}`,
+    `store: ${tilde(active?.store ?? "?")}`,
+    status.data?.mode ? `last build: ${status.data.mode}` : null,
+    when ? `materialized ${clockSec(when)}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  if (live.length < 2) {
+    return (
+      <span className="tape shrink-0 text-ink-faint" title={title}>
+        {scope.kind}
+        {ready ? (when ? ` · ${clockSec(when)}` : "") : " · no store"}
+      </span>
+    );
+  }
+
+  return (
+    <div ref={wrap} className="relative shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className={clsx("btn flex items-center gap-1", !ready && "pulse")}
+        title={title}
+      >
+        <span className={clsx("turn text-[9px]", open && "rotate-180")}>▾</span>
+        <span>{scope.kind}</span>
+        <span className="tabular text-ink-faint">{ready ? (when ? clockSec(when) : "—") : "first build"}</span>
+      </button>
+      {open && <SourceMenu onPick={() => setOpen(false)} />}
+    </div>
+  );
+}
+
+/**
+ * The menu.
+ *
+ * Two lines per source: the name with what it holds, then the path it is read
+ * from. The path is the answer to "why does this say 24 sessions" — a count
+ * without a location is a rumour.
+ */
+function SourceMenu({ onPick }: { onPick: () => void }) {
+  const scope = useScope();
+  return (
+    <div className="ink hairline absolute top-full right-0 z-40 mt-1 w-[286px] bg-paper-raised shadow-[0_2px_0_var(--color-rule-strong)]">
+      <div className="flex items-center gap-2 border-b border-rule px-2 py-1">
+        <span className="micro">source</span>
+        <span className="h-px flex-1 bg-rule" />
+      </div>
+      {scope.list.sources.map((s) => (
+        <SourceRow
+          key={s.kind}
+          source={s}
+          current={s.kind === scope.kind}
+          onPick={() => {
+            scope.switchTo(s.kind);
+            onPick();
+          }}
+        />
+      ))}
+      <div className="tape border-t border-rule px-2 py-1 text-ink-faint">window and filters stay per source</div>
+    </div>
+  );
+}
+
+function SourceRow({ source, current, onPick }: { source: SourceView; current: boolean; onPick: () => void }) {
+  const glyph = !source.available ? "·" : !source.ready ? "◌" : current ? "◆" : "·";
+  const right = !source.available
+    ? "not found"
+    : !source.ready
+      ? "not built"
+      : `${int(source.counts?.sessions ?? 0)} ses · ${int(source.counts?.turns ?? 0)} turns`;
+  return (
+    <button
+      type="button"
+      onClick={onPick}
+      disabled={!source.available}
+      className={clsx(
+        "flex w-full items-baseline gap-2 px-2 py-1 text-left",
+        current ? "bg-flow/10" : source.available && "hover:bg-ink/5",
+        !source.available && "opacity-40"
+      )}
+    >
+      <span className={clsx("shrink-0 text-[9px]", current ? "text-flow" : "text-ink-faint")}>{glyph}</span>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-baseline gap-2">
+          <span className={clsx("tape truncate", current && "font-bold")}>{source.label}</span>
+          <span className="flex-1" />
+          <span className="tape tabular shrink-0 text-ink-faint">{right}</span>
+        </span>
+        <span className="tape block truncate text-ink-faint">└ {tilde(source.path)}</span>
+      </span>
+    </button>
   );
 }
 
@@ -101,6 +240,7 @@ export function SliceBar() {
   const { window, facets, label, filtered, gran, setGran, setPreset, setFacet, reset } = useSlice();
   const query = useFacets();
   const data = query.data;
+  const { kind } = useScope();
 
   return (
     <div className="hairline-b flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 bg-paper/70 px-2 py-1">
@@ -158,7 +298,7 @@ export function SliceBar() {
       {data && (
         <span
           className="tape shrink-0 tabular text-ink-faint"
-          title="everything materialized from opencode.db — the reference frame for this slice"
+          title={`everything materialized from the ${kind} store — the reference frame for this slice`}
         >
           store {int(data.counts.sessions)} sessions · {tok(data.counts.turns)} turns · {int(data.counts.tools)} tool calls
         </span>

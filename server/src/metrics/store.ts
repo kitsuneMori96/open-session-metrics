@@ -1,22 +1,45 @@
 import { DatabaseSync } from "node:sqlite";
 import { existsSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
-import { DATA_DIR, METRICS_DB } from "../config";
+import { DATA_DIR, SOURCE_KIND, metricsDbPath, type SourceKind } from "../config";
 import { build, type BuildReport } from "./build";
 import { openMetrics, getMeta, getMetaNumber, setMeta, SCHEMA_SIG } from "./schema";
 import { openSource } from "../source-select";
 
-const NEXT = METRICS_DB + ".next";
-let handle: DatabaseSync | null = null;
-let handleStat: string | null = null;
+/**
+ * One reader per source.
+ *
+ * Two stores coexist — `metrics.db` for OpenCode, `metrics-qoder.db` for Qoder —
+ * and each keeps its own handle, watermark and build lock. A handle is keyed by
+ * source rather than by path so a rebuild in another process (`pnpm materialize`)
+ * closes exactly the reader that went stale.
+ */
+interface Slot {
+  handle: DatabaseSync | null;
+  stat: string | null;
+}
 
-function fileIdentity(): string {
+const slots = new Map<SourceKind, Slot>();
+
+function slotOf(kind: SourceKind): Slot {
+  let slot = slots.get(kind);
+  if (!slot) {
+    slot = { handle: null, stat: null };
+    slots.set(kind, slot);
+  }
+  return slot;
+}
+
+function fileIdentity(kind: SourceKind): string {
   try {
-    const st = statSync(METRICS_DB);
+    const st = statSync(metricsDbPath(kind));
     return `${st.dev}:${st.ino}`;
   } catch {
     return "missing";
   }
 }
+
+/** True once a source has been materialized at least once. */
+export const hasStore = (kind: SourceKind = SOURCE_KIND): boolean => existsSync(metricsDbPath(kind));
 
 /**
  * The metrics db is opened lazily and *re-validated* on every access: a
@@ -24,35 +47,40 @@ function fileIdentity(): string {
  * stale handle would silently serve the previous snapshot (or crash on a new
  * column). If the inode changed, we reopen.
  */
-export function current(): DatabaseSync {
+export function current(kind: SourceKind = SOURCE_KIND): DatabaseSync {
   mkdirSync(DATA_DIR, { recursive: true });
-  const id = fileIdentity();
-  if (handle && handleStat !== id) {
-    closeReader();
+  const slot = slotOf(kind);
+  const id = fileIdentity(kind);
+  if (slot.handle && slot.stat !== id) {
+    closeReader(kind);
   }
-  if (!handle) {
-    handle = openMetrics();
-    handleStat = id;
+  if (!slot.handle) {
+    slot.handle = openMetrics(metricsDbPath(kind));
+    slot.stat = id;
   }
-  return handle;
+  return slot.handle;
 }
 
-export function closeReader() {
-  try {
-    handle?.close();
-  } catch {
-    /* already closed */
+export function closeReader(kind?: SourceKind) {
+  const kinds = kind ? [kind] : [...slots.keys()];
+  for (const k of kinds) {
+    const slot = slotOf(k);
+    try {
+      slot.handle?.close();
+    } catch {
+      /* already closed */
+    }
+    slot.handle = null;
+    slot.stat = null;
   }
-  handle = null;
-  handleStat = null;
 }
 
 /** True when the source has data we have not materialized yet. */
-export function sourceChanged(): boolean {
-  if (!existsSync(METRICS_DB)) return true;
-  const prev = getMetaNumber(current(), "sourceMaxTime");
+export function sourceChanged(kind: SourceKind = SOURCE_KIND): boolean {
+  if (!hasStore(kind)) return true;
+  const prev = getMetaNumber(current(kind), "sourceMaxTime");
   if (prev <= 0) return true;
-  const src = openSource();
+  const src = openSource(kind);
   try {
     return src.maxMessageTime() > prev;
   } catch {
@@ -63,52 +91,60 @@ export function sourceChanged(): boolean {
 }
 
 /**
- * Rebuild the metrics database.
+ * Rebuild one source's metrics database.
  * - `full`: parse everything into a side file and swap it in atomically, so
  *   readers never see a half-dropped schema.
- * - `incremental` (default when a metrics db already exists): re-materialize only
+ * - `incremental` (default when a store already exists): re-materialize only
  *   the sessions touched since the stored watermark, in place (WAL keeps readers
  *   live). A handful of milliseconds instead of a multi-second full parse.
  */
-export async function rebuild(opts: { full?: boolean } = {}): Promise<BuildReport> {
+export async function rebuild(
+  kind: SourceKind = SOURCE_KIND,
+  opts: { full?: boolean } = {}
+): Promise<BuildReport> {
   mkdirSync(DATA_DIR, { recursive: true });
   // `full: false` is an explicit request for the incremental path, so the schema check
   // cannot be expressed as a `??` default — a layout change always wins.
-  if (opts.full === true || !existsSync(METRICS_DB) || schemaStale()) return fullRebuild();
-  return incrementalRebuild();
+  if (opts.full === true || !hasStore(kind) || schemaStale(kind)) return fullRebuild(kind);
+  return incrementalRebuild(kind);
 }
 
-/** True when the metrics db was written by a build with a different table layout. */
-function schemaStale(): boolean {
+/** True when the store was written by a build with a different table layout. */
+function schemaStale(kind: SourceKind): boolean {
   try {
-    return getMeta(current(), "schemaSig") !== SCHEMA_SIG;
+    return getMeta(current(kind), "schemaSig") !== SCHEMA_SIG;
   } catch {
     return true;
   }
 }
 
-async function fullRebuild(): Promise<BuildReport> {
-  for (const suffix of ["", "-wal", "-shm"]) if (existsSync(NEXT + suffix)) rmSync(NEXT + suffix, { force: true });
+/** The side file a full rebuild writes into before it is swapped in. */
+const nextFile = (kind: SourceKind) => `${metricsDbPath(kind)}.next`;
 
-  const writer = new DatabaseSync(NEXT);
+async function fullRebuild(kind: SourceKind): Promise<BuildReport> {
+  const next = nextFile(kind);
+  for (const suffix of ["", "-wal", "-shm"]) if (existsSync(next + suffix)) rmSync(next + suffix, { force: true });
+
+  const writer = new DatabaseSync(next);
   writer.exec("PRAGMA journal_mode = WAL");
   let report: BuildReport;
   try {
-    report = await build(writer, { mode: "full" });
+    report = await build(writer, { mode: "full", kind });
   } finally {
     writer.close();
   }
 
-  closeReader();
-  for (const suffix of ["", "-wal", "-shm"]) rmSync(METRICS_DB + suffix, { force: true });
-  renameSync(NEXT, METRICS_DB);
+  closeReader(kind);
+  const target = metricsDbPath(kind);
+  for (const suffix of ["", "-wal", "-shm"]) rmSync(target + suffix, { force: true });
+  renameSync(next, target);
   return report;
 }
 
-async function incrementalRebuild(): Promise<BuildReport> {
-  const db = current();
+async function incrementalRebuild(kind: SourceKind): Promise<BuildReport> {
+  const db = current(kind);
   const prevWatermark = getMetaNumber(db, "sourceMaxTime");
-  const src = openSource();
+  const src = openSource(kind);
   let changed: Set<string>;
   try {
     changed = prevWatermark > 0 ? src.changedSessions(prevWatermark) : new Set<string>();
@@ -125,5 +161,5 @@ async function incrementalRebuild(): Promise<BuildReport> {
       models: 0, ms: 0,
     };
   }
-  return build(db, { mode: "incremental", sessionIds: changed });
+  return build(db, { mode: "incremental", sessionIds: changed, kind });
 }

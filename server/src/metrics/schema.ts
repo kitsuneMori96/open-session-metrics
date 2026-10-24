@@ -5,9 +5,10 @@ import { mkdirSync } from "node:fs";
 
 export type Row = Record<string, string | number | null>;
 
-export function openMetrics(): DatabaseSync {
+/** Open one store's database. Each source owns its own file; nothing is shared. */
+export function openMetrics(file: string = METRICS_DB): DatabaseSync {
   mkdirSync(DATA_DIR, { recursive: true });
-  const db = new DatabaseSync(METRICS_DB);
+  const db = new DatabaseSync(file);
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA foreign_keys = OFF");
   ensureIndexes(db);
