@@ -1,6 +1,6 @@
 {
   "name": "@kitsunemori96/opencode-session-metrics",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A local-first web cockpit for OpenCode session metrics: tokens, cost, tools, and transcripts.",
   "type": "module",
   "license": "MIT",
