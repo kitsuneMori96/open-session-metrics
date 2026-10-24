@@ -1,4 +1,4 @@
-# OpenCode Session Metrics
+# Open Session Metrics
 
 把本机 CLI 的编码会话物化成指标库，再用一个 Web 面板回看：跑了哪些会话、花了多少
 Token / 积分、调用了哪些工具、每个工具失败过几次、成本落在哪个项目上。
@@ -10,7 +10,7 @@ Token / 积分、调用了哪些工具、每个工具失败过几次、成本落
 
 两种来源归一成同一套会话 / 轮次 / 工具记录，聚合、切片、图表与正文面板完全共用。
 
-功能范围对齐 [`opencode-top`](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/opencode-top-parity.md)（Sessions / Tools / Overview
+功能范围对齐 [`opencode-top`](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/opencode-top-parity.md)（Sessions / Tools / Overview
 三屏加正文面板），呈现方式按浏览器重排：**一个页面、一条全局切片、图表之间互相下钻**。
 窗口、过滤器、对比对象、散点坐标轴都写在 URL 里，链接可以直接发给别人或存进书签。
 
@@ -19,18 +19,23 @@ Token / 积分、调用了哪些工具、每个工具失败过几次、成本落
 ## 安装
 
 ```bash
-npm i -g @kitsunemori96/opencode-session-metrics
+npm i -g @kitsunemori96/open-session-metrics
 osm                     # 起服务并打开浏览器
 osm status              # 谁在跑、数据在哪
 osm logs                # 跟踪服务日志
 osm stop                # 停掉后台服务
 ```
 
+> 0.3.0 起项目从 `opencode-session-metrics` 改名为 **Open Session Metrics**（包名
+> `@kitsunemori96/open-session-metrics`，CLI 仍是 `osm`）。旧包会标记 deprecated；
+> 已全局安装旧包的用户重装一次即可。旧的数据目录
+> `~/.local/share/opencode-session-metrics` 会被继续沿用，不迁移、不丢历史。
+
 要求 **Node 24+**（使用内置 `node:sqlite`，无原生依赖），且本机至少有一种数据源：
 `~/.local/share/opencode/opencode.db`（OpenCode）或 `~/.qoder/projects`（Qoder CLI）。
 默认源自动探测，也可以 `OSM_SOURCE=qoder osm` 指定，或启动后在页眉切换
 （见[数据源](#数据源)）。全局安装把指标库写在
-`~/.local/share/opencode-session-metrics`（`OSM_DATA_DIR` 或 `osm --data` 可改），
+`~/.local/share/open-session-metrics`（`OSM_DATA_DIR` 或 `osm --data` 可改），
 升级包不会动到它。`osm run` 前台运行，`--port` / `--host` 改绑定。
 
 从源码运行见[快速开始](#快速开始)。
@@ -46,32 +51,32 @@ Qoder 源读同一套面板：成本列由 `$` 换成 `cr`、`$/Mtok` 换成 `cr
 KPI 行（各带与上一等长窗口的对比）、按模型堆叠的 Token 时间序列、7×24 活跃热力图、
 按小时的轮次分布、会话散点、项目 / 模型 / 工具 / agent 排行、效率面板、最重会话。
 
-![Overview](https://raw.githubusercontent.com/kitsuneMori96/opencode-session-metrics/master/docs/overview.png)
+![Overview](https://raw.githubusercontent.com/kitsuneMori96/open-session-metrics/master/docs/overview.png)
 
 ### Sessions — 全部会话一张表
 
 可排序、可展开（根会话下挂子代理会话）；过滤、排序、翻页都由 SQL 完成，
 一次取 500 个根会话（连它们的子树），「load more」接着下一段。点一行进详情。
 
-![Sessions](https://raw.githubusercontent.com/kitsuneMori96/opencode-session-metrics/master/docs/sessions.png)
+![Sessions](https://raw.githubusercontent.com/kitsuneMori96/open-session-metrics/master/docs/sessions.png)
 
 ### Session 详情 — 时间线、工具、正文
 
 逐轮 Token、上下文填充、输出 Token 三条曲线与正文面板共享一个游标；框选时间线只留选中的轮次。
 
-![Session 详情](https://raw.githubusercontent.com/kitsuneMori96/opencode-session-metrics/master/docs/session.png)
+![Session 详情](https://raw.githubusercontent.com/kitsuneMori96/open-session-metrics/master/docs/session.png)
 
 ### Tools — 工具取证
 
 左侧工具表，右侧选中工具的调用时间桶、延迟直方图、agent / 项目分布、错误文案聚类与原文。
 
-![Tools](https://raw.githubusercontent.com/kitsuneMori96/opencode-session-metrics/master/docs/tools.png)
+![Tools](https://raw.githubusercontent.com/kitsuneMori96/open-session-metrics/master/docs/tools.png)
 
 ### Compare — 两个会话并排
 
 逐项差值表、按轮次序号对齐的输出曲线、工具构成对比。
 
-![Compare](https://raw.githubusercontent.com/kitsuneMori96/opencode-session-metrics/master/docs/compare.png)
+![Compare](https://raw.githubusercontent.com/kitsuneMori96/open-session-metrics/master/docs/compare.png)
 
 ## 功能
 
@@ -152,7 +157,7 @@ Wipe（图表按内容指纹重画）。
 
 不弹、不放大、不滑整页；首屏、轮询、滚动追加都不播动画；框选、提示卡跟随、
 坐标轴刻度这几处逐帧跟手的地方一律不做缓动。`prefers-reduced-motion` 下全部降到 1ms。
-规则与实现见 [docs/motion.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/motion.md)，`pnpm -F @osm/web test` 会跑一遍静态审计。
+规则与实现见 [docs/motion.md](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/motion.md)，`pnpm -F @osm/web test` 会跑一遍静态审计。
 
 ## 工作原理
 
@@ -207,7 +212,7 @@ Qoder 是会话文件的 mtime——不维护偏移文件，避免与 CLI 自己
 数据源是**作用域**，不是筛选器：它是面板最高一层决定（高于路由、窗口、facet），在页眉右端
 一次性选定并记住，不写进 URL。两库各存一份切片，切回来还是原来的窗口与筛选。
 完整设计（线框、像素账、API 契约、验收门）见
-[docs/source-scope.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/source-scope.md)。
+[docs/source-scope.md](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/source-scope.md)。
 
 启动时的默认源：`OSM_SOURCE=opencode\|qoder` → 显式给了 `OSM_SOURCE_DB`（按 OpenCode 处理）→
 存在 `opencode.db` → 存在 `~/.qoder/projects`。启动只物化默认源；另一个库在你第一次切过去时
@@ -220,7 +225,7 @@ Qoder 没有会话数据库，转录是逐行 JSONL。两条格式陷阱决定�
 （`runtime-config` 钉过窗口就取钉的值，否则取模型目录的 `max_input_tokens`——
 Qwen 180K、DeepSeek 1M，不是选择器显示的 200K）；积分按整数微积分
 （`credits_micro`，×1e6）入库，`cost` 列存同一数值供现有聚合使用。
-完整规则与验收门见 [docs/qoder-source.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/qoder-source.md)。
+完整规则与验收门见 [docs/qoder-source.md](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/qoder-source.md)。
 
 成本单位由 `meta.unit` 声明、`/api/sources` 与 `/api/status` 透出，面板在渲染任何数字之前
 按当前库的单位把 `$` 换成 `cr`，不需要手工切换。
@@ -317,7 +322,7 @@ pid 与日志落在数据目录的 `osm.{pid,log}`。
   父会话静默时，挂在它下面的子会话会一并退出统计，而且按 model / agent 过滤在那种规则下
   没有意义。这里的规则是可加的、可交叉过滤的，代价是「一个跨窗口的长会话」在按天看时
   会出现在多个桶里。两套口径的差异见
-  [docs/opencode-top-parity.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/opencode-top-parity.md)。
+  [docs/opencode-top-parity.md](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/opencode-top-parity.md)。
 - **上下文占用**（`context`）= input + cache_read + cache_write，对整会话求和后除以模型窗口。
   这是一个「上下文流量」指标而不是瞬时占用：长会话会数倍于一个窗口（面板在这种情况下
   显示 `×N`）。`fill` 是另一回事：发送时的 prompt_total / context_window，用于定位压缩触发点。
@@ -430,13 +435,13 @@ web/src/
 
 ## 相关文档
 
-- [docs/opencode-top-parity.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/opencode-top-parity.md) — 与 `opencode-top` 的功能对照，
+- [docs/opencode-top-parity.md](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/opencode-top-parity.md) — 与 `opencode-top` 的功能对照，
   以及两处有意的口径差异
-- [docs/qoder-source.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/qoder-source.md) — Qoder CLI 数据源：
+- [docs/qoder-source.md](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/qoder-source.md) — Qoder CLI 数据源：
   实测证据、解析规则、单位与模型映射、验收门
-- [docs/source-scope.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/source-scope.md) — 数据源切换：
+- [docs/source-scope.md](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/source-scope.md) — 数据源切换：
   作用域定位、页眉线框与像素账、两库契约、切片归属、验收门
-- [docs/backend-refactor.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/backend-refactor.md) — 2026-10 后端重构的接口变更明细
-- [docs/motion.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/motion.md) — 动效令牌、六个动词、交互对照与静态审计的规则
-- [docs/markdown-transcript.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/markdown-transcript.md) — transcript 的 Markdown 子集：
+- [docs/backend-refactor.md](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/backend-refactor.md) — 2026-10 后端重构的接口变更明细
+- [docs/motion.md](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/motion.md) — 动效令牌、六个动词、交互对照与静态审计的规则
+- [docs/markdown-transcript.md](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/markdown-transcript.md) — transcript 的 Markdown 子集：
   映射表、语料实测、表格判据、搜索投影、验收门与已知边界

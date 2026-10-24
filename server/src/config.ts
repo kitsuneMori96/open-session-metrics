@@ -10,12 +10,18 @@ export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
  * the next `npm i -g` would delete it, and the directory is not the user's.
  * Keep dev checkouts on `<repo>/.data`, put packaged installs on the XDG data
  * dir. `OSM_DATA_DIR` (and `osm --data`) always wins.
+ *
+ * The package was renamed from `opencode-session-metrics` in 0.3.0. A fresh
+ * install lands on the new name; an existing one keeps reading the old
+ * directory, so an upgrade does not look like a wiped history.
  */
 const INSTALLED = `${path.sep}node_modules${path.sep}`;
-const USER_DATA_DIR = path.join(
-  process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share"),
-  "opencode-session-metrics"
-);
+const XDG_DATA_ROOT = process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share");
+const USER_DATA_DIR = (() => {
+  const current = path.join(XDG_DATA_ROOT, "open-session-metrics");
+  const legacy = path.join(XDG_DATA_ROOT, "opencode-session-metrics");
+  return existsSync(legacy) && !existsSync(current) ? legacy : current;
+})();
 export const DATA_DIR =
   process.env.OSM_DATA_DIR ??
   (ROOT.includes(INSTALLED) ? USER_DATA_DIR : path.join(ROOT, ".data"));

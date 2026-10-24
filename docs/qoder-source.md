@@ -1,6 +1,6 @@
 # Qoder CLI 数据源设计
 
-状态：已实现（v0.2.0）
+状态：已实现（v0.2.0 起；0.3.0 项目改名 Open Session Metrics）
 范围：把 Qoder CLI 的本地会话接入 OSM，作为 OpenCode SQLite 之外的第二类数据源。
 
 ---

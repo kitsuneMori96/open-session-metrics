@@ -1,24 +1,26 @@
 {
-  "name": "@kitsunemori96/opencode-session-metrics",
-  "version": "0.2.0",
-  "description": "A local-first web cockpit for OpenCode session metrics: tokens, cost, tools, and transcripts.",
+  "name": "@kitsunemori96/open-session-metrics",
+  "version": "0.3.0",
+  "description": "A local-first web cockpit for coding session metrics across OpenCode and Qoder: tokens, cost, tools, and transcripts.",
   "type": "module",
   "license": "MIT",
   "author": "kitsuneMori96",
-  "homepage": "https://github.com/kitsuneMori96/opencode-session-metrics#readme",
+  "homepage": "https://github.com/kitsuneMori96/open-session-metrics#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kitsuneMori96/opencode-session-metrics.git"
+    "url": "git+https://github.com/kitsuneMori96/open-session-metrics.git"
   },
   "bugs": {
-    "url": "https://github.com/kitsuneMori96/opencode-session-metrics/issues"
+    "url": "https://github.com/kitsuneMori96/open-session-metrics/issues"
   },
   "keywords": [
     "opencode",
+    "qoder",
     "session",
     "metrics",
     "analytics",
     "tokens",
+    "credits",
     "cost",
     "dashboard",
     "cli"

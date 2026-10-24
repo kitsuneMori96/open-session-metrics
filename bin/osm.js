@@ -9,7 +9,7 @@
 //   osm logs            follow the server log
 //
 // One process, one port: Express serves both the API and the built web bundle.
-// State goes to the XDG data dir (`~/.local/share/opencode-session-metrics`), never
+// State goes to the XDG data dir (`~/.local/share/open-session-metrics`), never
 // into the package directory, so `npm i -g` upgrades cannot delete it.
 import { execFileSync, spawn } from "node:child_process";
 import {
@@ -38,7 +38,7 @@ process.stdout.on("error", (error) => {
   throw error;
 });
 
-const USAGE = `osm ${PKG.version} — local web cockpit for OpenCode session metrics
+const USAGE = `osm ${PKG.version} — local web cockpit for coding session metrics (OpenCode / Qoder)
 
 Usage
   osm [start] [options]   start in the background, then open the browser
@@ -120,10 +120,15 @@ if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) fail(`invalid port: ${f
 // a global install goes to the XDG data dir.
 const INSTALLED = `${path.sep}node_modules${path.sep}`;
 // Fixed data-dir name: the package is scoped, but a scope must not become a
-// subdirectory of the XDG data dir.
-const DEFAULT_DATA_DIR = ROOT.includes(INSTALLED)
-  ? path.join(process.env.XDG_DATA_HOME || path.join(homedir(), ".local", "share"), "opencode-session-metrics")
-  : path.join(ROOT, ".data");
+// subdirectory of the XDG data dir. A 0.3.0 install renamed the package; keep
+// reading the pre-rename directory when that is where the history already is.
+const XDG_DATA_ROOT = process.env.XDG_DATA_HOME || path.join(homedir(), ".local", "share");
+const USER_DATA_DIR = (() => {
+  const current = path.join(XDG_DATA_ROOT, "open-session-metrics");
+  const legacy = path.join(XDG_DATA_ROOT, "opencode-session-metrics");
+  return existsSync(legacy) && !existsSync(current) ? legacy : current;
+})();
+const DEFAULT_DATA_DIR = ROOT.includes(INSTALLED) ? USER_DATA_DIR : path.join(ROOT, ".data");
 const DATA_DIR = path.resolve(flags.data ?? process.env.OSM_DATA_DIR ?? DEFAULT_DATA_DIR);
 const SOURCE_DB =
   flags.source ??
