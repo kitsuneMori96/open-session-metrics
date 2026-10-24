@@ -183,9 +183,31 @@ opencode.db (只读)                    .data/metrics.db (查询用)
 正文落库时有长度上限（text / reasoning 2000 字符、工具入参 1500、工具回显 3000），
 超出部分面板本来就画不出来（回显最多展示 40 行）。
 
+## 数据源
+
+同一个面板可以读两种来源，由 `OSM_SOURCE` 或自动探测决定：
+
+| 来源 | 位置 | 成本单位 |
+| --- | --- | --- |
+| OpenCode | `~/.local/share/opencode/opencode.db`（SQLite，只读） | 美元 |
+| Qoder CLI | `~/.qoder/projects/<encoded-cwd>/<sessionId>.jsonl`（JSONL） | 积分 |
+
+选择顺序：`OSM_SOURCE=opencode\|qoder` → 显式给了 `OSM_SOURCE_DB`（按 OpenCode 处理）→
+存在 `opencode.db` → 存在 `~/.qoder/projects`。
+
+Qoder 没有会话数据库，转录是逐行 JSONL。两条格式陷阱决定了解析方式：一次模型响应会被
+拆成 2–4 个 `assistant` 事件（只有最后一条带 `usage`，必须按 `message.id` 合并），
+子代理的转录写在 `<sessionId>/subagents/` 下（`sessionId` 仍是父会话，必须并入父会话而不是
+另起一个会话）。token 字段恒为 0，上下文占用由 `context_usage_ratio × contextWindow` 还原；
+积分按整数微积分（`credits_micro`，×1e6）入库，`cost` 列存同一数值供现有聚合使用。
+完整规则与验收门见 [docs/qoder-source.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/qoder-source.md)。
+
+成本单位由 `meta.unit` 声明、`/api/status` 透出，面板启动时据此把 `$` 换成 `cr`，
+不需要手工切换。
+
 ## 快速开始
 
-从源码运行：要求 Node 24+、pnpm，且本机已存在 `opencode.db`。
+从源码运行：要求 Node 24+、pnpm，且本机已有 `opencode.db` 或 `~/.qoder/projects`。
 
 ```bash
 pnpm install
@@ -288,7 +310,9 @@ pnpm materialize --full     # 全量重建（写入临时文件后原子替换�
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `OSM_SOURCE_DB` | `~/.local/share/opencode/opencode.db` | 源库路径（只读） |
+| `OSM_SOURCE` | 自动 | 数据源：`opencode` 或 `qoder`；不设则自动探测 |
+| `OSM_SOURCE_DB` | `~/.local/share/opencode/opencode.db` | OpenCode 源库路径（只读） |
+| `OSM_QODER_HOME` | `~/.qoder` | Qoder 数据根目录（读其下 `projects/` 与 `logs/`） |
 | `OSM_DATA_DIR` | `<项目根>/.data` | 指标库与价目缓存目录（已 gitignore） |
 | `OSM_HOST` | `127.0.0.1` | API 监听地址 |
 | `OSM_PORT` | `8787` | API 端口 |
@@ -345,5 +369,7 @@ web/src/
 
 - [docs/opencode-top-parity.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/opencode-top-parity.md) — 与 `opencode-top` 的功能对照，
   以及两处有意的口径差异
+- [docs/qoder-source.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/qoder-source.md) — Qoder CLI 数据源：
+  实测证据、解析规则、单位与模型映射、验收门
 - [docs/backend-refactor.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/backend-refactor.md) — 2026-10 后端重构的接口变更明细
 - [docs/motion.md](https://github.com/kitsuneMori96/opencode-session-metrics/blob/master/docs/motion.md) — 动效令牌、六个动词、交互对照与静态审计的规则

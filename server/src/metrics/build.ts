@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
-import { BUCKET_MS, SOURCE_DB } from "../config";
-import { SourceReader, type SrcTurn, type SrcSession, type SrcTool } from "../source";
+import { BUCKET_MS } from "../config";
+import { type SrcTurn, type SrcSession, type SrcTool } from "../source";
+import { openSource } from "../source-select";
 import { initSchema, setMeta } from "./schema";
 import { catalogKey, loadCatalog, type Catalog } from "./catalog";
 import { ensureRollups, refreshRollups } from "./rollup";
@@ -108,11 +109,11 @@ export function accountOf(path: string | null | undefined): string | null {
  */
 export async function build(
   db: DatabaseSync,
-  opts: { sessionIds?: Set<string>; mode?: "full" | "incremental"; sourceDb?: string } = {}
+  opts: { sessionIds?: Set<string>; mode?: "full" | "incremental" } = {}
 ): Promise<BuildReport> {
   const t0 = Date.now();
   const mode = opts.mode ?? "full";
-  const src = new SourceReader(opts.sourceDb ?? SOURCE_DB);
+  const src = openSource();
   try {
     initSchema(db, { drop: mode === "full" });
     ensureRollups(db);
@@ -178,7 +179,7 @@ export async function build(
       // What the provider actually received = the real context occupancy for this call.
       const promptTotal = t.input + t.cacheRead + t.cacheWrite;
       const occupancy = promptTotal + t.output + t.reasoning;
-      const contextWindow = m?.context ?? 128000;
+      const contextWindow = t.contextWindow ?? m?.context ?? 128000;
       const costComputed = m
         ? (t.input * m.costInput + t.output * m.costOutput + t.reasoning * m.costOutput +
             t.cacheRead * m.costCacheRead + t.cacheWrite * m.costCacheWrite) / 1e6
@@ -248,8 +249,8 @@ export async function build(
 
       const turnCols = [
         "id", "session_id", "project", "seq", "created", "completed", "dur_ms", "role", "provider", "model",
-        "variant", "agent", "input", "output", "reasoning", "cache_read", "cache_write", "cost", "prompt_total",
-        "occupancy", "context_window", "fill", "fill_after", "bucket", "day", "hour", "finish",
+        "variant", "agent", "input", "output", "reasoning", "cache_read", "cache_write", "cost", "credits_micro",
+        "prompt_total", "occupancy", "context_window", "fill", "fill_after", "bucket", "day", "hour", "finish",
         "has_error", "tool_calls", "tool_errors", "additions", "deletions", "write_lines", "text",
       ];
       const insTurn = db.prepare(`INSERT INTO turns(${turnCols.join(",")}) VALUES(${turnCols.map(() => "?").join(",")})`);
@@ -269,7 +270,7 @@ export async function build(
           t.id, t.sessionId, s.project, t.seq, t.created, t.completed,
           t.created && t.completed ? Math.max(0, t.completed - t.created) : null,
           t.role, t.provider, t.model, t.variant, t.agent,
-          t.input, t.output, t.reasoning, t.cacheRead, t.cacheWrite, t.costComputed,
+          t.input, t.output, t.reasoning, t.cacheRead, t.cacheWrite, t.costComputed, t.creditsMicro ?? 0,
           t.promptTotal, t.occupancy, t.contextWindow, t.fill, t.fillAfter, t.bucket, t.day, t.hour, t.finish,
           t.tools.some((x: SrcTool) => x.status === "error") ? 1 : 0, t.tools.length,
           t.tools.filter((x: SrcTool) => x.status === "error").length, t._add ?? 0, t._del ?? 0, t._write ?? 0,
@@ -326,7 +327,7 @@ export async function build(
       // ---- sessions ----
       const sessionCols = [
         "id", "project", "directory", "title", "agent", "provider", "model", "variant", "parent_id", "depth",
-        "created", "updated", "t_input", "t_output", "t_reasoning", "t_cache_read", "t_cache_write", "cost",
+        "created", "updated", "t_input", "t_output", "t_reasoning", "t_cache_read", "t_cache_write", "cost", "credits_micro",
         "turns", "tool_calls", "tool_errors", "compactions", "retries", "loops", "additions", "deletions", "files_changed",
         "peak_fill", "avg_fill", "eff_score", "tokens_per_line", "first_prompt", "duration_ms", "dominant_model",
         "output_rate",
@@ -382,12 +383,13 @@ export async function build(
         const compactions = sessionEvents.filter((e) => e.type === "compaction").length;
         const retries = sessionEvents.filter((e) => e.type === "retry").length;
         const loops = sessionEvents.filter((e) => e.type === "loop").length;
+        const creditsMicro = s.creditsMicro || ts.reduce((a, t) => a + (t.creditsMicro ?? 0), 0);
 
         insSession.run(
           s.id, s.project, s.directory, s.title, s.agent, s.provider, s.model, s.variant, s.parentId, depthOf(s, allById),
           s.created, s.updated,
           tInput, tOutput, tReasoning, tCacheRead, tCacheWrite,
-          Math.max(s.cost, ts.reduce((a, t) => a + t.costComputed, 0)),
+          Math.max(s.cost, ts.reduce((a, t) => a + t.costComputed, 0)), creditsMicro,
           ts.length, toolCalls, toolErrors, compactions, retries, loops,
           additions, deletions, filesChanged,
           peak, avg, eff, lines > 0 ? totalTokens / lines : null,
@@ -411,8 +413,10 @@ export async function build(
       // Derived tables commit with their facts: a crash can never leave the rollups
       // describing a build that did not happen.
       refreshRollups(db, idList, [...affectedDays], mode === "full");
-      setMeta(db, "sourceDb", opts.sourceDb ?? SOURCE_DB);
+      setMeta(db, "sourceDb", src.path);
       setMeta(db, "sourceSchema", src.schema);
+      setMeta(db, "sourceKind", src.kind);
+      setMeta(db, "unit", src.unit);
       setMeta(db, "sourceMaxTime", String(src.maxMessageTime()));
       setMeta(db, "materializedAt", String(Date.now()));
       setMeta(db, "bucketMs", String(BUCKET_MS));

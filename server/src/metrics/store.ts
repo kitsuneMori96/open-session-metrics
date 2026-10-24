@@ -1,9 +1,9 @@
 import { DatabaseSync } from "node:sqlite";
 import { existsSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
-import { DATA_DIR, METRICS_DB, SOURCE_DB } from "../config";
+import { DATA_DIR, METRICS_DB } from "../config";
 import { build, type BuildReport } from "./build";
 import { openMetrics, getMeta, getMetaNumber, setMeta, SCHEMA_SIG } from "./schema";
-import { SourceReader } from "../source";
+import { openSource } from "../source-select";
 
 const NEXT = METRICS_DB + ".next";
 let handle: DatabaseSync | null = null;
@@ -47,12 +47,12 @@ export function closeReader() {
   handleStat = null;
 }
 
-/** True when the source database has data we have not materialized yet. */
+/** True when the source has data we have not materialized yet. */
 export function sourceChanged(): boolean {
-  if (!existsSync(METRICS_DB) || !existsSync(SOURCE_DB)) return true;
+  if (!existsSync(METRICS_DB)) return true;
   const prev = getMetaNumber(current(), "sourceMaxTime");
   if (prev <= 0) return true;
-  const src = new SourceReader(SOURCE_DB);
+  const src = openSource();
   try {
     return src.maxMessageTime() > prev;
   } catch {
@@ -108,7 +108,7 @@ async function fullRebuild(): Promise<BuildReport> {
 async function incrementalRebuild(): Promise<BuildReport> {
   const db = current();
   const prevWatermark = getMetaNumber(db, "sourceMaxTime");
-  const src = new SourceReader(SOURCE_DB);
+  const src = openSource();
   let changed: Set<string>;
   try {
     changed = prevWatermark > 0 ? src.changedSessions(prevWatermark) : new Set<string>();

@@ -1,6 +1,13 @@
 import { keepPreviousData, useInfiniteQuery, useQuery, type UseQueryResult } from "@tanstack/react-query";
 
-const BASE = (import.meta.env.VITE_OSM_API as string | undefined) ?? "http://127.0.0.1:8787";
+/**
+ * The bundle talks to its own origin: `osm` serves the API and the web build from
+ * one process, and `vite dev` proxies `/api` to the server. Pinning a port here
+ * would break every `OSM_PORT` override — the page would load from :8899 and query
+ * whatever stale server happened to hold :8787. `VITE_OSM_API` still overrides for
+ * split deployments.
+ */
+const BASE = (import.meta.env.VITE_OSM_API as string | undefined) ?? "";
 
 async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { signal });
@@ -390,6 +397,8 @@ export interface SearchHit {
 export interface Status {
   sourceDb: string | null;
   sourceSchema: string | null;
+  sourceKind: string | null;
+  unit: "usd" | "credit" | null;
   sourceMaxTime: number;
   materializedAt: number;
   mode: string | null;

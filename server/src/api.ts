@@ -67,6 +67,8 @@ export function createApp(deps: {
     res.json({
       sourceDb: getMeta(db, "sourceDb"),
       sourceSchema: getMeta(db, "sourceSchema"),
+      sourceKind: getMeta(db, "sourceKind") ?? "opencode",
+      unit: getMeta(db, "unit") ?? "usd",
       sourceMaxTime: getMetaNumber(db, "sourceMaxTime"),
       materializedAt: getMetaNumber(db, "materializedAt"),
       mode: getMeta(db, "mode"),

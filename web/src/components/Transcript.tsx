@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import clsx from "clsx";
 import type { PromptLine, Turn } from "../lib/api";
-import { clockSec, durInline, int, tok } from "../lib/format";
+import { clockSec, durInline, int, tok, usd4 } from "../lib/format";
 import { modelColor, shortModel } from "../lib/format";
 import {
   buildRows,
@@ -348,7 +348,7 @@ function TurnHeader({ row, active, query }: { row: Row; active: boolean; query: 
       <span className="tape tabular shrink-0 text-ink-faint" title="cumulative input+cache+output">
         Σ {tok(row.cumTokens)}
       </span>
-      <span className="tape tabular shrink-0 text-ink-faint">{t.cost > 0 ? `$${t.cost.toFixed(4)}` : ""}</span>
+      <span className="tape tabular shrink-0 text-ink-faint">{t.cost > 0 ? usd4(t.cost) : ""}</span>
       {t.finish && t.finish !== "stop" && t.finish !== "tool-calls" && (
         // `tool-calls` is not an outcome, it is the normal way a turn continues: the
         // model stopped talking because it had work to hand off. Under `all` the tool
@@ -380,7 +380,7 @@ function GapRow({ row, open, onToggle }: { row: Row; open: boolean; onToggle: ()
     g.tools > 0 ? `${g.tools} ${g.tools === 1 ? "tool" : "tools"}` : "",
     g.from === g.to ? clockSec(g.from) : `${clockSec(g.from)}–${clockSec(g.to)}`,
     g.tokens > 0 ? `+${tok(g.tokens)} tok` : "",
-    g.cost > 0 ? `$${g.cost.toFixed(4)}` : "",
+    g.cost > 0 ? usd4(g.cost) : "",
   ]
     .filter(Boolean)
     .join(" · ");

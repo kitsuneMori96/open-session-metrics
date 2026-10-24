@@ -1,7 +1,8 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { refresh } from "./lib/api";
+import { refresh, useStatus } from "./lib/api";
+import { setMoneyUnit } from "./lib/format";
 import { useKeys } from "./lib/useKeys";
 import { useSliceHref } from "./lib/slice";
 import { NAV, SliceBar, TopBar } from "./components/Chrome";
@@ -25,6 +26,14 @@ export default function App() {
   const location = useLocation();
   const href = useSliceHref();
   const qc = useQueryClient();
+  const status = useStatus();
+
+  // The unit is a property of the store (`meta.unit`), declared once by the server.
+  // Switching it here — above every route — means the re-render that follows the
+  // status response also re-renders the screens, so no readout is left in `$`
+  // because it happened to mount before the response.
+  const unit = status.data?.unit;
+  useEffect(() => setMoneyUnit(unit), [unit]);
 
   const sync = useCallback(async () => {
     try {

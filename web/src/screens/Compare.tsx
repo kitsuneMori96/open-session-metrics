@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { Link, useSearchParams } from "react-router";
 import { useAnalytics, useSessionContext, useTranscript, type SessionRow, type Turn } from "../lib/api";
 import { useSlice, useSliceHref } from "../lib/slice";
-import { dur, int, pct, rate, shortModel, tok, usd, usdPerM } from "../lib/format";
+import { dur, int, pct, perMLabel, perMPhrase, perMRate, rate, shortModel, tok, usd, usdPerM } from "../lib/format";
 import { TimeBars } from "../components/charts/ranks";
 import { DeltaBar } from "../components/charts/ranks";
 import { Empty, Panel, Select, Skeleton, Stat } from "../components/ui";
@@ -169,7 +169,7 @@ function DiffTable({ a, b, ta, tb }: { a: SessionRow; b: SessionRow; ta: Turn[];
   const rows: Metric[] = [
     { label: "tokens", a: a.tokens, b: b.tokens, fmt: tok },
     { label: "cost", a: a.cost, b: b.cost, fmt: (v) => (v > 0 ? usd(v) : "free"), lowerIsBetter: true },
-    { label: "$ / Mtok", a: a.tokens > 0 ? (a.cost / a.tokens) * 1e6 : 0, b: b.tokens > 0 ? (b.cost / b.tokens) * 1e6 : 0, fmt: (v) => `$${v.toFixed(2)}`, lowerIsBetter: true },
+    { label: perMLabel(), a: a.tokens > 0 ? (a.cost / a.tokens) * 1e6 : 0, b: b.tokens > 0 ? (b.cost / b.tokens) * 1e6 : 0, fmt: perMRate, lowerIsBetter: true },
     { label: "turns", a: a.turns, b: b.turns, fmt: int },
     { label: "tool calls", a: a.tools, b: b.tools, fmt: int },
     { label: "failures", a: a.errors, b: b.errors, fmt: int, lowerIsBetter: true },
@@ -252,7 +252,7 @@ function ToolMix({ a, b, ta, tb }: { a: SessionRow; b: SessionRow; ta: Turn[]; t
         );
       })}
       <div className="micro mt-2">
-        {a.id.slice(0, 14)}… vs {b.id.slice(0, 14)}… · {usdPerM(a.cost, a.tokens)} against {usdPerM(b.cost, b.tokens)} per Mtok
+        {a.id.slice(0, 14)}… vs {b.id.slice(0, 14)}… · {usdPerM(a.cost, a.tokens)} against {usdPerM(b.cost, b.tokens)} {perMPhrase()}
       </div>
     </Panel>
   );

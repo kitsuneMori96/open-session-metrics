@@ -1,5 +1,6 @@
 import * as os from "node:os";
 import * as path from "node:path";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -21,6 +22,37 @@ export const DATA_DIR =
 export const METRICS_DB = path.join(DATA_DIR, "metrics.db");
 export const SOURCE_DB =
   process.env.OSM_SOURCE_DB ?? path.join(os.homedir(), ".local", "share", "opencode", "opencode.db");
+
+/* ------------------------------------------------------------------ *
+ * Qoder CLI
+ *
+ * Qoder has no session database: transcripts are JSONL under
+ * `<home>/projects/<encoded-cwd>/<sessionId>.jsonl`, and the SQLite files
+ * beside them are IDE caches. `QODER_PROJECTS` is therefore a directory,
+ * not a database path.
+ * ------------------------------------------------------------------ */
+export const QODER_HOME = process.env.OSM_QODER_HOME ?? path.join(os.homedir(), ".qoder");
+export const QODER_PROJECTS = path.join(QODER_HOME, "projects");
+export const QODER_LOGS = path.join(QODER_HOME, "logs", "sessions");
+
+export type SourceKind = "opencode" | "qoder";
+
+/**
+ * Which reader to bind. Precedence:
+ *   1. `OSM_SOURCE` (explicit, also what tests use)
+ *   2. `OSM_SOURCE_DB` — naming a database implies OpenCode
+ *   3. auto: an OpenCode db exists, else a Qoder projects dir
+ */
+export function resolveSourceKind(): SourceKind {
+  const explicit = process.env.OSM_SOURCE?.trim();
+  if (explicit === "qoder" || explicit === "opencode") return explicit;
+  if (process.env.OSM_SOURCE_DB) return "opencode";
+  if (existsSync(SOURCE_DB)) return "opencode";
+  if (existsSync(QODER_PROJECTS)) return "qoder";
+  return "opencode";
+}
+
+export const SOURCE_KIND: SourceKind = resolveSourceKind();
 export const MODEL_CATALOG = path.join(DATA_DIR, "model-catalog.json");
 export const MODEL_OVERRIDES = path.join(DATA_DIR, "model-overrides.json");
 /** Bind to loopback by default — the payload contains your raw prompts. */

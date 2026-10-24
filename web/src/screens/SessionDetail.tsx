@@ -7,9 +7,11 @@ import {
   clockSec,
   dur,
   fullStamp,
+  costLabel,
   int,
   pct,
   pctInt,
+  perMLabel,
   rate,
   shortModel,
   tok,
@@ -236,8 +238,8 @@ export default function SessionDetail() {
             <Stat label="reasoning" value={tok(stats.reasoning)} labelWidth={92} />
             <Stat label="cache read" value={tok(stats.cacheRead)} labelWidth={92} />
             <Stat label="cache write" value={tok(stats.cacheWrite)} labelWidth={92} />
-            <Stat label="billed cost" value={stats.cost > 0 ? usd(stats.cost) : "free"} tone="good" labelWidth={92} />
-            <Stat label="$/Mtok" value={usdPerM(stats.cost, stats.total)} tone="faint" labelWidth={92} />
+            <Stat label={costLabel()} value={stats.cost > 0 ? usd(stats.cost) : "free"} tone="good" labelWidth={92} />
+            <Stat label={perMLabel()} value={usdPerM(stats.cost, stats.total)} tone="faint" labelWidth={92} />
           </Panel>
 
           <Panel title="shape">

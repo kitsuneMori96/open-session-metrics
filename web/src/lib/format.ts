@@ -18,13 +18,55 @@ export const tok = (n: number): string => {
   return String(Math.round(n));
 };
 
-/** Costs under a cent keep four decimals: a single turn can cost less than $0.01. */
-export const usd = (n: number): string => (n > 0 && n < 0.01 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`);
+/**
+ * Costs under a cent keep four decimals: a single turn can cost less than $0.01.
+ *
+ * A Qoder store bills in credits instead of dollars, and the unit is a property
+ * of the whole database (`meta.unit`), not of a row. The server announces it in
+ * `/api/status`; `setMoneyUnit` is called once at boot, which keeps every existing
+ * `usd()` call site honest without threading a unit through 60 components.
+ */
+export type MoneyUnit = "usd" | "credit";
+let MONEY_UNIT: MoneyUnit = "usd";
 
-export const usd3 = (n: number): string => `$${n.toFixed(3)}`;
+export const setMoneyUnit = (unit: string | null | undefined) => {
+  MONEY_UNIT = unit === "credit" ? "credit" : "usd";
+};
+export const moneyUnit = (): MoneyUnit => MONEY_UNIT;
 
-/** Dollars per million tokens — the only way to compare models of different sizes. */
-export const usdPerM = (cost: number, tokens: number): string => (tokens > 0 ? `$${((cost / tokens) * 1e6).toFixed(2)}` : "—");
+const usdFmt = (n: number): string => (n > 0 && n < 0.01 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`);
+
+/** Credits have no cents: sub-1 values need four decimals, aggregates do not. */
+const creditFmt = (n: number): string => {
+  const v = Math.abs(n);
+  if (v === 0) return "0 cr";
+  if (v < 1) return `${n.toFixed(4)} cr`;
+  if (v < 1000) return `${n.toFixed(2)} cr`;
+  return `${Math.round(n).toLocaleString("en-US")} cr`;
+};
+
+export const usd = (n: number): string => (MONEY_UNIT === "credit" ? creditFmt(n) : usdFmt(n));
+
+export const usd3 = (n: number): string => (MONEY_UNIT === "credit" ? creditFmt(n) : `$${n.toFixed(3)}`);
+
+/** Cost per million tokens — the only way to compare models of different sizes. */
+export const usdPerM = (cost: number, tokens: number): string => {
+  if (tokens <= 0) return "—";
+  const value = (cost / tokens) * 1e6;
+  return MONEY_UNIT === "credit" ? `${value.toFixed(2)} cr` : `$${value.toFixed(2)}`;
+};
+
+/** Exact money for a single row: four decimals, never rounded away. */
+export const usd4 = (n: number): string => (MONEY_UNIT === "credit" ? `${n.toFixed(4)} cr` : `$${n.toFixed(4)}`);
+
+/** A cost-per-volume figure whose amount is already normalised (per Mtok / per Mctx). */
+export const perMRate = (v: number): string => (MONEY_UNIT === "credit" ? `${v.toFixed(2)} cr` : `$${v.toFixed(2)}`);
+
+/** Axis/panel captions that name the unit (they cannot be formatted numbers). */
+export const perMLabel = (): string => (MONEY_UNIT === "credit" ? "cr/Mctx" : "$/Mtok");
+export const perMPhrase = (): string => (MONEY_UNIT === "credit" ? "per Mctx" : "per Mtok");
+export const spendLabel = (): string => (MONEY_UNIT === "credit" ? "credits" : "spend");
+export const costLabel = (): string => (MONEY_UNIT === "credit" ? "credits" : "billed cost");
 
 export const pct = (ratio: number, digits = 1): string => `${(ratio * 100).toFixed(digits)}%`;
 

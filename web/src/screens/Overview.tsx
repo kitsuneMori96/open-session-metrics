@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from "react-router";
 import { DEFAULT_PRESET, useAnalytics, type SessionRow } from "../lib/api";
 import { granLabel } from "../lib/chart";
 import { TOKEN_CLASSES, paletteFor } from "../lib/chart";
-import { dur, int, pct, pctInt, rate, shortModel, tok, usd, usdPerM } from "../lib/format";
+import { dur, int, pct, pctInt, perMLabel, rate, shortModel, spendLabel, tok, usd, usdPerM } from "../lib/format";
 import { useSlice, useSliceHref } from "../lib/slice";
 import { SessionScatter } from "../components/charts/scatter";
 import { TimeArea, Sparkline } from "../components/charts/series";
@@ -103,7 +103,7 @@ export default function Overview() {
             note={hasBaseline ? "change against the previous window of equal length" : "all time — no earlier window to compare"}
           />
           <Tile
-            label="spend"
+            label={spendLabel()}
             value={usd(totals.cost)}
             delta={kpis.cost.delta}
             prev={usd(kpis.cost.prev)}
@@ -257,7 +257,7 @@ export default function Overview() {
             <div className="micro mt-1">click a project to filter every screen</div>
           </Panel>
 
-          <Panel title="models" right={<span className="tape text-ink-faint">$/Mtok</span>}>
+          <Panel title="models" right={<span className="tape text-ink-faint">{perMLabel()}</span>}>
             <RankBars
               rows={models.slice(0, 10).map((m) => ({
                 key: m.id,

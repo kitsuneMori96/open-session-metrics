@@ -22,6 +22,8 @@ export interface SrcSession {
   additions: number;
   deletions: number;
   files: number;
+  /** Credits consumed by this session (Qoder). Exact micro-credit value; 0 for USD sources. */
+  creditsMicro?: number;
 }
 
 export interface SrcTurn {
@@ -47,6 +49,10 @@ export interface SrcTurn {
   /** ordered content of the turn, for the transcript view (assistant turns only) */
   parts: SrcPart[];
   prompt: string | null;
+  /** The model window this turn's context was measured against, when the source records it. */
+  contextWindow?: number;
+  /** Credits billed for this turn (Qoder). `cost` carries the same number at display precision. */
+  creditsMicro?: number;
   /** per-turn diff stats collected from tool metadata (set by the reader) */
   _add?: number;
   _del?: number;
@@ -115,6 +121,26 @@ export interface SrcEvent {
   model?: string | null;
 }
 
+/**
+ * The contract `build.ts` needs from a source. Two implementations exist:
+ * `SourceReader` (OpenCode SQLite) and `QoderSource` (Qoder CLI JSONL).
+ */
+export interface SourceLike {
+  readonly kind: "opencode" | "qoder";
+  /** File or directory the records came from — recorded in `meta.sourceDb`. */
+  readonly path: string;
+  /** The unit `cost` is expressed in for this source. */
+  readonly unit: "usd" | "credit";
+  readonly schema: string;
+  sessions(): SrcSession[];
+  turns(sessionIds?: Set<string>): SrcTurn[];
+  events(sessionIds?: Set<string>): SrcEvent[];
+  patchFileCounts(sessionIds?: Set<string>): Map<string, { files: number; paths: string[] }>;
+  maxMessageTime(): number;
+  changedSessions(since: number): Set<string>;
+  close(): void;
+}
+
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 
 /**
@@ -126,7 +152,7 @@ const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v)
 export const PART_CAP = { text: 2000, reasoning: 2000, input: 1500, output: 3000 } as const;
 
 /** A text/reasoning part; `chars` keeps the pre-truncation length for the "(Nc)" hint. */
-function bodyPart(kind: "text" | "reasoning", body: string): SrcPart {
+export function bodyPart(kind: "text" | "reasoning", body: string): SrcPart {
   const trimmed = body.trim();
   return {
     kind,
@@ -163,7 +189,7 @@ export function projectName(directory: string | null | undefined): string {
 }
 
 /** Absolute paths a tool call touched (explicit fields, diff file list, shell command tokens). */
-function pathsOf(input: any, files: any): string[] {
+export function pathsOf(input: any, files: any): string[] {
   const out: string[] = [];
   const push = (v: unknown) => {
     if (typeof v === "string" && v.startsWith("/") && v.length > 1) out.push(v);
@@ -238,7 +264,7 @@ function touchedFile(metadata: any, input: any): string | null {
   return typeof g === "string" && g ? g : null;
 }
 
-function hashSig(name: string, input: unknown): string {
+export function hashSig(name: string, input: unknown): string {
   const raw = JSON.stringify(input ?? {});
   let h = 2166136261;
   const key = name + "|" + raw.slice(0, 400);
@@ -251,11 +277,15 @@ function hashSig(name: string, input: unknown): string {
 
 const SESSION_ID_RE = /ses_[A-Za-z0-9]{4,}/;
 
-export class SourceReader {
+export class SourceReader implements SourceLike {
+  readonly kind = "opencode" as const;
+  readonly unit = "usd" as const;
+  readonly path: string;
   private db: DatabaseSync;
   readonly schema: "v1" | "v2";
 
   constructor(dbPath: string) {
+    this.path = dbPath;
     this.db = new DatabaseSync(dbPath, { readOnly: true });
     const hasV2 = this.db
       .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_v2'")

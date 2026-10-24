@@ -9,7 +9,7 @@
     "start": "tsx src/index.ts",
     "materialize": "tsx src/cli/materialize.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx src/tests/etl.ts && tsx src/tests/invariants.ts",
+    "test": "tsx src/tests/etl.ts && tsx src/tests/qoder.ts && tsx src/tests/invariants.ts",
     "test:smoke": "tsx src/tests/run.ts",
     "test:invariants": "tsx src/tests/invariants.ts"
   },
