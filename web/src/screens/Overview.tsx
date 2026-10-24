@@ -1,10 +1,11 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
-import { DEFAULT_PRESET, useAnalytics, type SessionRow } from "../lib/api";
+import { DEFAULT_PRESET, useAnalytics, useStatus, type SessionRow } from "../lib/api";
 import { granLabel } from "../lib/chart";
 import { TOKEN_CLASSES, paletteFor } from "../lib/chart";
 import { dur, int, pct, pctInt, perMLabel, rate, shortModel, spendLabel, tok, usd, usdPerM } from "../lib/format";
 import { useSlice, useSliceHref } from "../lib/slice";
+import { useScope } from "../lib/scope";
 import { SessionScatter } from "../components/charts/scatter";
 import { TimeArea, Sparkline } from "../components/charts/series";
 import { ActivityHeatmap, HourStrip } from "../components/charts/heat";
@@ -22,13 +23,28 @@ import { BaseHints, StatusBar } from "../components/Chrome";
  * brush to re-window the whole page, and every bar is a filter — clicking a project or
  * a model narrows everything, including the other screens.
  */
+
+type Split = "class" | "model" | "cost";
+
 export default function Overview() {
   const { window, facets, gran, slice, label, setWindow, setPreset, setFacet } = useSlice();
   const { data, isLoading, isFetching } = useAnalytics(window, facets, gran);
   const [, setParams] = useSearchParams();
   const href = useSliceHref();
   const navigate = useNavigate();
-  const [split, setSplit] = useState<"class" | "model" | "cost">("class");
+  /**
+   * What the series stacks by, and the one place a store's shape changes the default.
+   *
+   * A Qoder store has no token classes (see `SourceView.tokenClasses`), so `class` is
+   * not offered there at all and `model` is the honest default: six models over a
+   * window says something, one `input` band over four empty legend rows says nothing.
+   * The scope's own answer is preferred over `status` because the source list resolves
+   * before the first frame — no flicker from class to model after the paint.
+   */
+  const scope = useScope();
+  const classes = (scope.active?.tokenClasses ?? useStatus().data?.tokenClasses) !== false;
+  const [picked, setPicked] = useState<Split | null>(null);
+  const split: Split = picked && (picked !== "class" || classes) ? picked : classes ? "class" : "model";
   const [muted, setMuted] = useState<Set<string>>(new Set());
   const [hoverSession, setHoverSession] = useState<string | null>(null);
 
@@ -160,11 +176,15 @@ export default function Overview() {
                 ["model", "model"],
                 ["cost", "cost"],
               ] as const
-            ).map(([id, text]) => (
-              <Chip key={id} active={split === id} onClick={() => setSplit(id)}>
-                {text}
-              </Chip>
-            ))}
+            )
+              // A store with no token classes does not get a one-band chart and four
+              // empty legend rows: the option is absent, not disabled.
+              .filter(([id]) => id !== "class" || classes)
+              .map(([id, text]) => (
+                <Chip key={id} active={split === id} onClick={() => setPicked(id)}>
+                  {text}
+                </Chip>
+              ))}
             <span className="flex-1" />
             <Legend
               items={keys}

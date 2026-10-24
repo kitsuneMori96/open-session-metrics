@@ -40,6 +40,12 @@ export interface SourceView {
   store: string;
   /** `credit` for Qoder, `usd` for OpenCode — a property of the store, not of a row. */
   unit: "usd" | "credit" | null;
+  /**
+   * Whether the store records the five token classes (as opposed to one reconstructed
+   * occupancy number per turn). `null` until the store exists; the Overview drops the
+   * `token class` stack option when this is false, rather than drawing one band.
+   */
+  tokenClasses: boolean | null;
   sourceSchema: string | null;
   materializedAt: number;
   counts: SourceCounts | null;

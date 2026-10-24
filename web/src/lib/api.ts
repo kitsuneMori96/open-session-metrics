@@ -408,6 +408,15 @@ export interface Status {
   sourceSchema: string | null;
   sourceKind: string | null;
   unit: "usd" | "credit" | null;
+  /**
+   * Whether this store records the five token classes.
+   *
+   * A Qoder turn carries only the reconstructed context occupancy: output, cache
+   * and reasoning are structurally zero, so a "stack by token class" chart would
+   * draw one band and four empty legend rows. This is a property of the store, so
+   * the server answers it once and the screen can drop the option entirely.
+   */
+  tokenClasses: boolean;
   sourceMaxTime: number;
   materializedAt: number;
   mode: string | null;

@@ -39,6 +39,12 @@ async function main() {
   await check("status has transcript", "/api/status", (j) =>
     j.counts.parts > 0 ? null : `no parts materialized (transcript would be empty): ${j.counts.parts}`
   );
+  // The default "stack by" depends on this: an OpenCode store records all five token
+  // classes, so the screen must offer the class stack. A store that answers `false`
+  // here would only ever draw one band.
+  await check("status declares token classes", "/api/status", (j) =>
+    j.tokenClasses === true ? null : `tokenClasses=${JSON.stringify(j.tokenClasses)} (open the overview: the stack-by default would be model)`
+  );
 
   // The facet list is what the slice bar and the search palette are built from, so every
   // dimension has to come back non-empty and every value has to be usable as a filter.

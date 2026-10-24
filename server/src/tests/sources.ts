@@ -86,6 +86,7 @@ async function main() {
     const qoderEntry = listed.json.sources.find((s: any) => s.kind === "qoder");
     ok("an available but unbuilt source is marked as such", qoderEntry?.available === true && qoderEntry?.ready === false,
       JSON.stringify(qoderEntry));
+    ok("an unbuilt source reports no shape yet", qoderEntry?.tokenClasses === null, String(qoderEntry?.tokenClasses));
     ok("the opencode source is not available without its database",
       listed.json.sources.find((s: any) => s.kind === "opencode")?.available === false, JSON.stringify(listed.json.sources));
     ok("the server names its default source", listed.json.default === "opencode", listed.json.default);
@@ -94,6 +95,7 @@ async function main() {
     ok("status answers, but not ready, for a source with no store", loose.status === 200 && loose.json.ready === false,
       `${loose.status} ${JSON.stringify(loose.json)}`);
     ok("an unbuilt store reports zero counts instead of failing", loose.json.counts?.sessions === 0, JSON.stringify(loose.json.counts));
+    ok("an unbuilt store claims no token classes", loose.json.tokenClasses === false, String(loose.json.tokenClasses));
 
     const blocked = await get("/api/top/facets");
     ok("analytics routes refuse an unbuilt store", blocked.status === 503 && blocked.json.source === "opencode",
@@ -109,11 +111,16 @@ async function main() {
     const q2 = after.json.sources.find((s: any) => s.kind === "qoder");
     ok("the menu now shows the built store", q2?.ready === true && q2?.counts?.sessions === 1, JSON.stringify(q2));
     ok("the store declares its unit for the shell", q2?.unit === "credit", String(q2?.unit));
+    // The Overview's default stack reads this from the boot list, before the first frame.
+    ok("the menu reports the store's shape", q2?.tokenClasses === false, String(q2?.tokenClasses));
 
     // ---- the same route, two scopes ----
     const qStatus = await get("/api/status", "qoder");
     ok("a header selects the store", qStatus.json.ready === true && qStatus.json.counts.sessions === 1, JSON.stringify(qStatus.json));
     ok("the unit travels with the store, not the process", qStatus.json.unit === "credit", String(qStatus.json.unit));
+    // Qoder records context occupancy, not token classes: there is nothing to stack.
+    // The screen reads this to drop the "token class" option and default to model.
+    ok("a store without token classes says so", qStatus.json.tokenClasses === false, String(qStatus.json.tokenClasses));
 
     const viaQuery = await get("/api/status?src=qoder");
     ok("?src= still works for curl", viaQuery.json.counts.sessions === 1, JSON.stringify(viaQuery.json.counts));

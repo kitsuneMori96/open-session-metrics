@@ -105,6 +105,7 @@ export function createApp(deps: {
         sourceSchema: null,
         sourceKind: kind,
         unit: null,
+        tokenClasses: false,
         sourceMaxTime: 0,
         materializedAt: 0,
         mode: null,
@@ -120,12 +121,30 @@ export function createApp(deps: {
         db,
         `SELECT MIN(created) AS from_ts, MAX(COALESCE(updated, created)) AS to_ts FROM sessions`
       ) ?? { from_ts: null, to_ts: null };
+    /**
+     * Does this store split tokens into the five classes?
+     *
+     * Asked of the data, not of the adapter: a Qoder turn carries one number —
+     * the context occupancy reconstructed from `context_usage_ratio` — and no
+     * output, cache or reasoning counts, so stacking by class would draw a single
+     * band with four empty legend rows. Probing `turns` once (LIMIT 1) answers it
+     * for the whole store, which is the granularity a default can depend on: the
+     * answer must not change when the window does.
+     */
+    const tokenClasses = !!one<{ hit: number }>(
+      db,
+      `SELECT 1 AS hit FROM turns
+       WHERE role = 'assistant'
+         AND (output > 0 OR cache_read > 0 OR cache_write > 0 OR reasoning > 0)
+       LIMIT 1`
+    );
     res.json({
       ready: true,
       sourceDb: getMeta(db, "sourceDb"),
       sourceSchema: getMeta(db, "sourceSchema"),
       sourceKind: getMeta(db, "sourceKind") ?? kind,
       unit: getMeta(db, "unit") ?? "usd",
+      tokenClasses,
       sourceMaxTime: getMetaNumber(db, "sourceMaxTime"),
       materializedAt: getMetaNumber(db, "materializedAt"),
       mode: getMeta(db, "mode"),
@@ -161,12 +180,22 @@ export function createApp(deps: {
         path: sourceProbe(kind),
         store: metricsDbPath(kind),
       };
-      if (!ready) return { ...base, unit: null, sourceSchema: null, materializedAt: 0, counts: null };
+      if (!ready) return { ...base, unit: null, tokenClasses: null, sourceSchema: null, materializedAt: 0, counts: null };
       const db = deps.db(kind);
       const count = (t: string) => (one<{ c: number }>(db, `SELECT COUNT(*) c FROM ${t}`)?.c ?? 0);
       return {
         ...base,
         unit: getMeta(db, "unit") ?? "usd",
+        // Same probe as `/api/status`, answered here as well so the shell knows the
+        // store's shape before it draws: the Overview's default stack depends on it,
+        // and the source list is resolved before the first frame.
+        tokenClasses: !!one<{ hit: number }>(
+          db,
+          `SELECT 1 AS hit FROM turns
+           WHERE role = 'assistant'
+             AND (output > 0 OR cache_read > 0 OR cache_write > 0 OR reasoning > 0)
+           LIMIT 1`
+        ),
         sourceSchema: getMeta(db, "sourceSchema"),
         materializedAt: getMetaNumber(db, "materializedAt"),
         counts: { sessions: count("sessions"), turns: count("turns"), tools: count("tools") },

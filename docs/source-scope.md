@@ -123,13 +123,20 @@ DATA_DIR/
 - 启动只物化**默认源**；2 分钟一轮的增量刷新只跟随**已经存在的库**，「从未建过」保持为
   一次明确的动作。
 
+两个库装的东西也不一样，这是**源的能力**，不是展示偏好。Qoder 的一轮只有上下文占用一个数
+（`context_usage_ratio × contextWindow`），没有 output / cache / reasoning，所以
+Overview 的 `stack by` 在它上面只剩 `model` 与 `cost` 两个选项，默认 `model`——六个模型
+铺在一条时间轴上有信息量，一条 `input` 带子配四行空图例没有任何信息量。服务端对 `turns`
+做一次 `LIMIT 1` 探测，把结论作为 `tokenClasses` 同时写进 `/api/status` 与 `/api/sources`：
+后者是启动时先于首帧解析的，所以默认值不会先画 `class` 再翻成 `model`。
+
 ## 7. API 契约
 
 | 请求 | 说明 |
 | --- | --- |
 | 任意 `/api/*` + 头 `x-osm-source: qoder` | 读该源的库；缺省用服务端默认源 |
 | `?src=qoder` | 同上，只为 curl / 调试保留，前端不用 |
-| `GET /api/sources` | 菜单的全部数据：`available`（本机是否存在）、`ready`（是否物化）、`unit`、路径、计数 |
+| `GET /api/sources` | 菜单的全部数据：`available`（本机是否存在）、`ready`（是否物化）、`unit`、`tokenClasses`（是否记录 token 分类）、路径、计数 |
 | `POST /api/refresh` | 物化**请求头声明的那一个**源；库不存在时自动走全量 |
 | 未物化的库 | `/api/status` 回 200 + `ready:false` + 全零计数；分析类接口回 503 |
 
@@ -165,6 +172,7 @@ DATA_DIR/
 | 8 | 会话详情不跨库 | 在详情页切源 → 退回 `/sessions` |
 | 9 | `?src=` 仍可调试 | `curl /api/status?src=qoder` 返回 24 会话 / 6 693 轮 / `unit: credit` |
 | 10 | 未建库不报错、不建空库 | 分析接口 503，`hasStore("opencode")` 保持 false |
+| 11 | 源的形状决定默认，不是样式 | qoder：`stack by` 只有 `model` / `cost` 且默认 `model`；opencode：三选一、默认 `token class` |
 
 ## 10. 有意不做的
 
