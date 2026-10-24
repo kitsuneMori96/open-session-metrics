@@ -217,9 +217,33 @@ Qoder 没有会话数据库，转录是逐行 JSONL。两条格式陷阱决定�
 
 ```bash
 pnpm install
-pnpm build            # web/dist + server/dist
-pnpm materialize --full
-pnpm start            # http://127.0.0.1:8787
+pnpm serve            # 构建 web+server，重启在 http://127.0.0.1:8787，就绪后才返回
+```
+
+`pnpm serve` 是推荐的启动方式，它把「构建」和「重启」绑成一件不可分的事：
+
+1. `pnpm build`（web → server）。构建失败就到此为止，旧进程继续服务，不会留下半个产物。
+2. 停掉占用端口的那个进程——**包括没有 pid 文件、手工 `node server/dist/index.js` 起的**。
+3. detached 重启，等到 `/api/status` 真正应答才返回，并打印 pid、数据目录与 URL。
+
+这一步之所以必要：前端产物与服务端产物分别构建，而 `express.static` 会把未知的 `/api/*`
+回落到 `index.html`。只换前端不换后端时，新 bundle 请求 `/api/sources` 收到 200 HTML，
+解析失败后静默降级——页眉的数据源控件会退化成纯文本。`pnpm serve` 从根上消掉这种错配。
+
+首次启动若无指标库会自动物化（全量，几分钟内完成）；之后按水位增量更新。
+
+```bash
+pnpm serve -- --no-open   # 不打开浏览器
+pnpm serve -- --port 8899
+```
+
+进程管理交给同一个脚本：
+
+```bash
+node bin/osm.js status    # 端口、pid、数据目录、bundle 构建时间；进程早于产物会直接告警
+node bin/osm.js stop
+node bin/osm.js logs      # 跟随日志
+node bin/osm.js restart
 ```
 
 开发模式（server 热重载 + Vite 代理）：
@@ -227,8 +251,6 @@ pnpm start            # http://127.0.0.1:8787
 ```bash
 pnpm dev              # API :8787 · Web :5174
 ```
-
-首次启动若无指标库会自动物化；之后按水位增量更新。表结构变更后需要 `--full` 重建。
 
 仓库里的 `bin/osm.js` 与 npm 包里的 `osm` 是同一个脚本，数据目录为仓库的 `.data`：
 
@@ -301,6 +323,7 @@ pid 与日志落在数据目录的 `osm.{pid,log}`。
 
 ```bash
 pnpm dev                    # server + web
+pnpm serve                  # 构建 + 重启 8787（见「快速开始」）
 pnpm typecheck              # 两个包 tsc --noEmit
 pnpm test                   # ETL 测试（离线 fixture，36 项断言，无需服务与网络）
 pnpm -F @osm/server test:smoke   # HTTP 冒烟测试（需服务在线，9 项）

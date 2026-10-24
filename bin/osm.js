@@ -11,7 +11,7 @@
 // One process, one port: Express serves both the API and the built web bundle.
 // State goes to the XDG data dir (`~/.local/share/opencode-session-metrics`), never
 // into the package directory, so `npm i -g` upgrades cannot delete it.
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import {
   createReadStream,
   existsSync,
@@ -43,6 +43,7 @@ const USAGE = `osm ${PKG.version} — local web cockpit for OpenCode session met
 Usage
   osm [start] [options]   start in the background, then open the browser
   osm run [options]       run in the foreground (Ctrl-C to stop)
+  osm restart [options]   stop, then start again
   osm stop                stop the background server
   osm status              process, URL, data dir, source db, bundle age
   osm logs [-n N]         follow the server log (default: last 40 lines)
@@ -67,6 +68,9 @@ let logLines = 40;
 for (let i = 0; i < argv.length; i += 1) {
   const arg = argv[i];
   switch (arg) {
+    // `pnpm serve -- --no-open` forwards the separator verbatim.
+    case "--":
+      break;
     case "-h":
     case "--help":
       positional.push("help");
@@ -189,6 +193,38 @@ function isOurServer(pid) {
   }
 }
 
+/**
+ * Who holds the port, when we can see it without being root.
+ *
+ * This exists because a server started by hand (`node server/dist/index.js &`)
+ * writes no pid file, and `osm stop` would then refuse to touch it — leaving a
+ * stale bundle answering on the port while `osm start` says "already running".
+ * That is exactly the mismatch `pnpm serve` must not inherit.
+ */
+function listenerPid() {
+  const run = (bin, args) => {
+    try {
+      return execFileSync(bin, args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    } catch {
+      return "";
+    }
+  };
+  let out = "";
+  if (process.platform === "linux") {
+    for (const bin of ["ss", "/usr/sbin/ss", "/bin/ss", "/usr/bin/ss"]) {
+      out = run(bin, ["-ltnpH", `sport = :${PORT}`]);
+      if (out) break;
+    }
+    const hit = out.match(/pid=(\d+)/);
+    return hit ? Number(hit[1]) : null;
+  }
+  if (process.platform === "darwin") {
+    out = run("lsof", ["-nP", `-iTCP:${PORT}`, "-sTCP:LISTEN", "-t"]);
+    return Number(out.trim().split("\n")[0]) || null;
+  }
+  return null;
+}
+
 function onPath(bin) {
   return (process.env.PATH ?? "")
     .split(path.delimiter)
@@ -225,6 +261,27 @@ function childEnv() {
   };
 }
 
+/**
+ * When a pid started, as epoch ms (Linux only).
+ *
+ * `status` uses it for the one staleness question that matters: a process older
+ * than `web/dist` is serving a bundle that no longer exists on disk — the panel
+ * runs, the page renders, and only the API is from last week.
+ */
+function startedAt(pid) {
+  if (process.platform !== "linux") return null;
+  try {
+    // Field 22 is starttime in USER_HZ ticks since boot. `comm` may contain
+    // spaces, so the fields resume after the last ")".
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const ticks = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]);
+    const uptime = Number(readFileSync("/proc/uptime", "utf8").split(" ")[0]);
+    return Date.now() - (uptime - ticks / 100) * 1000;
+  } catch {
+    return null;
+  }
+}
+
 function lastLines(file, count) {
   const size = statSync(file).size;
   const start = Math.max(0, size - 64 * 1024);
@@ -243,6 +300,11 @@ async function start(foreground) {
 
   if (await isUp()) {
     note(`already running — ${URL}`);
+    const holder = readPid() ?? listenerPid();
+    const since = holder ? startedAt(holder) : null;
+    if (since && existsSync(WEB_INDEX) && statSync(WEB_INDEX).mtime.getTime() - since > 60000) {
+      note("the bundle on disk is newer than the running process — osm restart (or pnpm serve) to load it");
+    }
     openBrowser();
     return;
   }
@@ -298,7 +360,16 @@ async function start(foreground) {
 }
 
 async function stop() {
-  const pid = readPid();
+  let pid = readPid();
+  let adopted = false;
+  if (!pid) {
+    // No pid file: the process may still be ours, just started by hand.
+    const holder = listenerPid();
+    if (holder && isOurServer(holder)) {
+      pid = holder;
+      adopted = true;
+    }
+  }
   if (!pid) {
     if (await isUp()) {
       note(`${URL} answers, but it was not started by osm — leaving it alone`);
@@ -331,19 +402,31 @@ async function stop() {
   try {
     unlinkSync(PID_FILE);
   } catch {}
-  note(`stopped (pid ${pid})`);
+  note(`stopped (pid ${pid}${adopted ? ", stopped a server osm did not start" : ""})`);
 }
 
 async function status() {
   const pid = readPid();
   const up = await isUp();
+  // One lookup either way: a pid file is authoritative, the listener is the fallback.
+  const holder = pid ?? (up ? listenerPid() : null);
   note(`${up ? "up" : "down"} — ${URL}`);
   if (pid) note(`  pid     ${pid}`);
-  else if (up) note("  pid     unknown (not started by osm)");
+  else if (up) note(`  pid     ${holder ? `${holder} (not started by osm)` : "unknown (not started by osm)"}`);
   note(`  data    ${DATA_DIR}${existsSync(path.join(DATA_DIR, "metrics.db")) ? "" : " (no metrics.db yet)"}`);
   note(`  source  ${SOURCE_DB}${existsSync(SOURCE_DB) ? "" : " (missing)"}`);
   if (existsSync(WEB_INDEX)) {
-    note(`  bundle  ${statSync(WEB_INDEX).mtime.toISOString().slice(0, 16).replace("T", " ")}`);
+    // Local time, not ISO: the question this answers is "did the build I just ran
+    // land in the bundle the server is serving", and that comparison happens in
+    // the reader's timezone.
+    const built = statSync(WEB_INDEX).mtime;
+    const age = Math.round((Date.now() - built.getTime()) / 60000);
+    note(`  bundle  ${built.toLocaleString("sv-SE").slice(0, 16)} (${age}m old)`);
+    const since = holder ? startedAt(holder) : null;
+    // A minute of slack: the two timestamps come from different clocks.
+    if (since && built.getTime() - since > 60000) {
+      note(`  stale   pid ${holder} predates the bundle — restart it: pnpm serve`);
+    }
   } else {
     note("  bundle  missing");
   }

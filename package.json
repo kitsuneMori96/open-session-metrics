@@ -40,6 +40,7 @@
     "build:web": "pnpm -F @osm/web build",
     "build:server": "pnpm -F @osm/server build",
     "prepack": "pnpm build",
+    "serve": "pnpm build && node bin/osm.js restart",
     "materialize": "pnpm -F @osm/server materialize",
     "start": "pnpm -F @osm/server start",
     "typecheck": "pnpm -r typecheck",
