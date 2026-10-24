@@ -287,7 +287,7 @@ export default function Transcript({
                   ) : row.kind === "gap" ? (
                     <GapRow row={row} open={openGaps.has(row.id)} onToggle={() => toggleGap(row.id)} />
                   ) : row.kind === "prompt" ? (
-                    <PromptRow row={row} query={query} />
+                    <PromptRow row={row} query={query} md={md} />
                   ) : row.kind === "text" ? (
                     <div className="tape max-w-[92ch] whitespace-pre-wrap text-ink">
                       {md ? <Md text={row.text} query={query} /> : <Mark text={row.text} query={query} />}
@@ -428,12 +428,12 @@ function GapRow({ row, open, onToggle }: { row: Row; open: boolean; onToggle: ()
  * palette has not budgeted for. The body keeps the assistant's measure so the two halves
  * read as one column.
  */
-function PromptRow({ row, query }: { row: Row; query: string }) {
+function PromptRow({ row, query, md }: { row: Row; query: string; md: boolean }) {
   return (
     <div className="flex gap-2">
       <span className="tape shrink-0 select-none text-ink-soft">&gt;</span>
       <div className="tape max-w-[92ch] whitespace-pre-wrap text-ink">
-        <Mark text={row.text} query={query} />
+        {md ? <Md text={row.text} query={query} /> : <Mark text={row.text} query={query} />}
       </div>
     </div>
   );

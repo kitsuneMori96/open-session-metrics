@@ -127,13 +127,15 @@ export function rowMatches(
  *
  * A prose row is rendered through the Markdown subset, so the reader sees text without
  * backticks and hashes; searching the stored form would miss the sentence they are
- * looking at. `plainText` is memoised per row because the rows are stable across
- * keystrokes and the projection costs ~8 ms for the largest transcript.
+ * looking at. That applies to the human's prompts as much as the model's replies: both
+ * are prose, and a prompt is where a pasted spec or a quoted log carries the markers.
+ * `plainText` is memoised per row because the rows are stable across keystrokes and the
+ * projection costs ~8 ms for the largest transcript.
  */
 const projected = new WeakMap<Row, string>();
 
 function haystack(row: Row, md: boolean): string {
-  if (!md || row.kind !== "text") return searchText(row);
+  if (!md || (row.kind !== "text" && row.kind !== "prompt")) return searchText(row);
   const hit = projected.get(row);
   if (hit !== undefined) return hit;
   const next = plainText(searchText(row));

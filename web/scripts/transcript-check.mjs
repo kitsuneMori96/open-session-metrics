@@ -173,6 +173,18 @@ ok(
   !rowMatches(mdRow, "all", "a 与 b", 0, 0, false),
   JSON.stringify(mdRow.text)
 );
+const mdPrompt = buildRows([], [{ id: "m", created: T0, text: "## 标题\n`a` 与 **b**" }])[0];
+ok("a prompt is prose too", mdPrompt.kind === "prompt", mdPrompt.kind);
+ok(
+  "a search for what is on screen finds the prompt",
+  rowMatches(mdPrompt, "all", "a 与 b", 0, 0, true),
+  JSON.stringify(plainText(mdPrompt.text))
+);
+ok(
+  "the same prompt search misses the stored form",
+  !rowMatches(mdPrompt, "all", "a 与 b", 0, 0, false),
+  JSON.stringify(mdPrompt.text)
+);
 
 console.log(failures ? `\ntranscript: ${failures} check(s) failed` : "\ntranscript: row model clean");
 process.exit(failures ? 1 : 0);
