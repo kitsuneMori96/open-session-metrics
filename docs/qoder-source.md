@@ -40,9 +40,9 @@ ECG、transcript、API）保持不变。
 | 工具调用 | Bash 2 543 / Edit 943 / Read 731 / mcp_call 625 / Write 222 / Grep 134（另含子代理） |
 | 工具结果 | 6 449 成功 / 316 失败（4.7%） |
 | token 字段 | `input/output/cache_*` **恒为 0** |
-| `context_usage_ratio` | 0.030 – 0.930，中位 0.492 |
-| `contextWindow` | 仅 5 个转录提供，全为 200 000 |
-| 压缩（ratio 回落 >0.15） | 36 次 |
+| `context_usage_ratio` | 0.027 – 0.930，中位 0.492 |
+| `contextWindow` | `runtime-config` 只出现 `null` 与 `200 000` 两种；比例的分母是模型的 `max_input_tokens`，见 §5.1 |
+| 压缩（上下文回落 > 50 000 tok） | 43 次 |
 | 遥测 `hook_input.model` | `Qwen3.8-Flash` 为主，`DeepSeek-Flash` 见于 2 个会话 |
 | 空会话 | 6 个（启动后无模型响应：0 轮、0 积分） |
 
@@ -63,7 +63,7 @@ ECG、transcript、API）保持不变。
 | `user` | 用户提示，或 `tool_result`（含 `is_error`） |
 | `ai-title` | 会话标题 |
 | `workspace-directories` / `cwd` | 工作目录 |
-| `runtime-config` | `contextWindow`（缺失按 200 000） |
+| `runtime-config` | `contextWindow`（`null` = 没在模型选择器里钉窗口，比例分母回落到模型目录） |
 | `active-leaf` | UI 导航指针，**不用于分支重建** |
 | `system` / `attachment` / `last-prompt` | 辅助信息，可选 |
 
@@ -130,8 +130,15 @@ id=chatcmpl-…  [thinking]        usage=null
 
 ### 4.5 压缩
 
-同一会话内 `context_usage_ratio` 比上一轮下跌 > 0.15 → 生成一条 `compaction` 事件，
-`tokensBefore = 前一轮上下文`，`tokensAfter = 本轮上下文`。
+压缩是**上下文归零**，所以在 token 空间里判定：相邻两轮的上下文下跌超过 50 000 tok →
+生成一条 `compaction` 事件，`tokensBefore = 前一轮上下文`，`tokensAfter = 本轮上下文`。
+
+不能用 ratio 判定，因为分母随模型变（§5.1）：同一个 167 k 的压缩在 Qwen 上是 0.93，
+在 DeepSeek 上是 0.17；而一次会话中换模型（`4a8b72e7` 就是 dfmodel → qfmodel）会让 ratio
+跳 5.9 倍，若按 ratio 判定就会凭空多出一次压缩。
+
+本机实测：真实压缩的 `tokensBefore` 全部落在 **152 k – 167 k**，`tokensAfter` 落在 32 k – 50 k；
+最大的非压缩回落是 8 k。阈值 50 k 在这个 100 k 量级的空隙正中间。
 
 ---
 
@@ -140,8 +147,38 @@ id=chatcmpl-…  [thinking]        usage=null
 ### 5.1 token = 上下文占用（唯一可还原的口径）
 
 ```
-context_tokens = round(context_usage_ratio × contextWindow)
+context_tokens = round(context_usage_ratio × window)
+window = runtime-config.contextWindow            （在模型选择器里钉过窗口时）
+       ?? max_input_tokens[模型]                  （否则，这是常态）
 ```
+
+比例的**分母不是模型选择器显示的那个窗口**。CLI 的构造是：
+
+```js
+G4(usage, typeof $e === "number" ? $e : model_config.max_input_tokens)  // ratio = input_tokens / 分母
+$e = request.parameters.context_length                                   // 只有钉过窗口才有
+if (l?.contextWindow !== void 0 && rS(D, l.contextWindow)) j.context_length = l.contextWindow
+```
+
+两个模型的目录行（来自 `qodercli` 的 `current_model_info`）：
+
+| 别名 | 显示名 | `availableContextWindows` | 选择器默认 | `maxInputTokens` | 比例分母 |
+|---|---|---:|---:|---:|---:|
+| `qfmodel` | Qwen3.8-Flash | 200 K / 400 K / 1 M | 200 000 | **180 000** | 180 000 |
+| `dfmodel` | DeepSeek-Flash | 200 K / 400 K / 1 M | 200 000 | **1 000 000** | 1 000 000 |
+
+所以「模型宣称百万上下文但 Qoder 只给 20 万」这件事对**显示**成立、对**比例**不成立：
+选择器默认给 200 K，而比例仍按 1 M 算。DeepSeek 的 ratio 0.094 不是 19 k，而是 94 k。
+
+三条独立证据：
+
+1. **代码**：上面的分母表达式，以及 `context_config.200K.is_default: true` 与
+   `maxInputTokens` 并存于同一个模型对象；
+2. **同会话换模型**：`4a8b72e7` 从 `dfmodel` 换成 `qfmodel`，ratio 从 0.0967 跳到 0.5669，
+   而上下文只多了一点——`0.0967 × 1e6 = 96.7 k`、`0.5669 × 180 k = 102.0 k`，连续；
+   若共用 200 000 分母则读作 19 k → 113 k，等于凭空压缩一次；
+3. **压缩点**：两个模型的压缩都发生在 **164 k – 167 k**，这是同一个绝对位置，任何单一分母
+   都给不出来（200 000 下 DeepSeek 会停在 33 k）。
 
 - 存入 `turns.input`，`output / reasoning / cache_read / cache_write` 全部为 0；
 - 于是 `prompt_total = input`、`fill = input / context_window = ratio`，与现有聚合完全兼容；
@@ -256,8 +293,8 @@ ALTER TABLE sessions ADD COLUMN credits_micro INTEGER DEFAULT 0;
 1. 会话数 = 24，`count(distinct message.id) = 6 204`，其中 assistant 6 183、system 21、user 489，无重复 turn id；
 2. `sum(credits_micro) / 1e6 = 689.965 ± 0.01`；
 3. 工具调用 = 6 765，失败 = 316（4.7%）；
-4. 压缩事件 = 36（ratio 回落 >0.15）；
-5. 有窗口的会话：`input == round(ratio × 200000)`，`fill == ratio ± 1e-6`；
+4. 压缩事件 = 43（上下文回落 > 50 000 tok）；
+5. 每轮 `input == round(ratio × window)`，`window` 按该轮模型取（钉过窗口则取钉的值），`fill == ratio ± 1e-6`；
 6. 混合会话（`4a8b72e7`）必须回退别名，不得输出单一真实名；
 7. 子代理转录并入父会话：8 个文件不产生第 25 个会话，积分 +8.708；
 8. 项目泳道里不得出现 `-home-kitsunemori` 这类编码目录名；
@@ -281,7 +318,7 @@ ALTER TABLE sessions ADD COLUMN credits_micro INTEGER DEFAULT 0;
 |---|---|---|
 | 无官方 schema，字段随版本漂移 | 高 | 必需字段断言；缺失降级为只读告警，不崩溃 |
 | 模型别名轮换 | 中 | 会话级校验 + 冲突回退 + 证据入库 |
-| `contextWindow` 仅部分会话提供 | 低 | 默认 200 000，UI 标注“推定” |
+| `contextWindow` 多为 `null` | 低 | 分母用模型目录的 `max_input_tokens`（§5.1），未知模型才回落 200 000 |
 | transcript 含完整代码与提示 | 低 | 全程本地处理，沿用 OSM 的 loopback 绑定 |
 | 大文件解析开销 | 低 | 增量按 mtime；全量 65 MB 约 2–3 s |
 

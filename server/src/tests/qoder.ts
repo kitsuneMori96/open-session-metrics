@@ -189,6 +189,50 @@ async function main() {
   ok("unit is declared as credits", one("SELECT value FROM meta WHERE key='unit'")?.value === "credit");
   ok("source kind is recorded", one("SELECT value FROM meta WHERE key='sourceKind'")?.value === "qoder");
 
+  // ---- the ratio's denominator is per model, not one session-wide window ----
+  //
+  // The CLI sends no `context_length` unless a window is pinned, and then the
+  // ratio divides by the model's `max_input_tokens` — 180 000 for Qwen3.8-Flash,
+  // 1 000 000 for DeepSeek-Flash. Both models offer the same 200 000 picker
+  // default, so reading every ratio against 200 000 understates DeepSeek by 5×.
+  const sid2 = "99999999-8888-7777-6666-555555555555";
+  const base2 = { sessionId: sid2, cwd: "/tmp/demo", version: "1.1.78" };
+  const cross = [
+    { model: "dfmodel", ratio: 0.0967 },
+    { model: "qfmodel", ratio: 0.5669 },
+    { model: "qfmodel", ratio: 0.9 },
+    { model: "qfmodel", ratio: 0.15 },
+    { model: "dfmodel", ratio: 0.03 },
+  ];
+  const crossLines: string[] = [JSON.stringify({ ...base2, type: "runtime-config", model: "dfmodel", contextWindow: null, timestamp: T0 })];
+  cross.forEach((c, i) => {
+    crossLines.push(JSON.stringify({ ...base2, type: "runtime-config", model: c.model, contextWindow: null, timestamp: T0 + i }));
+    crossLines.push(JSON.stringify({
+      ...base2, type: "assistant", uuid: `x${i}`, timestamp: iso(T0 + 100 * sec + i * sec),
+      message: {
+        id: `cross-${i}`, model: c.model, stop_reason: "end_turn",
+        content: [{ type: "text", text: `turn ${i}` }],
+        usage: { input_tokens: 0, output_tokens: 0, credits: 0.01, original_credits: 0.01, context_usage_ratio: c.ratio, request_id: `x${i}` },
+      },
+    }));
+  });
+  writeFileSync(path.join(process.env.OSM_QODER_HOME!, "projects", "-tmp-demo", `${sid2}.jsonl`), crossLines.join("\n") + "\n", "utf8");
+
+  const src2 = new QoderSource(path.join(process.env.OSM_QODER_HOME!, "projects"));
+  const cross1 = src2.turns(new Set([sid2])).filter((t) => t.role === "assistant").sort((a, b) => a.created - b.created);
+  ok("a qfmodel ratio divides by its 180 000 catalog limit", cross1[1]?.input === 102042, String(cross1[1]?.input));
+  ok("a dfmodel ratio divides by its 1 000 000 catalog limit", cross1[0]?.input === 96700, String(cross1[0]?.input));
+  ok("the window travels with the turn", cross1.map((t) => t.contextWindow).join(",") === "1000000,180000,180000,180000,1000000",
+    cross1.map((t) => t.contextWindow).join(","));
+  // 96.7k → 102.0k across the switch is the same context continuing; a single
+  // 200 000 denominator would read it as 19k → 113k and invent a compaction.
+  const crossEvents = src2.events(new Set([sid2]));
+  ok("a model switch is not a compaction", crossEvents.length === 1, `got ${crossEvents.length}`);
+  ok("compaction is measured in tokens",
+    crossEvents[0]?.tokensBefore === 162000 && crossEvents[0]?.tokensAfter === 27000,
+    JSON.stringify(crossEvents[0] ?? {}));
+  src2.close();
+
   console.log(failures ? `\n${failures} check(s) failed` : "\nall qoder checks passed");
   rmSync(dir, { recursive: true, force: true });
   process.exit(failures ? 1 : 0);

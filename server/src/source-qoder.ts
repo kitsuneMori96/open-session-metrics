@@ -30,15 +30,49 @@ import {
  *    → 782 turns in the sample session).
  * 2. **Tokens are not recorded.** `input/output/cache_*` are always 0. The
  *    only volume signal is `context_usage_ratio`, which becomes context tokens
- *    once multiplied by the session's `contextWindow` (200 000 everywhere
- *    observed). Cost is `credits`, stored as integer micro-credits.
+ *    once multiplied by the ratio's denominator. Cost is `credits`, stored as
+ *    integer micro-credits.
  */
 
-/** Every `runtime-config` observed so far says 200 000; used when a session has none. */
+/**
+ * The denominator of `context_usage_ratio`, per model alias.
+ *
+ * A ratio is **not** a share of the context window the model picker shows. The
+ * CLI computes it as
+ *
+ *     context_usage_ratio = input_tokens / (parameters.context_length ?? model.max_input_tokens)
+ *
+ * and `context_length` is only put on the request when a window preference is
+ * set (`if (l?.contextWindow !== void 0 && rS(D, l.contextWindow))`). Every
+ * `runtime-config` in this machine's transcripts says `contextWindow: null`, so
+ * the denominator is the catalog's `max_input_tokens` — which is per model, and
+ * has nothing to do with the 200 000 window both models default to:
+ *
+ *     Qwen3.8-Flash (qfmodel)   max_input_tokens   180 000   default window 200 000
+ *     DeepSeek-Flash (dfmodel)  max_input_tokens 1 000 000   default window 200 000
+ *
+ * The transcripts prove it without the catalog: session `4a8b72e7` switches
+ * model mid-conversation, and the ratio jumps from 0.0967 to 0.5669 while the
+ * context it describes only grows a little — 0.0967 × 1e6 = 96.7 k tokens before,
+ * 0.5669 × 180 k = 102.0 k after. One shared 200 000 denominator would read that
+ * as 19 k → 113 k, i.e. a phantom compaction. Absolute tokens also line up where
+ * the two models compact: 164–167 k for both, which no single denominator gives.
+ */
+export const QODER_MODEL_WINDOW: Record<string, number> = {
+  qfmodel: 180_000,
+  dfmodel: 1_000_000,
+};
+
+/** Only for a transcript that names a model the table above does not know. */
 export const QODER_DEFAULT_WINDOW = 200_000;
 
-/** A drop larger than this in `context_usage_ratio` is a compaction, not noise. */
-export const COMPACTION_DROP = 0.15;
+/**
+ * A compaction is a context reset, so it is detected in tokens, not in ratio:
+ * the denominator changes with the model, and the same 167 k compaction is 0.93
+ * of one window and 0.17 of another. Observed drops are 108–134 k tokens
+ * (166 k → 30–44 k); the largest non-compaction drop on this machine is 8 k.
+ */
+export const COMPACTION_DROP_TOKENS = 50_000;
 
 /**
  * Qoder's own state directory. Tool calls that touch it (memory notes, persisted
@@ -63,6 +97,20 @@ export const QODER_MODELS: Record<string, string> = {
   dfmodel: "DeepSeek-Flash",
 };
 
+/**
+ * The window a ratio is measured against. A transcript can name its model either
+ * way — the alias while parsing, the shipped name after `displayModel` renames a
+ * single-model session — so both spellings resolve.
+ */
+export function modelWindow(model: string | null): number {
+  if (!model) return QODER_DEFAULT_WINDOW;
+  const alias =
+    QODER_MODEL_WINDOW[model] !== undefined
+      ? model
+      : Object.keys(QODER_MODELS).find((a) => QODER_MODELS[a] === model);
+  return QODER_MODEL_WINDOW[alias ?? model] ?? QODER_DEFAULT_WINDOW;
+}
+
 interface Usage {
   credits: number;
   original: number;
@@ -84,6 +132,8 @@ interface Entry {
   ts: number;
   model: string | null;
   stop: string | null;
+  /** Explicit window in force when this response was requested (0 = none). */
+  window: number;
   blocks: Block[];
   usage: Usage | null;
 }
@@ -442,7 +492,8 @@ export class QoderSource implements SourceLike {
     let title: string | null = null;
     let lastPrompt: string | null = null;
     let directory = "";
-    let window = 0;
+    /** Window the user pinned in the model picker; 0 means "use the catalog". */
+    let explicit = 0;
     let created = 0;
     let updated = 0;
 
@@ -470,7 +521,15 @@ export class QoderSource implements SourceLike {
         if (!mid) continue;
         let entry = byId.get(mid);
         if (!entry) {
-          entry = { id: mid, ts: ms(e.timestamp), model: m.model ?? null, stop: m.stop_reason ?? null, blocks: [], usage: null };
+          entry = {
+            id: mid,
+            ts: ms(e.timestamp),
+            model: m.model ?? null,
+            stop: m.stop_reason ?? null,
+            window: explicit,
+            blocks: [],
+            usage: null,
+          };
           byId.set(mid, entry);
           order.push(entry);
         }
@@ -516,7 +575,9 @@ export class QoderSource implements SourceLike {
       }
 
       if (type === "runtime-config") {
-        if (typeof e.contextWindow === "number" && e.contextWindow > 0) window = e.contextWindow;
+        // `null` is the normal state and means "no preference": the request then
+        // carries no `context_length`, and the ratio falls back to the catalog.
+        explicit = typeof e.contextWindow === "number" && e.contextWindow > 0 ? e.contextWindow : 0;
         continue;
       }
       if (type === "ai-title" && typeof e.aiTitle === "string") {
@@ -530,7 +591,6 @@ export class QoderSource implements SourceLike {
       if (type === "last-prompt" && typeof e.lastPrompt === "string") lastPrompt = e.lastPrompt;
     }
 
-    const contextWindow = window || QODER_DEFAULT_WINDOW;
     const items: { ts: number; turn: SrcTurn }[] = [];
     const models: string[] = [];
     let credits = 0;
@@ -538,11 +598,15 @@ export class QoderSource implements SourceLike {
     let additions = 0;
     let deletions = 0;
     let files = 0;
-    const ratios: { ts: number; ratio: number }[] = [];
+    const ratios: { ts: number; tokens: number }[] = [];
 
     for (const entry of order) {
       const usage = entry.usage;
       const ratio = usage?.ratio ?? null;
+      // A pinned window beats the catalog; the ratio's denominator is whatever the
+      // request actually carried. Resolved per entry, because a session can switch
+      // model (and therefore denominator) mid-conversation.
+      const contextWindow = entry.window || modelWindow(entry.model);
       // Context length is the only token-ish number the source records. It is the
       // prompt side of this call (cumulative), not a per-request billed input.
       const input = ratio == null ? 0 : Math.round(ratio * contextWindow);
@@ -666,7 +730,7 @@ export class QoderSource implements SourceLike {
       additions += add;
       deletions += del;
       files += fileCount;
-      if (ratio != null) ratios.push({ ts: entry.ts, ratio });
+      if (ratio != null) ratios.push({ ts: entry.ts, tokens: input });
     }
 
     for (const p of prompts) {
@@ -704,11 +768,13 @@ export class QoderSource implements SourceLike {
     const turns = items.map((it, i) => ({ ...it.turn, seq: i }));
 
     // Compaction = a context reset the source never writes down. A drop of more
-    // than COMPACTION_DROP between consecutive turns is the only evidence there is.
+    // than COMPACTION_DROP_TOKENS between consecutive turns is the only evidence
+    // there is. Measured in tokens, so a model switch (each model has its own
+    // ratio denominator) cannot fake one.
     const compactions: SrcEvent[] = [];
-    let prev: { ts: number; ratio: number } | null = null;
+    let prev: { ts: number; tokens: number } | null = null;
     for (const r of ratios.sort((a, b) => a.ts - b.ts)) {
-      if (prev && r.ratio < prev.ratio - COMPACTION_DROP) {
+      if (prev && r.tokens < prev.tokens - COMPACTION_DROP_TOKENS) {
         compactions.push({
           sessionId: id,
           turnId: null,
@@ -717,9 +783,9 @@ export class QoderSource implements SourceLike {
           // around the event, and the drop itself happened in that gap.
           at: Math.round((prev.ts + r.ts) / 2),
           reason: "auto",
-          detail: "context reset (ratio drop)",
-          tokensBefore: Math.round(prev.ratio * contextWindow),
-          tokensAfter: Math.round(r.ratio * contextWindow),
+          detail: "context reset (context drop)",
+          tokensBefore: prev.tokens,
+          tokensAfter: r.tokens,
           model: null,
         });
       }
