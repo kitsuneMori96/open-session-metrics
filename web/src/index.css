@@ -305,6 +305,10 @@ select.field {
 .figure {
   position: relative;
   width: 100%;
+  /* A figure is a raster, not live text. Give it its own layer so a scrolling
+     pane moves it on the compositor: a dense session chart repaints thousands
+     of marks, and without the layer each scroll frame pays for all of them. */
+  will-change: transform;
 }
 .figure svg {
   display: block;

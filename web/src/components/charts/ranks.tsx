@@ -233,19 +233,24 @@ export function TimeBars({
                     strokeLinejoin="round"
                   />
                 )}
-                {mode === "bar"
-                  ? values.map((v, i) => (
-                      <VisxBar
-                        key={i}
-                        x={x(i) - barW / 2}
-                        y={y(v.value)}
-                        width={barW}
-                        height={Math.max(v.value > 0 ? 1 : 0, plotH - y(v.value))}
-                        fill={color}
-                        fillOpacity={v.value > 0 ? 0.85 : 0}
-                      />
-                    ))
-                  : null}
+                {mode === "bar" ? (
+                  // One path for the whole column series. A session can carry thousands
+                  // of turns, and thousands of <rect> nodes cost far more to paint than
+                  // the same geometry batched into a single fill. Sub-pixel bars overlap:
+                  // as one path they composite once instead of darkening every overlap.
+                  <path
+                    d={values
+                      .map((v, i) => {
+                        if (!(v.value > 0)) return "";
+                        const bx = x(i) - barW / 2;
+                        const by = y(v.value);
+                        return `M${bx} ${by}h${barW}v${Math.max(1, plotH - by)}h${-barW}z`;
+                      })
+                      .join("")}
+                    fill={color}
+                    fillOpacity={0.85}
+                  />
+                ) : null}
                 <AxisY top={0} left={0} scale={y} tickValues={yt} format={format} />
                 <AxisX
                   top={plotH}
