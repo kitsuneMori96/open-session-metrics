@@ -26,17 +26,28 @@ osm logs                # 跟踪服务日志
 osm stop                # 停掉后台服务
 ```
 
-> 0.3.0 起项目从 `opencode-session-metrics` 改名为 **Open Session Metrics**（包名
-> `@kitsunemori96/open-session-metrics`，CLI 仍是 `osm`）。旧包会标记 deprecated；
-> 已全局安装旧包的用户重装一次即可。旧的数据目录
-> `~/.local/share/opencode-session-metrics` 会被继续沿用，不迁移、不丢历史。
-
 要求 **Node 24+**（使用内置 `node:sqlite`，无原生依赖），且本机至少有一种数据源：
 `~/.local/share/opencode/opencode.db`（OpenCode）或 `~/.qoder/projects`（Qoder CLI）。
 默认源自动探测，也可以 `OSM_SOURCE=qoder osm` 指定，或启动后在页眉切换
 （见[数据源](#数据源)）。全局安装把指标库写在
 `~/.local/share/open-session-metrics`（`OSM_DATA_DIR` 或 `osm --data` 可改），
 升级包不会动到它。`osm run` 前台运行，`--port` / `--host` 改绑定。
+
+### 从旧包迁移
+
+0.3.0 起项目从 `opencode-session-metrics` 改名为 **Open Session Metrics**。旧包收到了
+一个 0.3.0 桥接版：它依赖新包并转调 `osm`，所以 `npm update -g` 之后旧名字仍然可用，
+跑的是新代码。
+
+```bash
+npm update -g @kitsunemori96/opencode-session-metrics   # 拉桥接版：命令、数据都不变
+npm uninstall -g @kitsunemori96/opencode-session-metrics
+npm i -g @kitsunemori96/open-session-metrics           # 想彻底换成新名字时
+```
+
+数据目录沿用旧的 `~/.local/share/opencode-session-metrics`（新目录不存在时），
+`OSM_*` 环境变量与 `osm` 命令不变，指标库不需要重建。两个包都提供 `osm`，
+所以切换时要先卸旧再装新，否则卸载旧包可能带走命令链接。
 
 从源码运行见[快速开始](#快速开始)。
 

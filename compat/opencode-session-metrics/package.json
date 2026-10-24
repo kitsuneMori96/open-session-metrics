@@ -1,0 +1,29 @@
+{
+  "name": "@kitsunemori96/opencode-session-metrics",
+  "version": "0.3.0",
+  "description": "Deprecated bridge: the project is now @kitsunemori96/open-session-metrics.",
+  "type": "module",
+  "license": "MIT",
+  "author": "kitsuneMori96",
+  "homepage": "https://github.com/kitsuneMori96/open-session-metrics#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kitsuneMori96/open-session-metrics.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kitsuneMori96/open-session-metrics/issues"
+  },
+  "bin": {
+    "osm": "bin/osm.js"
+  },
+  "files": [
+    "bin/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@kitsunemori96/open-session-metrics": "^0.3.0"
+  }
+}
