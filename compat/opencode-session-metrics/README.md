@@ -20,4 +20,7 @@ Uninstall first: both names provide the `osm` command, and removing the old
 package afterwards can take the shared link with it. Your data directory,
 `OSM_*` variables and history stay where they are.
 
+Running `osm upgrade` from this bridge prints the same two commands for the
+package manager that owns the install, instead of upgrading the nested copy.
+
 Source and documentation: <https://github.com/kitsuneMori96/open-session-metrics>

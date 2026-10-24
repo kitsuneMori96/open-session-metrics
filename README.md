@@ -24,6 +24,7 @@ osm                     # 起服务并打开浏览器
 osm status              # 谁在跑、数据在哪
 osm logs                # 跟踪服务日志
 osm stop                # 停掉后台服务
+osm upgrade             # 装最新版（--check 只看不装）
 ```
 
 要求 **Node 24+**（使用内置 `node:sqlite`，无原生依赖），且本机至少有一种数据源：
@@ -32,6 +33,23 @@ osm stop                # 停掉后台服务
 （见[数据源](#数据源)）。全局安装把指标库写在
 `~/.local/share/open-session-metrics`（`OSM_DATA_DIR` 或 `osm --data` 可改），
 升级包不会动到它。`osm run` 前台运行，`--port` / `--host` 改绑定。
+
+### 更新
+
+`osm` 每 24 小时查一次 npm registry，结果缓存在数据目录的 `update-check.json`。
+有新版本时，`osm start` / `osm run` / `osm status` 末尾追加一行（走 stderr，
+`status` 的 stdout 仍可直接解析）：
+
+```
+osm: 0.3.1 available (running 0.3.0) — osm upgrade
+```
+
+`osm upgrade` 用当前的安装方式（npm / pnpm / yarn / bun）装 `@latest`，服务在跑就
+顺手重启到新版本；`osm upgrade --check` 只报告、不安装。检查失败只留缓存、一天内
+不再重试，`CI` 环境整个跳过，`OSM_OFFLINE=1` 不联网（仍可读已有缓存），
+`OSM_NO_UPDATE_CHECK=1` 彻底关掉。通过旧包桥接安装的副本不会原地升级——那会把旧
+名字一直留在最外层——而是打印「卸旧装新」两条命令（见[从旧包迁移](#从旧包迁移)）。
+源码 checkout 里 `osm upgrade` 会拒绝执行并提示 `git pull`，避免包管理器覆盖工作区。
 
 ### 从旧包迁移
 
@@ -366,7 +384,8 @@ pid 与日志落在数据目录的 `osm.{pid,log}`。
 pnpm dev                    # server + web
 pnpm serve                  # 构建 + 重启 8787（见「快速开始」）
 pnpm typecheck              # 两个包 tsc --noEmit
-pnpm test                   # ETL / Qoder / 数据源 / 不变量测试（离线 fixture，无需服务与网络）
+pnpm test                   # ETL / Qoder / 数据源 / 不变量测试 + CLI 更新检查（离线 fixture，无需服务与网络）
+pnpm test:cli               # 只跑 CLI 更新检查的单元测试（node:test）
 pnpm -F @osm/server test:smoke   # HTTP 冒烟测试（需服务在线）
 pnpm materialize            # 增量物化
 pnpm materialize --full     # 全量重建（写入临时文件后原子替换）
@@ -385,10 +404,12 @@ pnpm plans                  # 按两库实测单价算套餐性价比（见 docs
 | `OSM_SOURCE` | 自动 | 默认数据源：`opencode` 或 `qoder`（页眉可切换，不设则自动探测） |
 | `OSM_SOURCE_DB` | `~/.local/share/opencode/opencode.db` | OpenCode 源库路径（只读） |
 | `OSM_QODER_HOME` | `~/.qoder` | Qoder 数据根目录（读其下 `projects/` 与 `logs/`） |
-| `OSM_DATA_DIR` | `<项目根>/.data` | 两库（`metrics.db` / `metrics-qoder.db`）与价目缓存目录（已 gitignore） |
+| `OSM_DATA_DIR` | `<项目根>/.data` | 两库（`metrics.db` / `metrics-qoder.db`）、价目与更新检查缓存（已 gitignore） |
 | `OSM_HOST` | `127.0.0.1` | API 监听地址 |
 | `OSM_PORT` | `8787` | API 端口 |
-| `OSM_OFFLINE` | — | 设为 `1` 时不访问 models.dev，价目走缓存或零值兜底 |
+| `OSM_OFFLINE` | — | 设为 `1` 时不访问 models.dev 与 npm 更新检查（版本检查仍可读缓存） |
+| `OSM_NO_UPDATE_CHECK` | — | 设为 `1` 关闭每日版本检查，不写缓存也不发请求 |
+| `OSM_UPDATE_REGISTRY` | `https://registry.npmjs.org` | 版本检查用的 registry（未设时沿用 `npm_config_registry`） |
 
 ## 实测性能
 
@@ -418,7 +439,8 @@ Qoder 的语料是另一套量级：67MB 逐行转录 · 24 个会话（含 8 �
 ## 目录结构
 
 ```
-bin/osm.js                # npm 入口：起服务、开浏览器、stop/status/logs
+bin/osm.js                # npm 入口：起服务、开浏览器、stop/status/logs/upgrade
+bin/update-check.js       # 每日一次的 registry 版本检查（纯函数，离线可测）
 server/src/
 ├── index.ts              # 启动、静态托管、水位驱动的刷新循环
 ├── api.ts                # REST 端点（每库一份，x-osm-source 选库）

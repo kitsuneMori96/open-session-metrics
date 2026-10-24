@@ -11,7 +11,7 @@
 // One process, one port: Express serves both the API and the built web bundle.
 // State goes to the XDG data dir (`~/.local/share/open-session-metrics`), never
 // into the package directory, so `npm i -g` upgrades cannot delete it.
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   createReadStream,
   existsSync,
@@ -26,6 +26,7 @@ import {
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { checkForUpdate, isNewer } from "./update-check.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PKG = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8"));
@@ -48,6 +49,7 @@ Usage
   osm status              process, URL, data dir, source db, bundle age
   osm logs [-n N]         follow the server log (default: last 40 lines)
   osm open                open the browser only
+  osm upgrade [--check]   install the latest release globally (--check only reports)
 
 Options
   --port <n>     listen port (default: $OSM_PORT or 8787)
@@ -58,10 +60,14 @@ Options
   -f, --foreground  same as \`osm run\`
   -v, --version  print the version
   -h, --help     print this help
+
+Updates
+  osm checks the npm registry once a day and prints one line when a newer
+  release exists. OSM_NO_UPDATE_CHECK=1 disables the check.
 `;
 
 const argv = process.argv.slice(2);
-const flags = { open: true, foreground: false };
+const flags = { open: true, foreground: false, check: false };
 const positional = [];
 let logLines = 40;
 
@@ -101,6 +107,9 @@ for (let i = 0; i < argv.length; i += 1) {
     case "--foreground":
       flags.foreground = true;
       break;
+    case "--check":
+      flags.check = true;
+      break;
     case "-n":
       logLines = Number(argv[(i += 1)]);
       break;
@@ -112,6 +121,7 @@ for (let i = 0; i < argv.length; i += 1) {
 
 const command = positional[0] ?? "start";
 if (positional.length > 1) fail(`unexpected argument: ${positional[1]}`);
+if (flags.check && command !== "upgrade") fail("--check is only valid with `osm upgrade`");
 
 const HOST = flags.host ?? process.env.OSM_HOST ?? "127.0.0.1";
 const PORT = flags.port ?? Number(process.env.OSM_PORT ?? 8787);
@@ -129,6 +139,7 @@ const USER_DATA_DIR = (() => {
   return existsSync(legacy) && !existsSync(current) ? legacy : current;
 })();
 const DEFAULT_DATA_DIR = ROOT.includes(INSTALLED) ? USER_DATA_DIR : path.join(ROOT, ".data");
+const IS_INSTALLED = ROOT.includes(INSTALLED);
 const DATA_DIR = path.resolve(flags.data ?? process.env.OSM_DATA_DIR ?? DEFAULT_DATA_DIR);
 const SOURCE_DB =
   flags.source ??
@@ -301,6 +312,16 @@ function checkInstall() {
 }
 
 async function start(foreground) {
+  const notice = updateNotice().catch(() => undefined);
+  try {
+    await startServer(foreground);
+  } finally {
+    // The check decorates the command; it must never change its outcome.
+    await notice;
+  }
+}
+
+async function startServer(foreground) {
   checkInstall();
 
   if (await isUp()) {
@@ -411,6 +432,7 @@ async function stop() {
 }
 
 async function status() {
+  const notice = updateNotice().catch(() => undefined);
   const pid = readPid();
   const up = await isUp();
   // One lookup either way: a pid file is authoritative, the listener is the fallback.
@@ -434,6 +456,119 @@ async function status() {
     }
   } else {
     note("  bundle  missing");
+  }
+  await notice;
+}
+
+/** Set once this process has installed a newer release: PKG.version is stale. */
+let upgraded = false;
+
+/**
+ * One line on stderr at most once a day. stdout stays parseable for `status`,
+ * and a slow or missing registry is silent rather than a delayed command.
+ */
+async function updateNotice() {
+  if (!IS_INSTALLED || upgraded) return;
+  const info = await checkForUpdate({ name: PKG.name, current: PKG.version, dataDir: DATA_DIR });
+  if (!info?.newer) return;
+  process.stderr.write(`osm: ${info.latest} available (running ${PKG.version}) — osm upgrade\n`);
+}
+
+const BRIDGE_PACKAGE = "@kitsunemori96/opencode-session-metrics";
+const MANAGERS = {
+  npm: { install: (spec) => ["install", "-g", spec], uninstall: (name) => ["uninstall", "-g", name] },
+  pnpm: { install: (spec) => ["add", "-g", spec], uninstall: (name) => ["remove", "-g", name] },
+  yarn: { install: (spec) => ["global", "add", spec], uninstall: (name) => ["global", "remove", name] },
+  bun: { install: (spec) => ["add", "-g", spec], uninstall: (name) => ["remove", "-g", name] },
+};
+
+/** Which tool owns the global prefix, inferred from where this file lives. */
+function globalManager() {
+  const root = ROOT.toLowerCase();
+  const sep = path.sep;
+  if (process.env.PNPM_HOME && root.startsWith(path.join(process.env.PNPM_HOME, "global").toLowerCase())) return "pnpm";
+  if (root.includes(`${sep}pnpm${sep}global${sep}`)) return "pnpm";
+  if (root.includes(`${sep}.bun${sep}install${sep}global${sep}`)) return "bun";
+  if (root.includes(`${sep}yarn${sep}global${sep}`) || root.includes(`${sep}.config${sep}yarn${sep}`)) return "yarn";
+  return "npm";
+}
+
+/**
+ * The bridge package installs the renamed one as a nested dependency:
+ * <prefix>/node_modules/@kitsunemori96/opencode-session-metrics/node_modules/@kitsunemori96/open-session-metrics
+ * Upgrading that in place would keep the old top-level name forever, so the
+ * migration is left to the user, printed as the two commands that end it.
+ */
+const installedThroughBridge = () =>
+  ROOT.toLowerCase().includes(`${path.sep}opencode-session-metrics${path.sep}node_modules${path.sep}`);
+
+const commandLine = (manager, args) => [manager, ...args].join(" ");
+
+/** Windows installs npm/pnpm/yarn as `.cmd` shims; `onPath("npm")` would miss them. */
+function managerBin(manager) {
+  if (process.platform !== "win32") return onPath(manager) ? manager : null;
+  return [`${manager}.cmd`, `${manager}.exe`, manager].find(onPath) ?? null;
+}
+
+async function upgrade() {
+  if (!flags.check && !IS_INSTALLED) {
+    fail("this is a source checkout — update with: git pull && pnpm install && pnpm serve");
+  }
+
+  const spec = `${PKG.name}@latest`;
+  const manager = globalManager();
+  const { install, uninstall } = MANAGERS[manager];
+
+  // Answer the migration question before the registry: it needs no network,
+  // and `@latest` is the spec either way.
+  if (!flags.check && installedThroughBridge()) {
+    note("this copy was installed by the deprecated @kitsunemori96/opencode-session-metrics bridge");
+    note(`  ${commandLine(manager, uninstall(BRIDGE_PACKAGE))}`);
+    note(`  ${commandLine(manager, install(spec))}`);
+    note("the osm command, OSM_* variables and the data dir all survive the switch");
+    process.exit(1);
+  }
+
+  const info = await checkForUpdate({
+    name: PKG.name,
+    current: PKG.version,
+    dataDir: DATA_DIR,
+    force: true,
+    // The user is waiting on this one, but a slow registry is still bounded.
+    timeout: 4000,
+  });
+
+  if (flags.check) {
+    if (info?.error) fail(`could not check the registry (${info.error})`);
+    if (info.newer) note(`${info.latest} available (running ${PKG.version}) — osm upgrade`);
+    else if (isNewer(PKG.version, info.latest)) note(`running ${PKG.version}; the registry has ${info.latest}`);
+    else note(`${PKG.version} is the latest`);
+    return;
+  }
+
+  if (info?.error) note(`could not check the registry (${info.error}) — installing ${spec} anyway`);
+  else if (!info.newer) {
+    note(`${PKG.version} is already the latest`);
+    return;
+  } else note(`installing ${info.latest} (running ${PKG.version})…`);
+
+  const args = install(spec);
+  const bin = managerBin(manager);
+  if (!bin) fail(`${manager} is not on PATH — run: ${commandLine(manager, args)}`);
+
+  const wasUp = await isUp();
+  const child = spawnSync(bin, args, { stdio: "inherit" });
+  if (child.error) fail(`${manager} failed: ${child.error.message}`);
+  if (child.status !== 0) fail(`${manager} exited with status ${child.status}`);
+
+  // This process still has the old version in memory; restart would otherwise
+  // announce the release it just installed as an available update.
+  upgraded = true;
+  if (wasUp) {
+    note("installed — restarting the server on the new version");
+    await restart();
+  } else {
+    note("installed — start it with: osm");
   }
 }
 
@@ -472,6 +607,9 @@ switch (command) {
     break;
   case "status":
     await status();
+    break;
+  case "upgrade":
+    await upgrade();
     break;
   case "logs":
   case "log":

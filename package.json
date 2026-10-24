@@ -1,6 +1,6 @@
 {
   "name": "@kitsunemori96/open-session-metrics",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "A local-first web cockpit for coding session metrics across OpenCode and Qoder: tokens, cost, tools, and transcripts.",
   "type": "module",
   "license": "MIT",
@@ -47,7 +47,8 @@
     "plans": "pnpm -F @osm/server plans",
     "start": "pnpm -F @osm/server start",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test && node --test test/update-check.test.mjs",
+    "test:cli": "node --test test/update-check.test.mjs"
   },
   "dependencies": {
     "cors": "^2.8.5",
