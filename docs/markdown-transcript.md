@@ -24,6 +24,11 @@ transcript 是**仪表纸带**，不是文档。Markdown 若按文档语法渲�
 | 引用 `>` | `│`（faint）+ `text-ink-soft` | 无 |
 | 分隔线 `---` | 一条 `border-rule` | 无 |
 
+**覆盖范围**：assistant 的正文与用户消息（`PromptRow` 那行 `>`）共用同一个 `Md`。本机 2 130 条 prompt 里
+11.1% 含块级标记、7.9% 含行内标记——贴进来的设计稿和日志会带着 `##`、`**` 直接上纸带。
+**不覆盖**：reasoning 行（默认折叠，且推理里混着未整理的半成品标记，渲染会假装它有结构）与工具
+input/output（逐字保留，那是数据不是排版）。
+
 **不解析、按纯文本显示**：图片、斜体（界面没有斜体）、脚注、引用式链接、字面 HTML（从不解释、从不进 `innerHTML`）。
 
 ---
@@ -78,7 +83,7 @@ transcript 是**仪表纸带**，不是文档。Markdown 若按文档语法渲�
 web/src/lib/md.ts         解析器（块 + 行内 AST，token 带源偏移），零依赖、无 innerHTML
 web/src/components/Md.tsx 渲染器（BlockView / InlineView / 表格三视图）
 web/src/lib/transcript.ts 搜索投影 plainText + 每行缓存（只在渲染开启时生效）
-web/src/components/Transcript.tsx  md 开关 + 文本行三选一
+web/src/components/Transcript.tsx  md 开关；正文与用户消息走 Md，reasoning 与工具行不走
 web/scripts/md-check.mjs  解析器断言（31 条），并入 pnpm test
 ```
 
@@ -94,7 +99,7 @@ web/scripts/md-check.mjs  解析器断言（31 条），并入 pnpm test
 
 一句从屏上抄下来的 `1. opencode-terminal-progress - 显示` 在存下的文本里匹配不到——标记字符正好卡在中间。
 
-- 过滤：`rowMatches(..., md)` 对 `kind === "text"` 的行改读 `plainText(searchText(row))`，
+- 过滤：`rowMatches(..., md)` 对 `kind === "text"` / `"prompt"` 的行改读 `plainText(searchText(row))`，
   按行 `WeakMap` 缓存（最大会话 1 628 段 / 387 k 字符，整表投影约 8 ms，每次输入只付一次）。
   工具输入输出**不投影**——它们不按 Markdown 渲染，其中的 `|`、`*`、`#` 是内容不是语法。
 - 高亮：`findHits` 在**源串**上找命中，再按 token 的 `at` 裁剪，所以跨行内边界的命中两侧都能标上。
@@ -114,7 +119,7 @@ web/scripts/md-check.mjs  解析器断言（31 条），并入 pnpm test
 |---|---|---|
 | 1 | 视觉词表 | `Md.tsx` 内只出现既有类名与布局工具；无新色值、新字号、新填充面、新容器 |
 | 2 | 无 `innerHTML` | 全链路 React 元素，字面 HTML 原样显示 |
-| 3 | 解析器断言 | `pnpm -F @osm/web test` 全绿（`md-check.mjs` 31 条 + `transcript-check.mjs` 28 条） |
+| 3 | 解析器断言 | `pnpm -F @osm/web test` 全绿（`md-check.mjs` 31 条 + `transcript-check.mjs` 31 条） |
 | 4 | 行内偏移 | 每个 token 的 `at` 指向源串中自己的文本（脏数据样例逐条断言） |
 | 5 | 截断围栏 | 未闭合围栏仍按代码渲染，不吞后文 |
 | 6 | 表格 | 记录表零横向溢出；矩阵右对齐、`tabular` 数字 |
@@ -130,6 +135,7 @@ web/scripts/md-check.mjs  解析器断言（31 条），并入 pnpm test
 |---|---|
 | 嵌套 | 只允许粗体/链接里包容行代码；斜体、粗体里再套粗体不解析 |
 | 斜体 / 图片 / 脚注 / 引用式链接 | 原样纯文本（界面没有对应语汇，强行渲染会造第二套排版） |
+| reasoning 行 | 保持纯文本：默认折叠，且推理里混着半成品标记，渲染等于替它伪造结构 |
 | 表格 > 4 列且无数字列 | 按记录行铺开，长单元格可能折行；这是相对网格更小的代价 |
 | 查询含语法字符 | `**现有功能**` 不再命中（投影已去掉 `**`）；查可见文本即可 |
 | 超长行 | 段落上限仍是 2 000 字符，与渲染无关 |
