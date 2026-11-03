@@ -60,12 +60,6 @@ export interface SrcTurn {
    * the whole-turn duration.
    */
   waitMs?: number | null;
-  /**
-   * When this response called its first tool. The model writes, then the tool runs, so
-   * this is where model time ends; the rest of the message span is tool execution.
-   * Null when the source records no part timestamps (Qoder).
-   */
-  firstToolAt?: number | null;
   /** per-turn diff stats collected from tool metadata (set by the reader) */
   _add?: number;
   _del?: number;
@@ -645,7 +639,6 @@ export class SourceReader implements SourceLike {
         parts,
         prompt: null,
         waitMs,
-        firstToolAt: firstTool,
         _add: additions,
         _del: deletions,
         _files: files,

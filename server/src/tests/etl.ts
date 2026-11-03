@@ -758,7 +758,7 @@ async function main() {
     );
     CREATE TABLE turns (
       id TEXT PRIMARY KEY, session_id TEXT, role TEXT, created INTEGER, completed INTEGER,
-      dur_ms INTEGER, provider TEXT, wait_ms INTEGER, stream_ms INTEGER, chars INTEGER, project TEXT, model TEXT,
+      dur_ms INTEGER, provider TEXT, wait_ms INTEGER, chars INTEGER, project TEXT, model TEXT,
       agent TEXT, input INTEGER, output INTEGER,
       reasoning INTEGER, cache_read INTEGER, cache_write INTEGER, cost REAL, finish TEXT,
       fill REAL, context_window INTEGER, tool_calls INTEGER, tool_errors INTEGER,
@@ -783,7 +783,7 @@ async function main() {
     const d = new Date(at);
     d.setHours(0, 0, 0, 0);
     const turnId = `${sid}_${at}`;
-    rr.prepare(`INSERT INTO turns VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    rr.prepare(`INSERT INTO turns VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       turnId,
       sid,
       "assistant",
@@ -792,7 +792,6 @@ async function main() {
       dur,
       model === "model-a" ? "prov-a" : "prov-b",
       300,
-      dur - 300,
       out * 3,
       project,
       model,

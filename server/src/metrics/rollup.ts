@@ -30,7 +30,7 @@ import { ladder } from "./histogram";
  * interior whole days from the rollup with the two partial edge days read from `turns`.
  * Both halves are exact, so nothing here rounds the numbers.
  */
-export const ROLL_VERSION = "7";
+export const ROLL_VERSION = "9";
 
 const DDL = /* sql */ `
 CREATE TABLE IF NOT EXISTS roll_cell (
@@ -181,13 +181,20 @@ const TOOL_FROM = "FROM tools tl JOIN turns t ON t.id = tl.turn_id WHERE t.role 
 /** Wait evidence: the source-level wait when it exists, else the whole-turn duration. */
 const WAIT_EXPR = "COALESCE(t.wait_ms, t.dur_ms, 0)";
 /** Output rate in tok/s over the *stream* span, not the whole turn: `dur_ms` includes the
- * wait, and dividing by it would charge the model for time it spent queued. `stream_ms`
- * is the build-time writing span (first evidence → first tool call, so in-step command
- * time is not model time); stores without it fall back to dur − wait. Only sources that
- * persist a stream span may enter — the Qoder JSONL writes one row per response, so its
- * `dur_ms` is ~0 for every turn and its lane stays empty rather than estimated. */
-const STREAM_EXPR = "COALESCE(t.stream_ms, MAX(t.dur_ms - COALESCE(t.wait_ms, 0), 0))";
+ * wait, and dividing by it would charge the model for time it spent queued. `wait_ms` is
+ * the source's first-evidence gap, so dur − wait is the response's writing span. That span
+ * still contains any in-step tool execution: OpenCode stamps a tool part's creation before
+ * the model stops streaming (measured: a 2 715-token response with a tool had the part
+ * created 493 ms in, while reasoning ran 11 s), so subtracting it would invent rates of
+ * thousands of tok/s. Only sources that persist a stream span may enter — the Qoder JSONL
+ * writes one row per response, so its `dur_ms` is ~0 for every turn and its lane stays
+ * empty rather than estimated. A response whose only stamp lands at the very end (measured:
+ * 2 727 tokens with a tool part created 134 ms before completion) leaves a near-zero span
+ * that implies five-digit rates; nothing decodes past 1 000 tok/s, so that row is kept out
+ * of the histogram rather than capped — the denominator is broken, not the model. */
+const STREAM_EXPR = "MAX(t.dur_ms - COALESCE(t.wait_ms, 0), 0)";
 const SPEED_EXPR = `COALESCE(t.output, 0) * 1000.0 / MAX(${STREAM_EXPR}, 1)`;
+const SPEED_GATE = `${STREAM_EXPR} > 100 AND ${SPEED_EXPR} <= 1000 AND t.provider <> 'qoder' AND COALESCE(t.output,0) > 0`;
 
 const PERF_WAIT = `INSERT INTO roll_perf(day,provider,model,kind,bin,n)
 SELECT t.day, COALESCE(t.provider,'—'), COALESCE(t.model,'unknown'), 'wait',
@@ -200,8 +207,7 @@ const PERF_SPEED = `INSERT INTO roll_perf(day,provider,model,kind,bin,n)
 SELECT t.day, COALESCE(t.provider,'—'), COALESCE(t.model,'unknown'), 'speed',
        ${ladder.rate.key(SPEED_EXPR)}, COUNT(*)
 FROM turns t
-WHERE t.role = 'assistant' AND ${STREAM_EXPR} > 100 AND t.provider <> 'qoder'
-  AND COALESCE(t.output,0) > 0{{WHERE}}
+WHERE t.role = 'assistant' AND ${SPEED_GATE}{{WHERE}}
 GROUP BY 1, 2, 3, 4`;
 
 const PERF_DAY = `INSERT INTO roll_perf_day(day,provider,model,calls,exact_waits,wait_sum,output,chars)
@@ -573,33 +579,34 @@ export function perfDaySource(slice: Shape, span: RollSpan): Sql {
   };
 }
 
-/** Raw per-day perf facts, for windows the rollup declines or facets it can't carry. */
-export function rawPerfDaySource(slice: Shape): Sql {
+/** Raw per-day perf facts, for windows the rollup declines or facets it can't carry.
+ * `key` lets the Speed screen ask for hour or five-minute buckets: those never come from
+ * the day rollups, so the bucket key has to be computed here, over `t.created`. */
+export function rawPerfDaySource(slice: Shape, key = "t.day"): Sql {
   const f = turnFacet(slice);
   return {
-    sql: `SELECT t.day, COALESCE(t.provider,'—') provider, COALESCE(t.model,'unknown') model,
+    sql: `SELECT ${key} day, COALESCE(t.provider,'—') provider, COALESCE(t.model,'unknown') model,
             COUNT(*) calls, SUM(CASE WHEN t.wait_ms IS NOT NULL THEN 1 ELSE 0 END) exact_waits,
             SUM(COALESCE(t.wait_ms,0)) wait_sum,
             SUM(COALESCE(t.output,0)) output, SUM(COALESCE(t.chars,0)) chars
           FROM turns t
           WHERE t.role = 'assistant' AND t.created >= ? AND t.created < ?${f.sql} AND ${WAIT_EXPR} > 0
-          GROUP BY t.day, 2, 3`,
+          GROUP BY 1, 2, 3`,
     args: [slice.from, slice.to, ...f.args],
   };
 }
 
 /** Two arms, one per kind — so the caller's args are consumed twice: bind them twice. */
-function rawPerfBins(where: Sql): Sql {
+function rawPerfBins(where: Sql, key = "t.day"): Sql {
   return {
     args: [...where.args, ...where.args],
-    sql: `SELECT t.day, COALESCE(t.provider,'—') provider, COALESCE(t.model,'unknown') model,
+    sql: `SELECT ${key} day, COALESCE(t.provider,'—') provider, COALESCE(t.model,'unknown') model,
             'wait' kind, ${ladder.ms.key(WAIT_EXPR)} bin, COUNT(*) n
           FROM turns t WHERE t.role = 'assistant' AND ${WAIT_EXPR} > 0 AND ${where.sql} GROUP BY 1,2,3,4
           UNION ALL
-          SELECT t.day, COALESCE(t.provider,'—') provider, COALESCE(t.model,'unknown') model,
+          SELECT ${key} day, COALESCE(t.provider,'—') provider, COALESCE(t.model,'unknown') model,
             'speed' kind, ${ladder.rate.key(SPEED_EXPR)} bin, COUNT(*) n
-          FROM turns t WHERE t.role = 'assistant' AND ${STREAM_EXPR} > 100 AND t.provider <> 'qoder'
-            AND COALESCE(t.output,0) > 0
+          FROM turns t WHERE t.role = 'assistant' AND ${SPEED_GATE}
             AND ${where.sql} GROUP BY 1,2,3,4`,
   };
 }
@@ -618,12 +625,15 @@ export function perfBinsSource(slice: Shape, span: RollSpan): Sql {
 }
 
 /** Raw perf bins, for windows the rollup declines or facets it can't carry. */
-export function rawPerfBinsSource(slice: Shape): Sql {
+export function rawPerfBinsSource(slice: Shape, key = "t.day"): Sql {
   const f = turnFacet(slice);
-  return rawPerfBins({
-    sql: `t.created >= ? AND t.created < ?${f.sql}`,
-    args: [slice.from, slice.to, ...f.args],
-  });
+  return rawPerfBins(
+    {
+      sql: `t.created >= ? AND t.created < ?${f.sql}`,
+      args: [slice.from, slice.to, ...f.args],
+    },
+    key,
+  );
 }
 
 export interface Shape {

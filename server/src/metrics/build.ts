@@ -301,7 +301,6 @@ export async function build(
         "completed",
         "dur_ms",
         "wait_ms",
-        "stream_ms",
         "chars",
         "role",
         "provider",
@@ -349,16 +348,9 @@ export async function build(
         if (!s) continue;
         // dur_ms = first → last event of the response (streaming span). wait_ms is the
         // source-level wait when it exists; otherwise the whole turn stands in for it
-        // (OpenCode), which the Speed screen labels as an approximation. stream_ms is the
-        // model's writing span: from first evidence to the first tool call, so a slow
-        // command inside the step does not read as a slow model.
+        // (OpenCode), which the Speed screen labels as an approximation.
         const durMs = t.created && t.completed ? Math.max(0, t.completed - t.created) : null;
         const waitMs = t.role === "assistant" ? (t.waitMs ?? (durMs && durMs > 0 ? durMs : null)) : null;
-        const streamEnd = t.firstToolAt ?? t.completed ?? null;
-        const streamMs =
-          t.role === "assistant" && waitMs != null && streamEnd != null && t.created
-            ? Math.max(0, streamEnd - t.created - waitMs)
-            : null;
         const bodyChars =
           t.parts.reduce((a: number, p: SrcPart) => (p.kind === "tool" ? a : a + p.chars), 0) || null;
         insTurn.run(
@@ -370,7 +362,6 @@ export async function build(
           t.completed,
           durMs,
           waitMs,
-          streamMs,
           bodyChars,
           t.role,
           t.provider,
