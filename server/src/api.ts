@@ -18,6 +18,7 @@ import {
   facets,
   sessionContext,
   sessionsPage,
+  speedOverview,
   toolDetail,
   MAX_PAGE_ROOTS,
   SESSION_ORDERS,
@@ -431,6 +432,13 @@ export function createApp(deps: {
     if (!detail.totals || detail.totals.calls === 0)
       return res.status(404).json({ error: "no calls for that tool in this window" });
     res.json(detail);
+  });
+
+  /** Per-API-call wait and output speed, per provider × model — the Speed screen. */
+  app.get("/api/top/speed", (req, res) => {
+    const db = storeOf(req, res);
+    if (!db) return;
+    res.json(speedOverview(db, sliceOf(req)));
   });
 
   /**

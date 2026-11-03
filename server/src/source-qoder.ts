@@ -126,9 +126,33 @@ interface Block {
   input?: any;
 }
 
+/**
+ * wait_ms is how long the caller waited for a response: its first event minus the
+ * newest earlier evidence — a user prompt, a tool result, or the previous response's
+ * end. Walked on the merged timeline (parent + subagents), so a subagent file's first
+ * turn still sees the parent's last event as evidence. Runs in both parse() and
+ * merge(); the second pass just recomputes the same values over more evidence.
+ */
+function waitPass(turns: SrcTurn[]): void {
+  let evidence = 0;
+  for (const t of turns) {
+    if (t.role !== "assistant") {
+      if (t.created > evidence) evidence = t.created;
+      continue;
+    }
+    if (evidence > 0 && t.created > evidence) t.waitMs = t.created - evidence;
+    let end = t.completed ?? t.created;
+    for (const tool of t.tools) if (tool.ended != null && tool.ended > end) end = tool.ended;
+    if (end > evidence) evidence = end;
+  }
+}
+
 interface Entry {
   id: string;
+  /** First row's timestamp: when the response started arriving. */
   ts: number;
+  /** Last row's timestamp: streaming end. Same as `ts` for a single-row response. */
+  last: number;
   model: string | null;
   stop: string | null;
   /** Explicit window in force when this response was requested (0 = none). */
@@ -514,6 +538,7 @@ export class QoderSource implements SourceLike {
       .sort((a, b) => a.created - b.created)
       .filter((t) => (seen.has(t.id) ? false : (seen.add(t.id), true)))
       .map((t, i) => ({ ...t, seq: i }));
+    waitPass(turns);
     const paths = new Set(parts.flatMap((p) => p.paths));
     const sum = (pick: (p: Parsed) => number) => parts.reduce((a, p) => a + pick(p), 0);
     const created = parts.map((p) => p.created).filter((t) => t > 0);
@@ -576,10 +601,12 @@ export class QoderSource implements SourceLike {
         const mid = typeof m.id === "string" && m.id ? m.id : e.uuid;
         if (!mid) continue;
         let entry = byId.get(mid);
+        const rowTs = ms(e.timestamp);
         if (!entry) {
           entry = {
             id: mid,
-            ts: ms(e.timestamp),
+            ts: rowTs,
+            last: rowTs,
             model: m.model ?? null,
             stop: m.stop_reason ?? null,
             window: explicit,
@@ -589,6 +616,9 @@ export class QoderSource implements SourceLike {
           byId.set(mid, entry);
           order.push(entry);
         }
+        // The response arrives as several rows; the last one carries the completion
+        // time, so the turn's streaming span is last − first rather than always 0.
+        if (rowTs > entry.last) entry.last = rowTs;
         if (m.stop_reason) entry.stop = m.stop_reason;
         if (m.model) entry.model = m.model;
         if (Array.isArray(m.content)) {
@@ -765,7 +795,7 @@ export class QoderSource implements SourceLike {
         sessionId: id,
         seq: 0,
         created: entry.ts,
-        completed: entry.ts,
+        completed: entry.last,
         role: synthetic ? "system" : "assistant",
         provider: "qoder",
         model: entry.model && !NOT_A_MODEL.has(entry.model) ? entry.model : null,
@@ -832,6 +862,7 @@ export class QoderSource implements SourceLike {
 
     items.sort((a, b) => a.ts - b.ts);
     const turns = items.map((it, i) => ({ ...it.turn, seq: i }));
+    waitPass(turns);
 
     // Compaction = a context reset the source never writes down. A drop of more
     // than COMPACTION_DROP_TOKENS between consecutive turns is the only evidence

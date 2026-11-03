@@ -12,8 +12,12 @@ import { histogramOf, histMedian, ladder, quantile, type BinRow, type Histogram 
 import {
   cellSource,
   hourSource,
+  perfBinsSource,
+  perfDaySource,
   rawCellSource,
   rawHourSource,
+  rawPerfBinsSource,
+  rawPerfDaySource,
   rawToolBins,
   rawToolSource,
   rollSpan,
@@ -603,6 +607,163 @@ function toolsOf(db: DatabaseSync, slice: Slice): ToolRow[] {
     .sort((x, y) => y.calls - x.calls);
 }
 
+/** One provider × model lane of the Speed screen.
+ *
+ * Wait is exact where the source records evidence (OpenCode: time to first token;
+ * Qoder writes the response in one row, so its wait is the whole round trip including
+ * generation). Speed is tok/s and only exists for sources that persist a stream span —
+ * Qoder does not, so its rows answer `null` rather than a number divided by nothing.
+ */
+export interface SpeedRow {
+  provider: string;
+  model: string;
+  calls: number;
+  /** Calls whose wait came from the source, not the whole-turn duration fallback. */
+  exactWaits: number;
+  waitP50: number;
+  waitP90: number;
+  waitMax: number;
+  speedP50: number | null;
+}
+
+/** One day of one lane — the per-day lines on the Speed screen. */
+export interface SpeedPoint {
+  day: number;
+  provider: string;
+  model: string;
+  calls: number;
+  waitP50: number | null;
+  speedP50: number | null;
+}
+
+export interface SpeedResponse {
+  rows: SpeedRow[];
+  points: SpeedPoint[];
+}
+
+interface PerfAcc {
+  calls: number;
+  exactWaits: number;
+  waitSum: number;
+  wait: Histogram;
+  speed: Histogram;
+  waitTop: number;
+  speedTop: number;
+}
+
+const perfAcc = (): PerfAcc => ({
+  calls: 0,
+  exactWaits: 0,
+  waitSum: 0,
+  wait: new Map(),
+  speed: new Map(),
+  waitTop: 0,
+  speedTop: 0,
+});
+
+const laneKey = (provider: string, model: string): string => `${provider}\u0000${model}`;
+
+/**
+ * Wait and output speed per API call, grouped by provider × model — the Speed screen.
+ *
+ * Whole days are answered from the day rollups (`roll_perf` / `roll_perf_day`), the cut
+ * edge days from `turns`; a window with a project or agent filter reads raw throughout,
+ * because the perf rollups do not carry those columns. Wait percentiles are histogram
+ * quantiles on the ms ladder; speed uses the rate ladder, whose bins outlive the request.
+ */
+export function speedOverview(db: DatabaseSync, slice: Slice): SpeedResponse {
+  const span = !slice.project && !slice.agent ? rollSpan(db, slice) : null;
+  const days = span ? perfDaySource(slice, span) : rawPerfDaySource(slice);
+  const bins = span ? perfBinsSource(slice, span) : rawPerfBinsSource(slice);
+
+  type DayRow = {
+    day: number;
+    provider: string;
+    model: string;
+    calls: number;
+    exact_waits: number;
+    wait_sum: number;
+    output: number;
+    chars: number;
+  };
+  const dayRows = db.prepare(days.sql).all(...(days.args as never[])) as unknown as DayRow[];
+  const binRows = db.prepare(bins.sql).all(...(bins.args as never[])) as unknown as (BinRow & {
+    day: number;
+    provider: string;
+    model: string;
+    kind: string;
+  })[];
+
+  const lanes = new Map<string, PerfAcc>();
+  const perDay = new Map<string, PerfAcc>();
+  for (const r of dayRows) {
+    if (slice.model && r.model !== slice.model) continue;
+    const key = laneKey(r.provider, r.model);
+    const a = lanes.get(key) ?? perfAcc();
+    const p = perfAcc();
+    a.calls += num(r.calls);
+    a.exactWaits += num(r.exact_waits);
+    a.waitSum += num(r.wait_sum);
+    lanes.set(key, a);
+    p.calls += num(r.calls);
+    p.exactWaits += num(r.exact_waits);
+    p.waitSum += num(r.wait_sum);
+    perDay.set(`${r.day}\u0000${key}`, p);
+  }
+  for (const r of binRows) {
+    if (slice.model && r.model !== slice.model) continue;
+    const kind = r.kind === "wait" ? "wait" : "speed";
+    const bin = Number(r.bin) || 0;
+    const n = num(r.n);
+    const lane = lanes.get(laneKey(r.provider, r.model));
+    if (lane) {
+      lane[kind].set(bin, (lane[kind].get(bin) ?? 0) + n);
+      if (kind === "wait") lane.waitTop = Math.max(lane.waitTop, bin);
+      else lane.speedTop = Math.max(lane.speedTop, bin);
+    }
+    const point = perDay.get(`${r.day}\u0000${laneKey(r.provider, r.model)}`);
+    if (point) {
+      point[kind].set(bin, (point[kind].get(bin) ?? 0) + n);
+      if (kind === "wait") point.waitTop = Math.max(point.waitTop, bin);
+      else point.speedTop = Math.max(point.speedTop, bin);
+    }
+  }
+
+  const rows: SpeedRow[] = [];
+  for (const [key, a] of lanes) {
+    const [provider, model] = key.split("\u0000");
+    if (a.calls === 0) continue;
+    rows.push({
+      provider,
+      model,
+      calls: a.calls,
+      exactWaits: a.exactWaits,
+      waitP50: quantile(a.wait, 0.5, ladder.ms, ladder.ms.lower(a.waitTop + 1)),
+      waitP90: quantile(a.wait, 0.9, ladder.ms, ladder.ms.lower(a.waitTop + 1)),
+      waitMax: ladder.ms.lower(a.waitTop + 1),
+      speedP50: a.speed.size ? quantile(a.speed, 0.5, ladder.rate, ladder.rate.lower(a.speedTop + 1)) : null,
+    });
+  }
+  rows.sort((x, y) => y.calls - x.calls);
+
+  const points: SpeedPoint[] = [];
+  for (const [key, a] of perDay) {
+    const [dayStr, provider, model] = key.split("\u0000");
+    if (a.calls === 0) continue;
+    points.push({
+      day: Number(dayStr),
+      provider,
+      model,
+      calls: a.calls,
+      waitP50: a.wait.size ? quantile(a.wait, 0.5, ladder.ms, ladder.ms.lower(a.waitTop + 1)) : null,
+      speedP50: a.speed.size ? quantile(a.speed, 0.5, ladder.rate, ladder.rate.lower(a.speedTop + 1)) : null,
+    });
+  }
+  points.sort((x, y) => x.day - y.day || y.calls - x.calls);
+
+  return { rows, points };
+}
+
 /** One point per session active in the slice — the scatter, the table and the picker. */
 export interface SessionRow {
   id: string;
@@ -623,6 +784,8 @@ export interface SessionRow {
   tools: number;
   errors: number;
   spanMs: number;
+  /** Whole-life message span from the sessions row; falls back to the window span. */
+  msgSpanMs: number;
   outputRate: number;
   contextPct: number;
   peakFill: number;
@@ -645,7 +808,8 @@ function sessionAgg(db: DatabaseSync, slice: Slice): { sql: string; args: unknow
                        COALESCE(s.created,0) created, COALESCE(s.updated,0) updated,
                        COALESCE(s.first_prompt,'') prompt, COALESCE(s.peak_fill,0) peak,
                        a.i i, a.o o, a.cr cr, a.cw cw, a.tokens tokens, a.cost cost, a.turns turns,
-                       a.tools tools, a.errors errors, a.span span, a.win win, a.ctx ctx
+                       a.tools tools, a.errors errors, a.span span, COALESCE(s.msg_span_ms,0) msgspan,
+                       a.win win, a.ctx ctx
                   FROM (`;
 
   if (span) {
@@ -691,6 +855,10 @@ function toSessionRows(rows: Record<string, unknown>[]): SessionRow[] {
   return rows.map((r) => {
     const id = String(r.id);
     const spanMs = num(r.span);
+    // First message sent → last response finished, over the session's whole life. The
+    // within-window span above answers "how active was it here"; this one answers
+    // "how long did it take", which is what the duration column shows.
+    const msgSpanMs = num(r.msgspan) || spanMs;
     const out = num(r.o);
     const input = num(r.i);
     const cacheRead = num(r.cr);
@@ -716,6 +884,7 @@ function toSessionRows(rows: Record<string, unknown>[]): SessionRow[] {
       tools: num(r.tools),
       errors: num(r.errors),
       spanMs,
+      msgSpanMs,
       outputRate: spanMs > 0 && out > 0 ? (out / spanMs) * 1000 : 0,
       // Same context convention as the rest of the project: what the provider had to
       // re-read plus what it wrote, over the model's window.
@@ -778,7 +947,7 @@ const SESSION_ORDER_COLUMN: Record<SessionOrder, string> = {
   turns: "turns",
   tools: "tools",
   errors: "errors",
-  span: "span",
+  span: "msgspan",
   ctx: "ctx",
   title: "title",
   project: "project",

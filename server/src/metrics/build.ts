@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { BUCKET_MS, type SourceKind } from "../config";
-import { type SrcTurn, type SrcSession, type SrcTool } from "../source";
+import { type SrcTurn, type SrcSession, type SrcTool, type SrcPart } from "../source";
 import { openSource } from "../source-select";
 import { initSchema, setMeta } from "./schema";
 import { catalogKey, loadCatalog, type Catalog } from "./catalog";
@@ -300,6 +300,9 @@ export async function build(
         "created",
         "completed",
         "dur_ms",
+        "wait_ms",
+        "stream_ms",
+        "chars",
         "role",
         "provider",
         "model",
@@ -344,6 +347,20 @@ export async function build(
       for (const t of turns) {
         const s = sessionById.get(t.sessionId);
         if (!s) continue;
+        // dur_ms = first → last event of the response (streaming span). wait_ms is the
+        // source-level wait when it exists; otherwise the whole turn stands in for it
+        // (OpenCode), which the Speed screen labels as an approximation. stream_ms is the
+        // model's writing span: from first evidence to the first tool call, so a slow
+        // command inside the step does not read as a slow model.
+        const durMs = t.created && t.completed ? Math.max(0, t.completed - t.created) : null;
+        const waitMs = t.role === "assistant" ? (t.waitMs ?? (durMs && durMs > 0 ? durMs : null)) : null;
+        const streamEnd = t.firstToolAt ?? t.completed ?? null;
+        const streamMs =
+          t.role === "assistant" && waitMs != null && streamEnd != null && t.created
+            ? Math.max(0, streamEnd - t.created - waitMs)
+            : null;
+        const bodyChars =
+          t.parts.reduce((a: number, p: SrcPart) => (p.kind === "tool" ? a : a + p.chars), 0) || null;
         insTurn.run(
           t.id,
           t.sessionId,
@@ -351,7 +368,10 @@ export async function build(
           t.seq,
           t.created,
           t.completed,
-          t.created && t.completed ? Math.max(0, t.completed - t.created) : null,
+          durMs,
+          waitMs,
+          streamMs,
+          bodyChars,
           t.role,
           t.provider,
           t.model,
@@ -505,6 +525,7 @@ export async function build(
         "tokens_per_line",
         "first_prompt",
         "duration_ms",
+        "msg_span_ms",
         "dominant_model",
         "output_rate",
       ];
@@ -607,6 +628,13 @@ export async function build(
           lines > 0 ? totalTokens / lines : null,
           firstPromptBySession.get(s.id) ?? null,
           s.updated - s.created,
+          // Message span: first assistant evidence to the last response's end, from
+          // API timestamps rather than file times — the wall duration minus the idle.
+          (() => {
+            const first = ts.length ? Math.min(...ts.map((t) => t.created)) : 0;
+            const last = ts.reduce((a, t) => Math.max(a, t.completed ?? t.created), 0);
+            return first && last > first ? last - first : null;
+          })(),
           dominant,
           outputRate,
         );

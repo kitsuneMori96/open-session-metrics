@@ -53,6 +53,19 @@ export interface SrcTurn {
   contextWindow?: number;
   /** Credits billed for this turn (Qoder). `cost` carries the same number at display precision. */
   creditsMicro?: number;
+  /**
+   * Wait before this response started producing output: first event minus the newest
+   * earlier evidence (prompt, tool result, previous response). Qoder fills it exactly
+   * from event timestamps; other sources leave it unset and the build falls back to
+   * the whole-turn duration.
+   */
+  waitMs?: number | null;
+  /**
+   * When this response called its first tool. The model writes, then the tool runs, so
+   * this is where model time ends; the rest of the message span is tool execution.
+   * Null when the source records no part timestamps (Qoder).
+   */
+  firstToolAt?: number | null;
   /** per-turn diff stats collected from tool metadata (set by the reader) */
   _add?: number;
   _del?: number;
@@ -482,6 +495,11 @@ export class SourceReader implements SourceLike {
       let deletions = 0;
       let files = 0;
       let writeLines = 0;
+      // Earliest sign that the model started producing something: the first reasoning
+      // part, the first tool call, or the streamed stamp. We keep the *first* one seen
+      // during the walk and let the smallest of those win below.
+      let firstReasoning: number | null = null;
+      let firstTool: number | null = null;
 
       for (const item of content) {
         if (item?.type === "text") {
@@ -492,12 +510,16 @@ export class SourceReader implements SourceLike {
         }
         if (item?.type === "reasoning") {
           const body = item.text ?? "";
+          const at = item.time?.created;
+          if (typeof at === "number" && Number.isFinite(at) && firstReasoning === null) firstReasoning = at;
           if (!isUser && body.trim()) parts.push(bodyPart("reasoning", body));
           continue;
         }
         if (item?.type === "tool") {
           const st = item.state ?? {};
           const name = item.name ?? "unknown";
+          const at = item.time?.created;
+          if (typeof at === "number" && Number.isFinite(at) && firstTool === null) firstTool = at;
           // v1 kept a `files:[{additions,deletions}]` list; v2 stores the raw patch and
           // omits that list, which is why the diff signal used to read as zero.
           const legacy = fileStats(st.metadata?.files);
@@ -590,6 +612,16 @@ export class SourceReader implements SourceLike {
       }
       if (type !== "assistant") continue;
 
+      let waitMs: number | undefined;
+      const evidence = [firstReasoning, firstTool, d.time?.streamed].filter(
+        (v): v is number => typeof v === "number" && Number.isFinite(v),
+      );
+      if (evidence.length) {
+        const firstEvidence = Math.min(...evidence);
+        const wait = firstEvidence - created;
+        if (wait > 0) waitMs = wait;
+      }
+
       out.push({
         id: row.id,
         sessionId: row.session_id,
@@ -612,6 +644,8 @@ export class SourceReader implements SourceLike {
         tools,
         parts,
         prompt: null,
+        waitMs,
+        firstToolAt: firstTool,
         _add: additions,
         _del: deletions,
         _files: files,

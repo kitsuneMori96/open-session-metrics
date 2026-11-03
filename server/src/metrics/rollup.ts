@@ -30,7 +30,7 @@ import { ladder } from "./histogram";
  * interior whole days from the rollup with the two partial edge days read from `turns`.
  * Both halves are exact, so nothing here rounds the numbers.
  */
-export const ROLL_VERSION = "2";
+export const ROLL_VERSION = "7";
 
 const DDL = /* sql */ `
 CREATE TABLE IF NOT EXISTS roll_cell (
@@ -99,6 +99,36 @@ CREATE TABLE IF NOT EXISTS roll_tool_bin (
   n INTEGER NOT NULL,
   PRIMARY KEY (day, name, bin, project, model, agent)
 ) WITHOUT ROWID;
+
+-- API wait and output speed, one histogram per day × provider × model. The wait bin
+-- falls back to the whole-turn duration when the source could not separate the wait
+-- (OpenCode), so the two units never share a group and the screen labels the semantics
+-- per provider. Speed is chars/s for Qoder (no output tokens exist) and tok/s elsewhere.
+CREATE TABLE IF NOT EXISTS roll_perf (
+  day INTEGER NOT NULL,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  bin INTEGER NOT NULL,
+  n INTEGER NOT NULL,
+  PRIMARY KEY (day, provider, model, kind, bin)
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS roll_perf_idx ON roll_perf(day);
+
+CREATE TABLE IF NOT EXISTS roll_perf_day (
+  day INTEGER NOT NULL,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  calls INTEGER NOT NULL,
+  exact_waits INTEGER NOT NULL,
+  wait_sum INTEGER NOT NULL,
+  output INTEGER NOT NULL,
+  chars INTEGER NOT NULL,
+  PRIMARY KEY (day, provider, model)
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS roll_perf_day_idx ON roll_perf_day(day);
 `;
 
 /** The cell columns, in the order every rollup insert and read uses them. */
@@ -148,8 +178,51 @@ const TOOL_GROUP =
   "GROUP BY tl.name, t.day, tl.session_id, COALESCE(t.project,'—'), COALESCE(t.model,'unknown'), COALESCE(t.agent,'main')";
 const TOOL_FROM = "FROM tools tl JOIN turns t ON t.id = tl.turn_id WHERE t.role = 'assistant'";
 
+/** Wait evidence: the source-level wait when it exists, else the whole-turn duration. */
+const WAIT_EXPR = "COALESCE(t.wait_ms, t.dur_ms, 0)";
+/** Output rate in tok/s over the *stream* span, not the whole turn: `dur_ms` includes the
+ * wait, and dividing by it would charge the model for time it spent queued. `stream_ms`
+ * is the build-time writing span (first evidence → first tool call, so in-step command
+ * time is not model time); stores without it fall back to dur − wait. Only sources that
+ * persist a stream span may enter — the Qoder JSONL writes one row per response, so its
+ * `dur_ms` is ~0 for every turn and its lane stays empty rather than estimated. */
+const STREAM_EXPR = "COALESCE(t.stream_ms, MAX(t.dur_ms - COALESCE(t.wait_ms, 0), 0))";
+const SPEED_EXPR = `COALESCE(t.output, 0) * 1000.0 / MAX(${STREAM_EXPR}, 1)`;
+
+const PERF_WAIT = `INSERT INTO roll_perf(day,provider,model,kind,bin,n)
+SELECT t.day, COALESCE(t.provider,'—'), COALESCE(t.model,'unknown'), 'wait',
+       ${ladder.ms.key(WAIT_EXPR)}, COUNT(*)
+FROM turns t
+WHERE t.role = 'assistant' AND ${WAIT_EXPR} > 0{{WHERE}}
+GROUP BY 1, 2, 3, 4`;
+
+const PERF_SPEED = `INSERT INTO roll_perf(day,provider,model,kind,bin,n)
+SELECT t.day, COALESCE(t.provider,'—'), COALESCE(t.model,'unknown'), 'speed',
+       ${ladder.rate.key(SPEED_EXPR)}, COUNT(*)
+FROM turns t
+WHERE t.role = 'assistant' AND ${STREAM_EXPR} > 100 AND t.provider <> 'qoder'
+  AND COALESCE(t.output,0) > 0{{WHERE}}
+GROUP BY 1, 2, 3, 4`;
+
+const PERF_DAY = `INSERT INTO roll_perf_day(day,provider,model,calls,exact_waits,wait_sum,output,chars)
+SELECT t.day, COALESCE(t.provider,'—'), COALESCE(t.model,'unknown'),
+  COUNT(*),
+  SUM(CASE WHEN t.wait_ms IS NOT NULL THEN 1 ELSE 0 END),
+  SUM(COALESCE(t.wait_ms,0)),
+  SUM(COALESCE(t.output,0)),
+  SUM(COALESCE(t.chars,0))
+FROM turns t
+WHERE t.role = 'assistant' AND ${WAIT_EXPR} > 0{{WHERE}}
+GROUP BY 1, 2, 3`;
+
+function perfInserts(dayFilter?: readonly unknown[]): string[] {
+  const where = dayFilter?.length ? ` AND t.day IN (${dayFilter.map(() => "?").join(",")})` : "";
+  return [PERF_WAIT, PERF_SPEED, PERF_DAY].map((sql) => sql.replace("{{WHERE}}", where));
+}
+
 const DROP =
-  "DROP TABLE IF EXISTS roll_cell; DROP TABLE IF EXISTS roll_hour; DROP TABLE IF EXISTS roll_tool; DROP TABLE IF EXISTS roll_tool_bin;";
+  "DROP TABLE IF EXISTS roll_cell; DROP TABLE IF EXISTS roll_hour; DROP TABLE IF EXISTS roll_tool; DROP TABLE IF EXISTS roll_tool_bin;" +
+  " DROP TABLE IF EXISTS roll_perf; DROP TABLE IF EXISTS roll_perf_day;";
 
 const ready = new WeakSet<DatabaseSync>();
 
@@ -183,6 +256,7 @@ export function rebuildAll(db: DatabaseSync): void {
   db.exec("BEGIN");
   try {
     db.exec("DELETE FROM roll_cell; DELETE FROM roll_hour; DELETE FROM roll_tool; DELETE FROM roll_tool_bin");
+    db.exec("DELETE FROM roll_perf; DELETE FROM roll_perf_day");
     db.exec(
       `INSERT INTO roll_cell(${CELL_COLS.join(",")}) SELECT ${CELL_SELECT} FROM turns t WHERE t.role = 'assistant' ${CELL_GROUP}`,
     );
@@ -198,6 +272,7 @@ export function rebuildAll(db: DatabaseSync): void {
        ${TOOL_FROM}
        GROUP BY 1,2,3,4,5,6`,
     );
+    for (const sql of perfInserts()) db.exec(sql);
     setMeta(db, "rollVersion", ROLL_VERSION);
     db.exec("COMMIT");
   } catch (e) {
@@ -223,6 +298,7 @@ export function refreshRollups(db: DatabaseSync, sessionIds: string[], days: num
   if (!hasTurns(db)) return;
   if (full) {
     db.exec("DELETE FROM roll_cell; DELETE FROM roll_hour; DELETE FROM roll_tool; DELETE FROM roll_tool_bin");
+    db.exec("DELETE FROM roll_perf; DELETE FROM roll_perf_day");
   }
   if (sessionIds.length) {
     const ph = sessionIds.map(() => "?").join(",");
@@ -254,6 +330,9 @@ export function refreshRollups(db: DatabaseSync, sessionIds: string[], days: num
        ${TOOL_FROM} AND t.day IN (${ph})
        GROUP BY 1,2,3,4,5,6`,
     ).run(...days);
+    db.prepare(`DELETE FROM roll_perf WHERE day IN (${ph})`).run(...days);
+    db.prepare(`DELETE FROM roll_perf_day WHERE day IN (${ph})`).run(...days);
+    for (const sql of perfInserts(days)) db.prepare(sql).run(...days);
   }
   setMeta(db, "rollVersion", ROLL_VERSION);
   ready.add(db);
@@ -473,6 +552,78 @@ export function rawHourSource(slice: Shape): Sql {
            GROUP BY t.day, t.hour`,
     args: [slice.from, slice.to, ...f.args],
   };
+}
+
+/** Whole-day per-day perf facts plus the edge days' facts. `roll_perf_day` carries no
+ * project/agent columns, so the caller only takes this when neither facet is set; the
+ * model facet is applied in JS, where per-day rows are already a few per day. */
+export function perfDaySource(slice: Shape, span: RollSpan): Sql {
+  const e = edgeSql(slice, span);
+  return {
+    sql: `SELECT day, provider, model, calls, exact_waits, wait_sum, output, chars
+            FROM roll_perf_day WHERE day >= ? AND day < ?
+          UNION ALL
+          SELECT t.day, COALESCE(t.provider,'—') provider, COALESCE(t.model,'unknown') model,
+            COUNT(*) calls, SUM(CASE WHEN t.wait_ms IS NOT NULL THEN 1 ELSE 0 END) exact_waits,
+            SUM(COALESCE(t.wait_ms,0)) wait_sum,
+            SUM(COALESCE(t.output,0)) output, SUM(COALESCE(t.chars,0)) chars
+          FROM turns t WHERE ${e.sql} AND ${WAIT_EXPR} > 0
+          GROUP BY t.day, 2, 3`,
+    args: [span.lo, span.hi, ...e.args],
+  };
+}
+
+/** Raw per-day perf facts, for windows the rollup declines or facets it can't carry. */
+export function rawPerfDaySource(slice: Shape): Sql {
+  const f = turnFacet(slice);
+  return {
+    sql: `SELECT t.day, COALESCE(t.provider,'—') provider, COALESCE(t.model,'unknown') model,
+            COUNT(*) calls, SUM(CASE WHEN t.wait_ms IS NOT NULL THEN 1 ELSE 0 END) exact_waits,
+            SUM(COALESCE(t.wait_ms,0)) wait_sum,
+            SUM(COALESCE(t.output,0)) output, SUM(COALESCE(t.chars,0)) chars
+          FROM turns t
+          WHERE t.role = 'assistant' AND t.created >= ? AND t.created < ?${f.sql} AND ${WAIT_EXPR} > 0
+          GROUP BY t.day, 2, 3`,
+    args: [slice.from, slice.to, ...f.args],
+  };
+}
+
+/** Two arms, one per kind — so the caller's args are consumed twice: bind them twice. */
+function rawPerfBins(where: Sql): Sql {
+  return {
+    args: [...where.args, ...where.args],
+    sql: `SELECT t.day, COALESCE(t.provider,'—') provider, COALESCE(t.model,'unknown') model,
+            'wait' kind, ${ladder.ms.key(WAIT_EXPR)} bin, COUNT(*) n
+          FROM turns t WHERE t.role = 'assistant' AND ${WAIT_EXPR} > 0 AND ${where.sql} GROUP BY 1,2,3,4
+          UNION ALL
+          SELECT t.day, COALESCE(t.provider,'—') provider, COALESCE(t.model,'unknown') model,
+            'speed' kind, ${ladder.rate.key(SPEED_EXPR)} bin, COUNT(*) n
+          FROM turns t WHERE t.role = 'assistant' AND ${STREAM_EXPR} > 100 AND t.provider <> 'qoder'
+            AND COALESCE(t.output,0) > 0
+            AND ${where.sql} GROUP BY 1,2,3,4`,
+  };
+}
+
+/** Whole-day perf bins plus the edge days' bins, merged per day × provider × model. */
+export function perfBinsSource(slice: Shape, span: RollSpan): Sql {
+  const e = edgeSql(slice, span);
+  const raw = rawPerfBins(e);
+  return {
+    sql: `SELECT day, provider, model, kind, bin, SUM(n) n FROM (
+            SELECT day, provider, model, kind, bin, n FROM roll_perf WHERE day >= ? AND day < ?
+            UNION ALL ${raw.sql}
+          ) GROUP BY 1,2,3,4,5`,
+    args: [span.lo, span.hi, ...raw.args],
+  };
+}
+
+/** Raw perf bins, for windows the rollup declines or facets it can't carry. */
+export function rawPerfBinsSource(slice: Shape): Sql {
+  const f = turnFacet(slice);
+  return rawPerfBins({
+    sql: `t.created >= ? AND t.created < ?${f.sql}`,
+    args: [slice.from, slice.to, ...f.args],
+  });
 }
 
 export interface Shape {

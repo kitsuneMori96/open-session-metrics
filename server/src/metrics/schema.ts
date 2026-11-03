@@ -12,7 +12,11 @@ export function openMetrics(file: string = METRICS_DB): DatabaseSync {
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA foreign_keys = OFF");
   ensureIndexes(db);
-  ensureRollups(db);
+  // A store written by an older layout is routed to a full rebuild by `schemaStale`
+  // before anything reads it; backfilling its rollups would only crash on columns the
+  // old `turns` does not have. A fresh file has no signature yet — no turns either.
+  const built = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='tools'").get();
+  if (built && getMeta(db, "schemaSig") === SCHEMA_SIG) ensureRollups(db);
   return db;
 }
 
@@ -31,6 +35,7 @@ CREATE TABLE IF NOT EXISTS models (
 CREATE TABLE IF NOT EXISTS turns (
   id TEXT PRIMARY KEY, session_id TEXT NOT NULL, project TEXT NOT NULL,
   seq INTEGER, created INTEGER, completed INTEGER, dur_ms INTEGER,
+  wait_ms INTEGER, stream_ms INTEGER, chars INTEGER,
   role TEXT, provider TEXT, model TEXT, variant TEXT, agent TEXT,
   input INTEGER, output INTEGER, reasoning INTEGER,
   cache_read INTEGER, cache_write INTEGER, cost REAL,
@@ -90,7 +95,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   compactions INTEGER, retries INTEGER, loops INTEGER,
   additions INTEGER, deletions INTEGER, files_changed INTEGER,
   peak_fill REAL, avg_fill REAL, eff_score REAL, tokens_per_line REAL,
-  first_prompt TEXT, duration_ms INTEGER, dominant_model TEXT, output_rate REAL
+  first_prompt TEXT, duration_ms INTEGER, msg_span_ms INTEGER, dominant_model TEXT, output_rate REAL
 );
 CREATE INDEX IF NOT EXISTS sessions_project ON sessions(project, created);
 CREATE INDEX IF NOT EXISTS sessions_parent ON sessions(parent_id);
