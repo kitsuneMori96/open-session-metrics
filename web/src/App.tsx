@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
-import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
+import { QueryClientProvider, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { refresh, useStatus } from "./lib/api";
 import { setMoneyUnit } from "./lib/format";
 import { makeClient } from "./lib/query";
@@ -93,14 +93,24 @@ function useBootScope(): Boot | null {
  * frame is drawn with the new numbers in the old currency:
  *   1. remember the outgoing source's slice,
  *   2. set the unit from the incoming store,
- *   3. throw the cache away and remount the tree under the new scope.
+ *   3. swap to the incoming source's cache and remount the tree under it.
  */
 function ScopeHost({ boot }: { boot: Boot }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [kind, setKind] = useState<SourceKind>(boot.kind);
   const [list, setList] = useState<SourceList>(boot.list);
-  const [client, setClient] = useState(makeClient);
+  // One cache per source, kept across switches: returning to a source paints the
+  // frame it had instead of emptying every panel while the requests come back.
+  const clients = useRef(new Map<SourceKind, QueryClient>());
+  const client = useMemo(() => {
+    let c = clients.current.get(kind);
+    if (!c) {
+      c = makeClient();
+      clients.current.set(kind, c);
+    }
+    return c;
+  }, [kind]);
 
   // The slice belongs to the source: keep the outgoing one as the URL changes, so
   // switching away and back returns to the window and filters you left.
@@ -119,17 +129,20 @@ function ScopeHost({ boot }: { boot: Boot }) {
   const switchTo = useCallback(
     (next: SourceKind) => {
       if (next === kind) return;
-      rememberSlice(kind, location.search);
       const target = list.sources.find((s) => s.kind === next);
-      // The unit is a property of the store. Set it before the new scope mounts.
-      setMoneyUnit(target?.unit ?? null);
-      commitSource(next);
-      setKind(next);
-      setClient(makeClient());
-      // A session id belongs to one store. Switching while reading one drops back to
-      // the list rather than asking the other store for a session it cannot have.
-      const pathname = /^\/sessions\/[^/]+$/.test(location.pathname) ? "/sessions" : location.pathname;
-      navigate({ pathname, search: storedSlice(next) }, { replace: true });
+      // The router transitions its own updates, so the source and the slice go into
+      // one transition together: the incoming panels mount once, under the incoming
+      // slice, instead of first asking the new store for the outgoing window.
+      startTransition(() => {
+        rememberSlice(kind, location.search);
+        setMoneyUnit(target?.unit ?? null);
+        commitSource(next);
+        setKind(next);
+        // A session id belongs to one store. Switching while reading one drops back to
+        // the list rather than asking the other store for a session it cannot have.
+        const pathname = /^\/sessions\/[^/]+$/.test(location.pathname) ? "/sessions" : location.pathname;
+        navigate({ pathname, search: storedSlice(next) }, { replace: true });
+      });
     },
     [kind, list, location.pathname, location.search, navigate],
   );
