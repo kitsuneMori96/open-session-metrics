@@ -231,6 +231,8 @@ export interface SessionRow {
   tools: number;
   errors: number;
   spanMs: number;
+  /** Whole-life message span (first prompt → last response); falls back to the window span. */
+  msgSpanMs: number;
   outputRate: number;
   contextPct: number;
   peakFill: number;
@@ -315,6 +317,34 @@ export interface ToolDetail {
   signatures: { message: string; count: number; sample: string }[];
   recentErrors: { at: number; session: string; error: string }[];
   edited: { additions: number; deletions: number; files: number; chars: number };
+}
+
+/** One provider × model lane of the Speed screen. */
+export interface SpeedRow {
+  provider: string;
+  model: string;
+  calls: number;
+  /** Calls whose wait came from the source, not the whole-turn fallback. */
+  exactWaits: number;
+  waitP50: number;
+  waitP90: number;
+  waitMax: number;
+  /** tok/s; null where the source persists no stream span (Qoder). */
+  speedP50: number | null;
+}
+
+export interface SpeedPoint {
+  day: number;
+  provider: string;
+  model: string;
+  calls: number;
+  waitP50: number | null;
+  speedP50: number | null;
+}
+
+export interface SpeedResponse {
+  rows: SpeedRow[];
+  points: SpeedPoint[];
 }
 
 export interface Facets {
@@ -496,6 +526,16 @@ export const useAnalytics = (
     queryKey: ["analytics", windowKey(win), facetKey(f), gran ?? "auto"],
     queryFn: ({ signal }) =>
       get<Dashboard>(`/api/top/analytics?${sliceQuery(sliceOf(win, f, gran))}`, signal),
+    placeholderData: keepPreviousData,
+    staleTime: 20_000,
+    refetchInterval: POLL_MS,
+  });
+
+/** Wait and output speed per API call, per provider × model — the Speed screen. */
+export const useSpeed = (win: WindowSpec, f: Facets0): UseQueryResult<SpeedResponse> =>
+  useQuery({
+    queryKey: ["speed", windowKey(win), facetKey(f)],
+    queryFn: ({ signal }) => get<SpeedResponse>(`/api/top/speed?${sliceQuery(sliceOf(win, f))}`, signal),
     placeholderData: keepPreviousData,
     staleTime: 20_000,
     refetchInterval: POLL_MS,

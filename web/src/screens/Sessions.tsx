@@ -205,9 +205,13 @@ export default function Sessions() {
         id: "span",
         header: "span",
         size: 74,
-        accessorKey: "spanMs",
+        accessorKey: "msgSpanMs",
         meta: { align: "right" },
-        cell: ({ row }) => <span className="tape tabular text-ink-soft">{dur(row.original.spanMs)}</span>,
+        cell: ({ row }) => (
+          <span className="tape tabular text-ink-soft" title="first prompt → last response">
+            {dur(row.original.msgSpanMs)}
+          </span>
+        ),
       },
       {
         id: "ctx",

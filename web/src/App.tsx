@@ -24,13 +24,14 @@ import Sessions from "./screens/Sessions";
 import SessionDetail from "./screens/SessionDetail";
 import Tools from "./screens/Tools";
 import Compare from "./screens/Compare";
+import Speed from "./screens/Speed";
 
 /**
  * The shell.
  *
- * Four routes plus a deep link for every session, one slice bar above all of them,
+ * Five routes plus a deep link for every session, one slice bar above all of them,
  * and one scope above the slice bar: which store the whole panel reads. The keymap
- * survives: 1–4 navigate, `/` opens the palette, `r` re-materializes the store,
+ * survives: 1–5 navigate, `/` opens the palette, `r` re-materializes the store,
  * Escape dismisses overlays.
  *
  * The scope is resolved *before* the first paint, because everything downstream
@@ -226,6 +227,7 @@ function Shell() {
           <Route path="/tools" element={<Tools />} />
           <Route path="/tools/:name" element={<Tools />} />
           <Route path="/compare" element={<Compare />} />
+          <Route path="/speed" element={<Speed />} />
           <Route path="*" element={<Navigate to={`/overview${location.search}`} replace />} />
         </Routes>
       </main>

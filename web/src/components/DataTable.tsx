@@ -47,6 +47,8 @@ export interface DataTableProps<T extends RowData> {
   className?: string;
   /** Called when the last rows come into view; the caller decides if there is more. */
   onEndReached?: () => void;
+  /** Extra classes per row — dimming a lane that carries too few samples, for one. */
+  rowClass?: (row: T) => string | undefined;
 }
 
 export function DataTable<T extends RowData>({
@@ -66,6 +68,7 @@ export function DataTable<T extends RowData>({
   empty,
   className,
   onEndReached,
+  rowClass,
 }: DataTableProps<T>) {
   const table = useLegacyTable<T>({
     data: rows,
@@ -183,6 +186,7 @@ export function DataTable<T extends RowData>({
                       "grid-row absolute left-0 top-0 grid w-full",
                       onRowClick && "cursor-pointer",
                       activeId === id && "grid-row-on",
+                      rowClass?.(row.original),
                     )}
                     style={{
                       gridTemplateColumns: template,
