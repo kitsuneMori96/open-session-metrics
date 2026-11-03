@@ -192,7 +192,11 @@ export function projectName(directory: string | null | undefined): string {
 export function pathsOf(input: any, files: any): string[] {
   const out: string[] = [];
   const push = (v: unknown) => {
-    if (typeof v === "string" && v.startsWith("/") && v.length > 1) out.push(v);
+    if (typeof v !== "string") return;
+    // Windows transcripts hand back `D:\Download\…`, which is just as absolute as
+    // `/home/…`; refusing it would report a Windows session as having edited nothing.
+    if (v.startsWith("/") && v.length > 1) out.push(v);
+    else if (/^[A-Za-z]:[\\/].{2,}/.test(v)) out.push(v);
   };
   push(input?.path);
   push(input?.filePath);
@@ -200,12 +204,13 @@ export function pathsOf(input: any, files: any): string[] {
   push(input?.notebookPath);
   push(input?.notebook_path);
   if (Array.isArray(input?.paths)) input.paths.forEach(push);
-  if (Array.isArray(files)) for (const f of files) push(typeof f === "string" ? f : f?.file ?? f?.path);
+  if (Array.isArray(files)) for (const f of files) push(typeof f === "string" ? f : (f?.file ?? f?.path));
   const cmd = input?.command;
   if (typeof cmd === "string") {
     // Restricted charset: API route literals inside a command (`/workspace/global?directory=…`)
     // would otherwise be voted in as a project lane.
-    for (const m of cmd.matchAll(/\/(?:home|Users|mnt|srv|opt|root|var|workspace)\/[\w.+\-@/]{2,}/g)) out.push(m[0]);
+    for (const m of cmd.matchAll(/\/(?:home|Users|mnt|srv|opt|root|var|workspace)\/[\w.+\-@/]{2,}/g))
+      out.push(m[0]);
   }
   return out;
 }
@@ -309,10 +314,13 @@ export class SourceReader implements SourceLike {
   maxMessageTime(): number {
     const msgTable = this.schema === "v2" ? "session_message" : "message";
     const msgCol = this.schema === "v2" ? "time_updated" : "time_created";
-    const msgMax = (this.db.prepare(`SELECT MAX(${msgCol}) AS m FROM ${msgTable}`).get() as { m: number | null })?.m ?? 0;
+    const msgMax =
+      (this.db.prepare(`SELECT MAX(${msgCol}) AS m FROM ${msgTable}`).get() as { m: number | null })?.m ?? 0;
     let sessMax = 0;
     try {
-      sessMax = (this.db.prepare("SELECT MAX(time_updated) AS m FROM session_v2").get() as { m: number | null })?.m ?? 0;
+      sessMax =
+        (this.db.prepare("SELECT MAX(time_updated) AS m FROM session_v2").get() as { m: number | null })?.m ??
+        0;
     } catch {
       /* legacy schema */
     }
@@ -353,20 +361,32 @@ export class SourceReader implements SourceLike {
         `SELECT s.id, s.parent_id, s.project_id, s.title, s.directory, s.agent, s.model,
                 s.time_created, s.time_updated, s.cost,
                 p.name AS project_name, p.worktree AS project_worktree
-         FROM ${table} s LEFT JOIN project p ON p.id = s.project_id`
+         FROM ${table} s LEFT JOIN project p ON p.id = s.project_id`,
       )
       .all() as any[];
 
-    const agg = new Map<string, { input: number; output: number; reasoning: number; cr: number; cw: number; a: number; d: number }>();
+    const agg = new Map<
+      string,
+      { input: number; output: number; reasoning: number; cr: number; cw: number; a: number; d: number }
+    >();
     if (this.schema === "v2") {
       for (const r of this.db
         .prepare(
           `SELECT id AS sid, tokens_input AS i, tokens_output AS o, tokens_reasoning AS r,
                   tokens_cache_read AS cr, tokens_cache_write AS cw,
                   summary_additions AS a, summary_deletions AS d
-           FROM session_v2`)
+           FROM session_v2`,
+        )
         .all() as any[]) {
-        agg.set(r.sid, { input: num(r.i), output: num(r.o), reasoning: num(r.r), cr: num(r.cr), cw: num(r.cw), a: num(r.a), d: num(r.d) });
+        agg.set(r.sid, {
+          input: num(r.i),
+          output: num(r.o),
+          reasoning: num(r.r),
+          cr: num(r.cr),
+          cw: num(r.cw),
+          a: num(r.a),
+          d: num(r.d),
+        });
       }
     }
 
@@ -411,17 +431,15 @@ export class SourceReader implements SourceLike {
    */
   patchFileCounts(sessionIds?: Set<string>): Map<string, { files: number; paths: string[] }> {
     const out = new Map<string, { files: number; paths: string[] }>();
-    const has = this.db
-      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='part'")
-      .get();
+    const has = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='part'").get();
     if (!has) return out;
     let rows: any[] = [];
     try {
-      const where = sessionIds ? `WHERE session_id IN (${[...sessionIds].map(() => "?").join(",")}) AND ` : "WHERE ";
+      const where = sessionIds
+        ? `WHERE session_id IN (${[...sessionIds].map(() => "?").join(",")}) AND `
+        : "WHERE ";
       const args = sessionIds ? [...sessionIds] : [];
-      rows = this.db
-        .prepare(`${where}data LIKE '%"patch"%'`)
-        .all(...args) as any[];
+      rows = this.db.prepare(`${where}data LIKE '%"patch"%'`).all(...args) as any[];
     } catch {
       return out;
     }
@@ -442,7 +460,9 @@ export class SourceReader implements SourceLike {
     const where = sessionIds ? `WHERE session_id IN (${[...sessionIds].map(() => "?").join(",")})` : "";
     const args = sessionIds ? [...sessionIds] : [];
     const rows = this.db
-      .prepare(`SELECT id, session_id, seq, type, time_created, time_updated, data FROM session_message ${where} ORDER BY time_created ASC, seq ASC`)
+      .prepare(
+        `SELECT id, session_id, seq, type, time_created, time_updated, data FROM session_message ${where} ORDER BY time_created ASC, seq ASC`,
+      )
       .all(...args) as any[];
 
     const out: SrcTurn[] = [];
@@ -450,7 +470,8 @@ export class SourceReader implements SourceLike {
       const d = parse(row.data);
       if (!d) continue;
       const type: string = row.type;
-      if (type === "compaction" || type === "idle" || type === "model-switched" || type === "agent-switched") continue;
+      if (type === "compaction" || type === "idle" || type === "model-switched" || type === "agent-switched")
+        continue;
 
       const isUser = type === "user";
       const content = Array.isArray(d.content) ? d.content : [];
@@ -491,7 +512,10 @@ export class SourceReader implements SourceLike {
           files += toolFiles;
           writeLines += toolWrite;
           const outputText =
-            st.error?.message ?? st.metadata?.output ?? st.output ?? (st.content ?? []).map((c: any) => c?.text ?? "").join("\n");
+            st.error?.message ??
+            st.metadata?.output ??
+            st.output ??
+            (st.content ?? []).map((c: any) => c?.text ?? "").join("\n");
           const started = item.time?.created ?? st.time?.start ?? st.time?.created ?? null;
           const ended = item.time?.completed ?? st.time?.end ?? st.time?.completed ?? null;
           const inputPreview = st.input ? JSON.stringify(st.input).slice(0, 400) : null;
@@ -513,7 +537,7 @@ export class SourceReader implements SourceLike {
             sig: hashSig(name, st.input),
             inputPreview,
             paths: pathsOf(st.input, st.metadata?.files),
-            targetSession: inputPreview ? SESSION_ID_RE.exec(inputPreview)?.[0] ?? null : null,
+            targetSession: inputPreview ? (SESSION_ID_RE.exec(inputPreview)?.[0] ?? null) : null,
           });
           if (!isUser) {
             parts.push({
@@ -540,23 +564,53 @@ export class SourceReader implements SourceLike {
       const completed = d.time?.completed ?? d.time?.streamed ?? (type === "assistant" ? null : created);
       if (isUser) {
         out.push({
-          id: row.id, sessionId: row.session_id, seq: num(row.seq), created, completed,
-          role: "user", provider: null, model: d.model?.id ?? null, variant: null, agent: d.agent ?? null,
-          input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0,
-          finish: null, text: d.text ?? text, tools: [], parts: [], prompt: (d.text ?? text).slice(0, 400),
+          id: row.id,
+          sessionId: row.session_id,
+          seq: num(row.seq),
+          created,
+          completed,
+          role: "user",
+          provider: null,
+          model: d.model?.id ?? null,
+          variant: null,
+          agent: d.agent ?? null,
+          input: 0,
+          output: 0,
+          reasoning: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: 0,
+          finish: null,
+          text: d.text ?? text,
+          tools: [],
+          parts: [],
+          prompt: (d.text ?? text).slice(0, 400),
         });
         continue;
       }
       if (type !== "assistant") continue;
 
       out.push({
-        id: row.id, sessionId: row.session_id, seq: num(row.seq), created, completed,
-        role: "assistant", provider: d.model?.providerID ?? null, model: d.model?.id ?? null,
-        variant: d.model?.variant ?? null, agent: d.agent ?? null,
-        input: num(tk.input), output: num(tk.output), reasoning: num(tk.reasoning),
-        cacheRead: num(tk.cache?.read), cacheWrite: num(tk.cache?.write), cost: num(d.cost),
+        id: row.id,
+        sessionId: row.session_id,
+        seq: num(row.seq),
+        created,
+        completed,
+        role: "assistant",
+        provider: d.model?.providerID ?? null,
+        model: d.model?.id ?? null,
+        variant: d.model?.variant ?? null,
+        agent: d.agent ?? null,
+        input: num(tk.input),
+        output: num(tk.output),
+        reasoning: num(tk.reasoning),
+        cacheRead: num(tk.cache?.read),
+        cacheWrite: num(tk.cache?.write),
+        cost: num(d.cost),
         finish: d.finish ?? d.rawFinish ?? null,
-        text, tools, parts,
+        text,
+        tools,
+        parts,
         prompt: null,
         _add: additions,
         _del: deletions,
@@ -571,14 +625,18 @@ export class SourceReader implements SourceLike {
     const where = sessionIds ? `WHERE m.session_id IN (${[...sessionIds].map(() => "?").join(",")})` : "";
     const args = sessionIds ? [...sessionIds] : [];
     const msgs = this.db
-      .prepare(`SELECT m.id, m.session_id, m.data, m.time_created FROM message m ${where} ORDER BY m.time_created ASC`)
+      .prepare(
+        `SELECT m.id, m.session_id, m.data, m.time_created FROM message m ${where} ORDER BY m.time_created ASC`,
+      )
       .all(...args) as any[];
 
     const partsByMsg = new Map<string, any[]>();
     if (msgs.length) {
       const ids = msgs.map((m) => m.id);
       const ph = ids.map(() => "?").join(",");
-      for (const p of this.db.prepare(`SELECT message_id, data FROM part WHERE message_id IN (${ph}) ORDER BY rowid ASC`).all(...ids) as any[]) {
+      for (const p of this.db
+        .prepare(`SELECT message_id, data FROM part WHERE message_id IN (${ph}) ORDER BY rowid ASC`)
+        .all(...ids) as any[]) {
         const d = parse(p.data);
         if (!d) continue;
         if (!partsByMsg.has(p.message_id)) partsByMsg.set(p.message_id, []);
@@ -625,41 +683,67 @@ export class SourceReader implements SourceLike {
           files += toolFiles;
           writeLines += toolWrite;
           tools.push({
-            turnId: row.id, sessionId: row.session_id, callId: p.callID ?? "",
-            name, status: st.status ?? "pending", started, ended,
-            title: st.title ?? null, outputChars: (st.output ?? "").length,
-            additions: diff.additions, deletions: diff.deletions, files: toolFiles,
+            turnId: row.id,
+            sessionId: row.session_id,
+            callId: p.callID ?? "",
+            name,
+            status: st.status ?? "pending",
+            started,
+            ended,
+            title: st.title ?? null,
+            outputChars: (st.output ?? "").length,
+            additions: diff.additions,
+            deletions: diff.deletions,
+            files: toolFiles,
             writeLines: toolWrite,
             error: st.status === "error" ? (st.error ?? st.output ?? "tool error") : null,
             sig: hashSig(name, st.input),
             inputPreview,
             paths: pathsOf(st.input, p.files),
-            targetSession: inputPreview ? SESSION_ID_RE.exec(inputPreview)?.[0] ?? null : null,
+            targetSession: inputPreview ? (SESSION_ID_RE.exec(inputPreview)?.[0] ?? null) : null,
           });
           if (isAssistant) {
             const outText = typeof st.output === "string" ? st.output : "";
             parts.push({
-              kind: "tool", text: "", name, callId: p.callID ?? "",
-              status: st.status ?? "pending", title: st.title ?? null,
+              kind: "tool",
+              text: "",
+              name,
+              callId: p.callID ?? "",
+              status: st.status ?? "pending",
+              title: st.title ?? null,
               input: (st.input ? JSON.stringify(st.input) : "").slice(0, PART_CAP.input),
               output: outText.slice(0, PART_CAP.output),
               exitCode: st.metadata?.exit ?? st.metadata?.exitCode ?? null,
               truncated: st.metadata?.truncated ?? false,
-              started, ended, chars: outText.length,
+              started,
+              ended,
+              chars: outText.length,
             });
           }
         }
       }
       const tk = d.tokens ?? {};
       out.push({
-        id: row.id, sessionId: row.session_id, seq: out.length, created: d.time?.created ?? row.time_created,
+        id: row.id,
+        sessionId: row.session_id,
+        seq: out.length,
+        created: d.time?.created ?? row.time_created,
         completed: d.time?.completed ?? null,
         role: role === "user" ? "user" : role === "assistant" ? "assistant" : "other",
-        provider: d.providerID ?? null, model: d.modelID ?? d.model ?? null, variant: null, agent: d.agent ?? null,
-        input: tk.input ?? d.usage?.input_tokens ?? 0, output: tk.output ?? d.usage?.output_tokens ?? 0,
-        reasoning: tk.reasoning ?? 0, cacheRead: tk.cache?.read ?? d.usage?.cache_read_input_tokens ?? 0,
-        cacheWrite: tk.cache?.write ?? d.usage?.cache_write_input_tokens ?? 0, cost: num(d.cost),
-        finish: d.finish ?? d.stop_reason ?? null, text, tools, parts: isAssistant ? parts : [],
+        provider: d.providerID ?? null,
+        model: d.modelID ?? d.model ?? null,
+        variant: null,
+        agent: d.agent ?? null,
+        input: tk.input ?? d.usage?.input_tokens ?? 0,
+        output: tk.output ?? d.usage?.output_tokens ?? 0,
+        reasoning: tk.reasoning ?? 0,
+        cacheRead: tk.cache?.read ?? d.usage?.cache_read_input_tokens ?? 0,
+        cacheWrite: tk.cache?.write ?? d.usage?.cache_write_input_tokens ?? 0,
+        cost: num(d.cost),
+        finish: d.finish ?? d.stop_reason ?? null,
+        text,
+        tools,
+        parts: isAssistant ? parts : [],
         prompt: role === "user" ? text.slice(0, 400) : null,
         _add: tools.reduce((a, t) => a + t.additions, 0),
         _del: tools.reduce((a, t) => a + t.deletions, 0),
@@ -673,36 +757,58 @@ export class SourceReader implements SourceLike {
   events(sessionIds?: Set<string>): SrcEvent[] {
     const out: SrcEvent[] = [];
     if (this.schema === "v2") {
-      const where = sessionIds ? `WHERE session_id IN (${[...sessionIds].map(() => "?").join(",")}) AND` : "WHERE";
+      const where = sessionIds
+        ? `WHERE session_id IN (${[...sessionIds].map(() => "?").join(",")}) AND`
+        : "WHERE";
       const args = sessionIds ? [...sessionIds] : [];
       const rows = this.db
         .prepare(
           `SELECT id, session_id, seq, type, time_created, data FROM session_message
-           ${where} type IN ('compaction','idle','model-switched','agent-switched') ORDER BY time_created ASC`
+           ${where} type IN ('compaction','idle','model-switched','agent-switched') ORDER BY time_created ASC`,
         )
         .all(...args) as any[];
       for (const r of rows) {
         const d = parse(r.data) ?? {};
         const type: SrcEvent["type"] =
-          r.type === "compaction" ? "compaction" : r.type === "idle" ? (d.outcome === "failed" ? "error" : "idle") : "switch";
+          r.type === "compaction"
+            ? "compaction"
+            : r.type === "idle"
+              ? d.outcome === "failed"
+                ? "error"
+                : "idle"
+              : "switch";
         out.push({
           sessionId: r.session_id,
           turnId: null,
           type,
           at: d.time?.created ?? r.time_created,
           reason: d.reason ?? d.outcome ?? d.error?.type ?? null,
-          detail: r.type === "compaction" ? (d.summary ?? "").slice(0, 600) : (d.error?.message ?? d.outcome ?? null),
+          detail:
+            r.type === "compaction"
+              ? (d.summary ?? "").slice(0, 600)
+              : (d.error?.message ?? d.outcome ?? null),
           tokensBefore: num(d.tokens?.input) || num(d.tokens?.cache?.read) || null,
           model: d.model?.id ?? null,
         });
       }
     } else {
-      const rows = this.db.prepare("SELECT session_id, message_id, data FROM part WHERE data LIKE '%\"compaction\"%' LIMIT 20000").all() as any[];
+      const rows = this.db
+        .prepare(
+          "SELECT session_id, message_id, data FROM part WHERE data LIKE '%\"compaction\"%' LIMIT 20000",
+        )
+        .all() as any[];
       for (const r of rows) {
         const d = parse(r.data);
         if (d?.type !== "compaction") continue;
         if (sessionIds && !sessionIds.has(r.session_id)) continue;
-        out.push({ sessionId: r.session_id, turnId: r.message_id, type: "compaction", at: d.time?.created ?? 0, reason: d.reason ?? null, detail: (d.text ?? "").slice(0, 600) });
+        out.push({
+          sessionId: r.session_id,
+          turnId: r.message_id,
+          type: "compaction",
+          at: d.time?.created ?? 0,
+          reason: d.reason ?? null,
+          detail: (d.text ?? "").slice(0, 600),
+        });
       }
     }
     return out;

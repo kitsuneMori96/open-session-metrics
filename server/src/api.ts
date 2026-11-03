@@ -5,9 +5,11 @@ import {
   BUCKET_MS,
   SOURCE_KIND,
   SOURCE_KINDS,
+  SOURCE_LABELS,
   metricsDbPath,
   sourceAvailable,
   sourceProbe,
+  sourceRoots,
   type SourceKind,
 } from "./config";
 import { getMeta, getMetaNumber } from "./metrics/schema";
@@ -43,8 +45,10 @@ export function createApp(deps: {
    * only as a debugging affordance for curl.
    */
   const kindOf = (req: express.Request): SourceKind => {
-    const raw = String(req.get("x-osm-source") ?? req.query.src ?? "").trim().toLowerCase();
-    return raw === "qoder" || raw === "opencode" ? raw : SOURCE_KIND;
+    const raw = String(req.get("x-osm-source") ?? req.query.src ?? "")
+      .trim()
+      .toLowerCase();
+    return (SOURCE_KINDS as readonly string[]).includes(raw) ? (raw as SourceKind) : SOURCE_KIND;
   };
 
   /** The store this request reads, or `null` after answering 503 for an unmaterialized source. */
@@ -55,9 +59,9 @@ export function createApp(deps: {
     return null;
   };
 
-  const q = <T,>(db: DatabaseSync, sql: string, ...args: unknown[]): T[] =>
+  const q = <T>(db: DatabaseSync, sql: string, ...args: unknown[]): T[] =>
     db.prepare(sql).all(...(args as any[])) as T[];
-  const one = <T,>(db: DatabaseSync, sql: string, ...args: unknown[]): T | undefined =>
+  const one = <T>(db: DatabaseSync, sql: string, ...args: unknown[]): T | undefined =>
     db.prepare(sql).get(...(args as any[])) as T | undefined;
 
   /** `?from=` is a cutoff in epoch ms; 0 or absent means all time. */
@@ -111,16 +115,22 @@ export function createApp(deps: {
         mode: null,
         bucketMs: BUCKET_MS,
         extent: { from: 0, to: Date.now() },
-        counts: { sessions: 0, turns: 0, tools: 0, parts: 0, events: 0, models: 0 },
+        counts: {
+          sessions: 0,
+          turns: 0,
+          tools: 0,
+          parts: 0,
+          events: 0,
+          models: 0,
+        },
       });
     }
     const db = deps.db(kind);
-    const count = (t: string) => (one<{ c: number }>(db, `SELECT COUNT(*) c FROM ${t}`)?.c ?? 0);
-    const extent =
-      one<{ from_ts: number | null; to_ts: number | null }>(
-        db,
-        `SELECT MIN(created) AS from_ts, MAX(COALESCE(updated, created)) AS to_ts FROM sessions`
-      ) ?? { from_ts: null, to_ts: null };
+    const count = (t: string) => one<{ c: number }>(db, `SELECT COUNT(*) c FROM ${t}`)?.c ?? 0;
+    const extent = one<{ from_ts: number | null; to_ts: number | null }>(
+      db,
+      `SELECT MIN(created) AS from_ts, MAX(COALESCE(updated, created)) AS to_ts FROM sessions`,
+    ) ?? { from_ts: null, to_ts: null };
     /**
      * Does this store split tokens into the five classes?
      *
@@ -136,7 +146,7 @@ export function createApp(deps: {
       `SELECT 1 AS hit FROM turns
        WHERE role = 'assistant'
          AND (output > 0 OR cache_read > 0 OR cache_write > 0 OR reasoning > 0)
-       LIMIT 1`
+       LIMIT 1`,
     );
     res.json({
       ready: true,
@@ -149,7 +159,10 @@ export function createApp(deps: {
       materializedAt: getMetaNumber(db, "materializedAt"),
       mode: getMeta(db, "mode"),
       bucketMs: BUCKET_MS,
-      extent: { from: Number(extent.from_ts ?? 0), to: Number(extent.to_ts ?? Date.now()) },
+      extent: {
+        from: Number(extent.from_ts ?? 0),
+        to: Number(extent.to_ts ?? Date.now()),
+      },
       counts: {
         sessions: count("sessions"),
         turns: count("turns"),
@@ -174,15 +187,26 @@ export function createApp(deps: {
       const ready = deps.hasStore(kind);
       const base = {
         kind,
-        label: kind,
+        label: SOURCE_LABELS[kind],
         available,
         ready,
         path: sourceProbe(kind),
+        // One Qoder account bills across the tree of whichever OS ran it, so the
+        // menu has to say which extra trees are folded in.
+        roots: sourceRoots(kind).filter((p) => p !== sourceProbe(kind)),
         store: metricsDbPath(kind),
       };
-      if (!ready) return { ...base, unit: null, tokenClasses: null, sourceSchema: null, materializedAt: 0, counts: null };
+      if (!ready)
+        return {
+          ...base,
+          unit: null,
+          tokenClasses: null,
+          sourceSchema: null,
+          materializedAt: 0,
+          counts: null,
+        };
       const db = deps.db(kind);
-      const count = (t: string) => (one<{ c: number }>(db, `SELECT COUNT(*) c FROM ${t}`)?.c ?? 0);
+      const count = (t: string) => one<{ c: number }>(db, `SELECT COUNT(*) c FROM ${t}`)?.c ?? 0;
       return {
         ...base,
         unit: getMeta(db, "unit") ?? "usd",
@@ -194,11 +218,15 @@ export function createApp(deps: {
           `SELECT 1 AS hit FROM turns
            WHERE role = 'assistant'
              AND (output > 0 OR cache_read > 0 OR cache_write > 0 OR reasoning > 0)
-           LIMIT 1`
+           LIMIT 1`,
         ),
         sourceSchema: getMeta(db, "sourceSchema"),
         materializedAt: getMetaNumber(db, "materializedAt"),
-        counts: { sessions: count("sessions"), turns: count("turns"), tools: count("tools") },
+        counts: {
+          sessions: count("sessions"),
+          turns: count("turns"),
+          tools: count("tools"),
+        },
       };
     };
     res.json({ default: SOURCE_KIND, sources: SOURCE_KINDS.map(describe) });
@@ -233,7 +261,7 @@ export function createApp(deps: {
       `SELECT id, parent_id, project, title, agent, model, provider, created, updated,
               t_input, t_output, t_reasoning, t_cache_read, t_cache_write, cost, turns, first_prompt
        FROM sessions WHERE id = ?`,
-      id
+      id,
     );
     if (!session) return res.status(404).json({ error: "unknown session" });
 
@@ -244,21 +272,21 @@ export function createApp(deps: {
               project, occupancy, context_window, fill, fill_after, additions, deletions, write_lines, has_error
        FROM turns WHERE session_id = ? AND role = 'assistant'
        ORDER BY created ASC, seq ASC`,
-      id
+      id,
     );
     const prompts = q<any>(
       db,
       `SELECT id, created, text FROM turns
        WHERE session_id = ? AND role = 'user' AND length(trim(coalesce(text, ''))) > 0
        ORDER BY created ASC, seq ASC`,
-      id
+      id,
     );
     const parts = q<any>(
       db,
       `SELECT turn_id, ordinal, kind, text, name, call_id, status, title, input, output,
               exit_code, truncated, started, ended, chars
        FROM parts WHERE session_id = ? ORDER BY turn_id, ordinal, id`,
-      id
+      id,
     );
     const byTurn = new Map<string, any[]>();
     for (const p of parts) {
@@ -328,7 +356,11 @@ export function createApp(deps: {
         hasError: Number(t.has_error ?? 0) === 1,
         parts: byTurn.get(t.id) ?? [],
       })),
-      prompts: prompts.map((p) => ({ id: p.id, created: Number(p.created ?? 0), text: p.text ?? "" })),
+      prompts: prompts.map((p) => ({
+        id: p.id,
+        created: Number(p.created ?? 0),
+        text: p.text ?? "",
+      })),
     });
   });
 
@@ -368,7 +400,13 @@ export function createApp(deps: {
     if (focus) {
       const rows = sessionContext(db, slice, focus);
       if (!rows.length) return res.status(404).json({ error: "session not in this window" });
-      return res.json({ rows, matching: rows.length, roots: 0, next: null, totals: null });
+      return res.json({
+        rows,
+        matching: rows.length,
+        roots: 0,
+        next: null,
+        totals: null,
+      });
     }
     const order = str(req, "order");
     const limit = Number(req.query.limit ?? MAX_PAGE_ROOTS);
@@ -379,7 +417,7 @@ export function createApp(deps: {
         dir: req.query.dir === "asc" ? "asc" : "desc",
         limit: Number.isFinite(limit) ? limit : MAX_PAGE_ROOTS,
         cursor: str(req, "cursor"),
-      })
+      }),
     );
   });
 
@@ -390,7 +428,8 @@ export function createApp(deps: {
     const name = str(req, "name");
     if (!name) return res.status(400).json({ error: "name is required" });
     const detail = toolDetail(db, sliceOf(req), name);
-    if (!detail.totals || detail.totals.calls === 0) return res.status(404).json({ error: "no calls for that tool in this window" });
+    if (!detail.totals || detail.totals.calls === 0)
+      return res.status(404).json({ error: "no calls for that tool in this window" });
     res.json(detail);
   });
 
@@ -415,7 +454,16 @@ export function createApp(deps: {
        WHERE s.id IN (SELECT session_id FROM parts WHERE text LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\'
                         OR title LIKE ? ESCAPE '\\' OR input LIKE ? ESCAPE '\\' OR output LIKE ? ESCAPE '\\')
        ORDER BY s.updated DESC LIMIT 40`,
-      like, like, like, like, like, like, like, like, like, like
+      like,
+      like,
+      like,
+      like,
+      like,
+      like,
+      like,
+      like,
+      like,
+      like,
     );
     res.json({
       query: raw,

@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { QODER_LOGS, QODER_PROJECTS } from "./config";
+import { qoderDesktopTitles } from "./qoder-titles";
 import {
   bodyPart,
   hashSig,
@@ -45,22 +46,20 @@ import {
  * and `context_length` is only put on the request when a window preference is
  * set (`if (l?.contextWindow !== void 0 && rS(D, l.contextWindow))`). Every
  * `runtime-config` in this machine's transcripts says `contextWindow: null`, so
- * the denominator is the catalog's `max_input_tokens` — which is per model, and
- * has nothing to do with the 200 000 window both models default to:
+ * the denominator falls back to the model's own limit:
  *
- *     Qwen3.8-Flash (qfmodel)   max_input_tokens   180 000   default window 200 000
- *     DeepSeek-Flash (dfmodel)  max_input_tokens 1 000 000   default window 200 000
+ *     Qwen3.8-Flash (qfmodel)   max_input_tokens 180 000
+ *     DeepSeek-Flash (dfmodel)  max_input_tokens 200 000
  *
- * The transcripts prove it without the catalog: session `4a8b72e7` switches
- * model mid-conversation, and the ratio jumps from 0.0967 to 0.5669 while the
- * context it describes only grows a little — 0.0967 × 1e6 = 96.7 k tokens before,
- * 0.5669 × 180 k = 102.0 k after. One shared 200 000 denominator would read that
- * as 19 k → 113 k, i.e. a phantom compaction. Absolute tokens also line up where
- * the two models compact: 164–167 k for both, which no single denominator gives.
+ * Compaction points prove both denominators without trusting the catalog. Qwen
+ * sessions reset at ratio 0.82–0.93 (≈148–167 k tokens); DeepSeek sessions reset
+ * at 0.79–0.83 (× 200 k = ≈158–166 k). Both models therefore hit the same
+ * absolute budget near 166 k. Reading DeepSeek against 1 M would put its resets
+ * at 790–830 k, impossible in the 200 k window the picker allows.
  */
 export const QODER_MODEL_WINDOW: Record<string, number> = {
   qfmodel: 180_000,
-  dfmodel: 1_000_000,
+  dfmodel: 200_000,
 };
 
 /** Only for a transcript that names a model the table above does not know. */
@@ -150,6 +149,8 @@ interface Parsed {
   mtime: number;
   directory: string;
   title: string | null;
+  /** `last-prompt` first line, used only when neither source has a real title. */
+  promptTitle: string | null;
   created: number;
   updated: number;
   turns: SrcTurn[];
@@ -194,7 +195,7 @@ function resultText(content: unknown): string {
 }
 
 /** A short human label for a tool row; the transcript shows it instead of raw JSON. */
-function toolTitle(name: string, input: any): string | null {
+export function toolTitle(name: string, input: any): string | null {
   if (!input || typeof input !== "object") return null;
   const raw =
     input.description ??
@@ -207,6 +208,9 @@ function toolTitle(name: string, input: any): string | null {
   if (typeof raw !== "string" || !raw.trim()) return null;
   return raw.trim().slice(0, 160);
 }
+
+/** A path on a Windows drive, read through WSL's DrvFs. */
+const MOUNTED = /^\/mnt\/[a-z]\//i;
 
 /**
  * `active-leaf` is a UI cursor, not a conversation branch: its chain covers only
@@ -222,9 +226,11 @@ export class QoderSource implements SourceLike {
   private cache = new Map<string, { sig: string; parsed: Parsed }>();
   private evidence = new Map<string, Set<string>>();
   private logDirs: string[] | null = null;
+  private roots: string[];
 
-  constructor(root = QODER_PROJECTS) {
-    this.path = root;
+  constructor(root: string | readonly string[] = QODER_PROJECTS) {
+    this.roots = typeof root === "string" ? [root] : [...root];
+    this.path = this.roots[0] ?? "";
   }
 
   close() {
@@ -233,7 +239,7 @@ export class QoderSource implements SourceLike {
   }
 
   /**
-   * Session id → its transcript files.
+   * Session id → its transcript files, across every root this machine has.
    *
    * A session owns `<root>/<encoded-cwd>/<sessionId>.jsonl` and, when it spawned
    * subagents, `<root>/<encoded-cwd>/<sessionId>/subagents/agent-*.jsonl`. Those
@@ -242,18 +248,48 @@ export class QoderSource implements SourceLike {
    * In the corpus at hand that is 8 extra files, 131 turns and 8.7 credits — 1.3%
    * of the total, which silently missing would understate every session that
    * ever delegated work.
+   *
+   * qodercli writes to the transcript tree of whichever OS ran it, so a WSL
+   * machine has its own tree plus one per Windows profile under `/mnt/<drive>`.
+   * One account and one credit pool sit behind them, so the roots fold into one
+   * session list — but a session id can still appear twice when Qoder migrates a
+   * conversation between trees, and those are copies, not parts. The fuller, then
+   * fresher, copy survives so no turn is billed twice.
    */
   private index(): Map<string, string[]> {
+    if (this.roots.length < 2) return this.scan(this.roots[0] ?? "");
     const out = new Map<string, string[]>();
-    if (!existsSync(this.path)) return out;
+    const fresh = new Map<string, number>();
+    for (const root of this.roots) {
+      for (const [id, files] of this.scan(root)) {
+        const held = out.get(id);
+        if (!held) {
+          out.set(id, files);
+          fresh.set(id, this.newest(files));
+          continue;
+        }
+        const stamp = this.newest(files);
+        if (files.length > held.length || (files.length === held.length && stamp > (fresh.get(id) ?? 0))) {
+          out.set(id, files);
+          fresh.set(id, stamp);
+        }
+      }
+    }
+    return out;
+  }
+
+  /** The files one root holds for each session id it knows about. */
+  private scan(root: string): Map<string, string[]> {
+    const out = new Map<string, string[]>();
+    if (!root || !existsSync(root)) return out;
     const add = (id: string, file: string) => {
       const list = out.get(id);
       if (list) list.push(file);
       else out.set(id, [file]);
     };
-    for (const dir of readdirSync(this.path, { withFileTypes: true })) {
+    for (const dir of readdirSync(root, { withFileTypes: true })) {
       if (!dir.isDirectory()) continue;
-      const abs = path.join(this.path, dir.name);
+      const abs = path.join(root, dir.name);
       for (const entry of readdirSync(abs, { withFileTypes: true })) {
         if (entry.isFile() && entry.name.endsWith(".jsonl")) {
           add(entry.name.slice(0, -".jsonl".length), path.join(abs, entry.name));
@@ -262,10 +298,17 @@ export class QoderSource implements SourceLike {
         if (!entry.isDirectory()) continue;
         const subs = path.join(abs, entry.name, "subagents");
         if (!existsSync(subs)) continue;
-        for (const sub of readdirSync(subs)) if (sub.endsWith(".jsonl")) add(entry.name, path.join(subs, sub));
+        for (const sub of readdirSync(subs))
+          if (sub.endsWith(".jsonl")) add(entry.name, path.join(subs, sub));
       }
     }
     return out;
+  }
+
+  private newest(files: string[]): number {
+    let max = 0;
+    for (const f of files) max = Math.max(max, this.stamp(f)?.mtime ?? 0);
+    return max;
   }
 
   private stamp(file: string): { mtime: number; size: number } | null {
@@ -309,8 +352,8 @@ export class QoderSource implements SourceLike {
     return out;
   }
 
-  sessions(): SrcSession[] {
-    return this.all().map((p) => this.sessionOf(p));
+  sessions(sessionIds?: Set<string>): SrcSession[] {
+    return this.all(sessionIds).map((p) => this.sessionOf(p));
   }
 
   turns(sessionIds?: Set<string>): SrcTurn[] {
@@ -332,12 +375,15 @@ export class QoderSource implements SourceLike {
 
   private sessionOf(p: Parsed): SrcSession {
     const model = this.displayModel(p.id, p.models);
+    // A transcript title wins; the desktop index fills the gap for sessions
+    // whose title was generated by the app, and only then the first prompt.
+    const title = p.title ?? qoderDesktopTitles().get(p.id) ?? p.promptTitle;
     return {
       id: p.id,
       parentId: null,
       project: projectName(p.directory),
       directory: p.directory,
-      title: p.title,
+      title,
       agent: null,
       provider: "qoder",
       model,
@@ -410,7 +456,9 @@ export class QoderSource implements SourceLike {
   private telemetryDirs(): string[] {
     if (this.logDirs) return this.logDirs;
     this.logDirs = existsSync(QODER_LOGS)
-      ? readdirSync(QODER_LOGS, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name)
+      ? readdirSync(QODER_LOGS, { withFileTypes: true })
+          .filter((d) => d.isDirectory())
+          .map((d) => d.name)
       : [];
     return this.logDirs;
   }
@@ -433,6 +481,13 @@ export class QoderSource implements SourceLike {
         body = readFileSync(f, "utf8");
       } catch {
         continue;
+      }
+      // A DrvFs read can catch qodercli writing mid-line, and the torn tail is not
+      // valid JSON. Drop it rather than count a phantom half-turn: the next mtime
+      // bump changes the size too, so the finished line arrives with its own rebuild.
+      if (MOUNTED.test(f) && !body.endsWith("\n")) {
+        const cut = body.lastIndexOf("\n");
+        body = cut < 0 ? "" : body.slice(0, cut + 1);
       }
       parts.push(this.parse(id, f, st.mtime, body));
     }
@@ -468,6 +523,7 @@ export class QoderSource implements SourceLike {
       mtime: Math.max(...parts.map((p) => p.mtime)),
       directory: parts.find((p) => p.directory !== "/")?.directory ?? "/",
       title: parts.find((p) => p.title)?.title ?? null,
+      promptTitle: parts.find((p) => p.promptTitle)?.promptTitle ?? null,
       created: created.length ? Math.min(...created) : 0,
       updated: Math.max(...parts.map((p) => p.updated)),
       turns,
@@ -554,7 +610,12 @@ export class QoderSource implements SourceLike {
         const content = m.content;
         const ts = ms(e.timestamp);
         if (typeof content === "string") {
-          if (content.trim()) prompts.push({ id: String(e.uuid ?? `u${prompts.length}`), ts, text: content });
+          if (content.trim())
+            prompts.push({
+              id: String(e.uuid ?? `u${prompts.length}`),
+              ts,
+              text: content,
+            });
           continue;
         }
         if (!Array.isArray(content)) continue;
@@ -570,7 +631,12 @@ export class QoderSource implements SourceLike {
             });
           }
         }
-        if (text.trim()) prompts.push({ id: String(e.uuid ?? `u${prompts.length}`), ts, text });
+        if (text.trim())
+          prompts.push({
+            id: String(e.uuid ?? `u${prompts.length}`),
+            ts,
+            text,
+          });
         continue;
       }
 
@@ -797,7 +863,8 @@ export class QoderSource implements SourceLike {
       file,
       mtime,
       directory: directory || "/",
-      title: title ?? (lastPrompt ? lastPrompt.split("\n")[0].slice(0, 120) : null),
+      title: title,
+      promptTitle: lastPrompt ? lastPrompt.split("\n")[0].slice(0, 120) : null,
       created,
       updated,
       turns,

@@ -63,13 +63,41 @@ const CONTAINERS = /\/(?:projects|repos|plugins|workspace|Code)\/([^/.][^/]*)\//
 const HOME_LEVEL = /^\/(?:home|Users)\/([^/]+)\/([^/.][^/]*)\//;
 const ROOT_LEVEL = /^\/(?:tmp|srv|opt|data|work)\/([^/.][^/]*)\//;
 const IGNORED = new Set([
-  "home", "root", "users", "usr", "tmp", "var", "srv", "opt", "bin", "lib", "src", "dist",
-  "data", "log", "logs", "cache", "config", "appdata", "desktop", "documents", "downloads",
-  "program", "programs", "programdata", "node_modules", "versions", "share", "code",
+  "home",
+  "root",
+  "users",
+  "usr",
+  "tmp",
+  "var",
+  "srv",
+  "opt",
+  "bin",
+  "lib",
+  "src",
+  "dist",
+  "data",
+  "log",
+  "logs",
+  "cache",
+  "config",
+  "appdata",
+  "desktop",
+  "documents",
+  "downloads",
+  "program",
+  "programs",
+  "programdata",
+  "node_modules",
+  "versions",
+  "share",
+  "code",
 ]);
 
 const isJunkLane = (project: string, accounts: Set<string>) =>
   !project || project === "/" || project === "unknown" || accounts.has(project);
+
+/** `D:\Code\x` and `/mnt/c/Users/x` both have to reach the voters below. */
+const toPosix = (raw: string) => raw.replace(/\\/g, "/").replace(/^[A-Za-z]:\//, "/");
 
 export function inferProject(paths: string[], fallback: string, accounts: Set<string>): string {
   const votes = new Map<string, number>();
@@ -80,7 +108,7 @@ export function inferProject(paths: string[], fallback: string, accounts: Set<st
     votes.set(label, (votes.get(label) ?? 0) + weight);
   };
   for (const raw of paths) {
-    const p = raw.replace(/^\/mnt\/[a-zA-Z]\//, "/");
+    const p = toPosix(raw).replace(/^\/mnt\/[a-zA-Z]\//, "/");
     const container = p.match(CONTAINERS);
     if (container) vote(container[1], 4);
     else {
@@ -109,7 +137,7 @@ export function accountOf(path: string | null | undefined): string | null {
  */
 export async function build(
   db: DatabaseSync,
-  opts: { sessionIds?: Set<string>; mode?: "full" | "incremental"; kind?: SourceKind } = {}
+  opts: { sessionIds?: Set<string>; mode?: "full" | "incremental"; kind?: SourceKind } = {},
 ): Promise<BuildReport> {
   const t0 = Date.now();
   const mode = opts.mode ?? "full";
@@ -122,13 +150,14 @@ export async function build(
     const allById = new Map<string, SrcSession>(allSessions.map((s) => [s.id, s]));
     const targetIds = opts.sessionIds ?? new Set(allSessions.map((s) => s.id));
     const sessionById = new Map<string, SrcSession>(
-      allSessions.filter((s) => targetIds.has(s.id)).map((s) => [s.id, s])
+      allSessions.filter((s) => targetIds.has(s.id)).map((s) => [s.id, s]),
     );
 
     const wanted = new Set<string>();
     for (const s of sessionById.values()) if (s.model) wanted.add(catalogKey(s.provider, s.model));
     const turnsRaw = src.turns(targetIds);
-    for (const t of turnsRaw) if (t.role === "assistant" && t.model) wanted.add(catalogKey(t.provider, t.model));
+    for (const t of turnsRaw)
+      if (t.role === "assistant" && t.model) wanted.add(catalogKey(t.provider, t.model));
     const catalog: Catalog = await loadCatalog(wanted);
     const patchFiles = src.patchFileCounts(targetIds);
 
@@ -145,9 +174,7 @@ export async function build(
       arr.push(...info.paths);
       pathsBySession.set(sid, arr);
     }
-    const accounts = new Set(
-      allSessions.map((s) => accountOf(s.directory)).filter((a): a is string => !!a)
-    );
+    const accounts = new Set(allSessions.map((s) => accountOf(s.directory)).filter((a): a is string => !!a));
     for (const s of sessionById.values()) {
       s.project = inferProject(pathsBySession.get(s.id) ?? [], s.project, accounts);
     }
@@ -173,7 +200,18 @@ export async function build(
       const day = localDayStart(t.created);
       const hour = localHour(t.created);
       if (t.role !== "assistant") {
-        return { ...t, promptTotal: 0, occupancy: 0, contextWindow: 0, fill: 0, fillAfter: 0, costComputed: 0, bucket, day, hour };
+        return {
+          ...t,
+          promptTotal: 0,
+          occupancy: 0,
+          contextWindow: 0,
+          fill: 0,
+          fillAfter: 0,
+          costComputed: 0,
+          bucket,
+          day,
+          hour,
+        };
       }
       const m = info(t.provider, t.model);
       // What the provider actually received = the real context occupancy for this call.
@@ -181,8 +219,12 @@ export async function build(
       const occupancy = promptTotal + t.output + t.reasoning;
       const contextWindow = t.contextWindow ?? m?.context ?? 128000;
       const costComputed = m
-        ? (t.input * m.costInput + t.output * m.costOutput + t.reasoning * m.costOutput +
-            t.cacheRead * m.costCacheRead + t.cacheWrite * m.costCacheWrite) / 1e6
+        ? (t.input * m.costInput +
+            t.output * m.costOutput +
+            t.reasoning * m.costOutput +
+            t.cacheRead * m.costCacheRead +
+            t.cacheWrite * m.costCacheWrite) /
+          1e6
         : 0;
       return {
         ...t,
@@ -206,7 +248,8 @@ export async function build(
       list.push(t);
       assistantBySession.set(t.sessionId, list);
     }
-    for (const list of assistantBySession.values()) list.sort((a, b) => a.created - b.created || a.seq - b.seq);
+    for (const list of assistantBySession.values())
+      list.sort((a, b) => a.created - b.created || a.seq - b.seq);
 
     const firstPromptBySession = new Map<string, string>();
     for (const t of turns) {
@@ -223,7 +266,9 @@ export async function build(
     const idList = [...targetIds];
     if (idList.length) {
       const ph = idList.map(() => "?").join(",");
-      const oldCells = db.prepare(`SELECT DISTINCT bucket, day FROM turns WHERE session_id IN (${ph})`).all(...idList) as any[];
+      const oldCells = db
+        .prepare(`SELECT DISTINCT bucket, day FROM turns WHERE session_id IN (${ph})`)
+        .all(...idList) as any[];
       for (const r of oldCells) {
         if (r.bucket != null) affectedBuckets.add(Number(r.bucket));
         if (r.day != null) affectedDays.add(Number(r.day));
@@ -248,49 +293,127 @@ export async function build(
       }
 
       const turnCols = [
-        "id", "session_id", "project", "seq", "created", "completed", "dur_ms", "role", "provider", "model",
-        "variant", "agent", "input", "output", "reasoning", "cache_read", "cache_write", "cost", "credits_micro",
-        "prompt_total", "occupancy", "context_window", "fill", "fill_after", "bucket", "day", "hour", "finish",
-        "has_error", "tool_calls", "tool_errors", "additions", "deletions", "write_lines", "text",
+        "id",
+        "session_id",
+        "project",
+        "seq",
+        "created",
+        "completed",
+        "dur_ms",
+        "role",
+        "provider",
+        "model",
+        "variant",
+        "agent",
+        "input",
+        "output",
+        "reasoning",
+        "cache_read",
+        "cache_write",
+        "cost",
+        "credits_micro",
+        "prompt_total",
+        "occupancy",
+        "context_window",
+        "fill",
+        "fill_after",
+        "bucket",
+        "day",
+        "hour",
+        "finish",
+        "has_error",
+        "tool_calls",
+        "tool_errors",
+        "additions",
+        "deletions",
+        "write_lines",
+        "text",
       ];
-      const insTurn = db.prepare(`INSERT INTO turns(${turnCols.join(",")}) VALUES(${turnCols.map(() => "?").join(",")})`);
+      const insTurn = db.prepare(
+        `INSERT INTO turns(${turnCols.join(",")}) VALUES(${turnCols.map(() => "?").join(",")})`,
+      );
       const insTool = db.prepare(
         `INSERT INTO tools(session_id,turn_id,call_id,name,status,started,ended,dur_ms,title,output_chars,additions,deletions,files,write_lines,error,sig,input_preview,target_session)
-         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       );
       const insPart = db.prepare(
         `INSERT INTO parts(session_id,turn_id,ordinal,kind,text,name,call_id,status,title,input,output,exit_code,truncated,started,ended,chars)
-         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       );
 
       for (const t of turns) {
         const s = sessionById.get(t.sessionId);
         if (!s) continue;
         insTurn.run(
-          t.id, t.sessionId, s.project, t.seq, t.created, t.completed,
+          t.id,
+          t.sessionId,
+          s.project,
+          t.seq,
+          t.created,
+          t.completed,
           t.created && t.completed ? Math.max(0, t.completed - t.created) : null,
-          t.role, t.provider, t.model, t.variant, t.agent,
-          t.input, t.output, t.reasoning, t.cacheRead, t.cacheWrite, t.costComputed, t.creditsMicro ?? 0,
-          t.promptTotal, t.occupancy, t.contextWindow, t.fill, t.fillAfter, t.bucket, t.day, t.hour, t.finish,
-          t.tools.some((x: SrcTool) => x.status === "error") ? 1 : 0, t.tools.length,
-          t.tools.filter((x: SrcTool) => x.status === "error").length, t._add ?? 0, t._del ?? 0, t._write ?? 0,
-          (t.text ?? "").slice(0, 2000)
+          t.role,
+          t.provider,
+          t.model,
+          t.variant,
+          t.agent,
+          t.input,
+          t.output,
+          t.reasoning,
+          t.cacheRead,
+          t.cacheWrite,
+          t.costComputed,
+          t.creditsMicro ?? 0,
+          t.promptTotal,
+          t.occupancy,
+          t.contextWindow,
+          t.fill,
+          t.fillAfter,
+          t.bucket,
+          t.day,
+          t.hour,
+          t.finish,
+          t.tools.some((x: SrcTool) => x.status === "error") ? 1 : 0,
+          t.tools.length,
+          t.tools.filter((x: SrcTool) => x.status === "error").length,
+          t._add ?? 0,
+          t._del ?? 0,
+          t._write ?? 0,
+          (t.text ?? "").slice(0, 2000),
         );
         turnCount++;
         affectedBuckets.add(t.bucket);
         affectedDays.add(t.day);
         for (const tool of t.tools) {
           insTool.run(
-            tool.sessionId, t.id, tool.callId, tool.name, tool.status, tool.started, tool.ended,
+            tool.sessionId,
+            t.id,
+            tool.callId,
+            tool.name,
+            tool.status,
+            tool.started,
+            tool.ended,
             tool.started && tool.ended ? Math.max(0, tool.ended - tool.started) : null,
-            tool.title, tool.outputChars, tool.additions, tool.deletions, tool.files, tool.writeLines,
-            tool.error ? tool.error.slice(0, 2000) : null, tool.sig, tool.inputPreview, tool.targetSession
+            tool.title,
+            tool.outputChars,
+            tool.additions,
+            tool.deletions,
+            tool.files,
+            tool.writeLines,
+            tool.error ? tool.error.slice(0, 2000) : null,
+            tool.sig,
+            tool.inputPreview,
+            tool.targetSession,
           );
           toolCount++;
           if (tool.status === "error") {
             insertEvent(db, {
-              sessionId: tool.sessionId, turnId: t.id, type: "failure",
-              at: tool.started ?? t.created, endAt: tool.ended ?? tool.started ?? t.created, count: 1,
+              sessionId: tool.sessionId,
+              turnId: t.id,
+              type: "failure",
+              at: tool.started ?? t.created,
+              endAt: tool.ended ?? tool.started ?? t.created,
+              count: 1,
               fill: t.fill,
               detail: { tool: tool.name, error: (tool.error ?? "").slice(0, 300), title: tool.title },
             });
@@ -302,9 +425,22 @@ export async function build(
         for (let i = 0; i < t.parts.length; i++) {
           const p = t.parts[i];
           insPart.run(
-            t.sessionId, t.id, i, p.kind, p.text || null, p.name || null, p.callId || null,
-            p.status || null, p.title, p.input || null, p.output || null, p.exitCode,
-            p.truncated ? 1 : 0, p.started, p.ended, p.chars
+            t.sessionId,
+            t.id,
+            i,
+            p.kind,
+            p.text || null,
+            p.name || null,
+            p.callId || null,
+            p.status || null,
+            p.title,
+            p.input || null,
+            p.output || null,
+            p.exitCode,
+            p.truncated ? 1 : 0,
+            p.started,
+            p.ended,
+            p.chars,
           );
           partCount++;
         }
@@ -319,20 +455,62 @@ export async function build(
             if (t.created <= e.at) fill = t.fill;
             else break;
           }
-          insertEvent(db, { sessionId: sid, turnId: e.turnId, type: e.type, at: e.at, endAt: e.endAt, count: e.count, fill, detail: e.detail });
+          insertEvent(db, {
+            sessionId: sid,
+            turnId: e.turnId,
+            type: e.type,
+            at: e.at,
+            endAt: e.endAt,
+            count: e.count,
+            fill,
+            detail: e.detail,
+          });
           eventCount++;
         }
       }
 
       // ---- sessions ----
       const sessionCols = [
-        "id", "project", "directory", "title", "agent", "provider", "model", "variant", "parent_id", "depth",
-        "created", "updated", "t_input", "t_output", "t_reasoning", "t_cache_read", "t_cache_write", "cost", "credits_micro",
-        "turns", "tool_calls", "tool_errors", "compactions", "retries", "loops", "additions", "deletions", "files_changed",
-        "peak_fill", "avg_fill", "eff_score", "tokens_per_line", "first_prompt", "duration_ms", "dominant_model",
+        "id",
+        "project",
+        "directory",
+        "title",
+        "agent",
+        "provider",
+        "model",
+        "variant",
+        "parent_id",
+        "depth",
+        "created",
+        "updated",
+        "t_input",
+        "t_output",
+        "t_reasoning",
+        "t_cache_read",
+        "t_cache_write",
+        "cost",
+        "credits_micro",
+        "turns",
+        "tool_calls",
+        "tool_errors",
+        "compactions",
+        "retries",
+        "loops",
+        "additions",
+        "deletions",
+        "files_changed",
+        "peak_fill",
+        "avg_fill",
+        "eff_score",
+        "tokens_per_line",
+        "first_prompt",
+        "duration_ms",
+        "dominant_model",
         "output_rate",
       ];
-      const insSession = db.prepare(`INSERT INTO sessions(${sessionCols.join(",")}) VALUES(${sessionCols.map(() => "?").join(",")})`);
+      const insSession = db.prepare(
+        `INSERT INTO sessions(${sessionCols.join(",")}) VALUES(${sessionCols.map(() => "?").join(",")})`,
+      );
 
       for (const s of sessionById.values()) {
         const ts = assistantBySession.get(s.id) ?? [];
@@ -352,7 +530,10 @@ export async function build(
         const toolCalls = ts.reduce((a, t) => a + t.tools.length, 0);
         const toolErrors = ts.reduce((a, t) => a + t.tools.filter((x) => x.status === "error").length, 0);
         const patches = patchFiles.get(s.id);
-        const filesChanged = Math.max(sum((t) => t._files ?? 0), patches?.files ?? 0);
+        const filesChanged = Math.max(
+          sum((t) => t._files ?? 0),
+          patches?.files ?? 0,
+        );
         const peak = ts.reduce((a, t) => Math.max(a, t.fill), 0);
         const avg = ts.length ? ts.reduce((a, t) => a + t.fill, 0) / ts.length : 0;
         const eff = promptTotal > 0 ? ((tOutput + tReasoning) / promptTotal) * 100 : 0;
@@ -371,13 +552,16 @@ export async function build(
         // Median generation speed, the same statistic the transcript header shows per
         // turn: a mean would be dragged around by turns that waited on a tool.
         const rates = ts
-          .map((t) => (t.output > 0 && t.completed && t.created && t.completed > t.created
-            ? t.output / ((t.completed - t.created) / 1000)
-            : 0))
+          .map((t) =>
+            t.output > 0 && t.completed && t.created && t.completed > t.created
+              ? t.output / ((t.completed - t.created) / 1000)
+              : 0,
+          )
           .filter((r) => r > 0)
           .sort((a, b) => a - b);
         const mid = Math.floor(rates.length / 2);
-        const outputRate = rates.length === 0 ? 0 : rates.length % 2 !== 0 ? rates[mid] : (rates[mid - 1] + rates[mid]) / 2;
+        const outputRate =
+          rates.length === 0 ? 0 : rates.length % 2 !== 0 ? rates[mid] : (rates[mid - 1] + rates[mid]) / 2;
 
         const sessionEvents = eventsBySession.get(s.id) ?? [];
         const compactions = sessionEvents.filter((e) => e.type === "compaction").length;
@@ -386,14 +570,45 @@ export async function build(
         const creditsMicro = s.creditsMicro || ts.reduce((a, t) => a + (t.creditsMicro ?? 0), 0);
 
         insSession.run(
-          s.id, s.project, s.directory, s.title, s.agent, s.provider, s.model, s.variant, s.parentId, depthOf(s, allById),
-          s.created, s.updated,
-          tInput, tOutput, tReasoning, tCacheRead, tCacheWrite,
-          Math.max(s.cost, ts.reduce((a, t) => a + t.costComputed, 0)), creditsMicro,
-          ts.length, toolCalls, toolErrors, compactions, retries, loops,
-          additions, deletions, filesChanged,
-          peak, avg, eff, lines > 0 ? totalTokens / lines : null,
-          firstPromptBySession.get(s.id) ?? null, s.updated - s.created, dominant, outputRate
+          s.id,
+          s.project,
+          s.directory,
+          s.title,
+          s.agent,
+          s.provider,
+          s.model,
+          s.variant,
+          s.parentId,
+          depthOf(s, allById),
+          s.created,
+          s.updated,
+          tInput,
+          tOutput,
+          tReasoning,
+          tCacheRead,
+          tCacheWrite,
+          Math.max(
+            s.cost,
+            ts.reduce((a, t) => a + t.costComputed, 0),
+          ),
+          creditsMicro,
+          ts.length,
+          toolCalls,
+          toolErrors,
+          compactions,
+          retries,
+          loops,
+          additions,
+          deletions,
+          filesChanged,
+          peak,
+          avg,
+          eff,
+          lines > 0 ? totalTokens / lines : null,
+          firstPromptBySession.get(s.id) ?? null,
+          s.updated - s.created,
+          dominant,
+          outputRate,
         );
         sessionCount++;
       }
@@ -404,10 +619,20 @@ export async function build(
          VALUES(?,?,?,?,?,?,?,?,?)
          ON CONFLICT(id) DO UPDATE SET label=excluded.label, context=excluded.context,
            cost_input=excluded.cost_input, cost_output=excluded.cost_output,
-           cost_cache_read=excluded.cost_cache_read, cost_cache_write=excluded.cost_cache_write, source=excluded.source`
+           cost_cache_read=excluded.cost_cache_read, cost_cache_write=excluded.cost_cache_write, source=excluded.source`,
       );
       for (const [key, m] of Object.entries(catalog)) {
-        upModel.run(key, m.provider, m.label, m.context, m.costInput, m.costOutput, m.costCacheRead, m.costCacheWrite, m.source);
+        upModel.run(
+          key,
+          m.provider,
+          m.label,
+          m.context,
+          m.costInput,
+          m.costOutput,
+          m.costCacheRead,
+          m.costCacheWrite,
+          m.source,
+        );
       }
 
       // Derived tables commit with their facts: a crash can never leave the rollups
@@ -463,15 +688,36 @@ function depthOf(s: SrcSession, byId: Map<string, SrcSession>): number {
 }
 
 const insEventStmt = new WeakMap<DatabaseSync, ReturnType<DatabaseSync["prepare"]>>();
-function insertEvent(db: DatabaseSync, e: {
-  sessionId: string; turnId: string | null; type: string; at: number; endAt: number; count: number; fill: number; detail: Record<string, unknown>;
-}) {
+function insertEvent(
+  db: DatabaseSync,
+  e: {
+    sessionId: string;
+    turnId: string | null;
+    type: string;
+    at: number;
+    endAt: number;
+    count: number;
+    fill: number;
+    detail: Record<string, unknown>;
+  },
+) {
   let st = insEventStmt.get(db);
   if (!st) {
-    st = db.prepare("INSERT INTO events(session_id,turn_id,type,at,end_at,count,fill,detail) VALUES(?,?,?,?,?,?,?,?)");
+    st = db.prepare(
+      "INSERT INTO events(session_id,turn_id,type,at,end_at,count,fill,detail) VALUES(?,?,?,?,?,?,?,?)",
+    );
     insEventStmt.set(db, st);
   }
-  st.run(e.sessionId, e.turnId, e.type, Math.round(e.at), Math.round(e.endAt), e.count, e.fill, JSON.stringify(e.detail));
+  st.run(
+    e.sessionId,
+    e.turnId,
+    e.type,
+    Math.round(e.at),
+    Math.round(e.endAt),
+    e.count,
+    e.fill,
+    JSON.stringify(e.detail),
+  );
 }
 
 /**
@@ -482,9 +728,18 @@ function insertEvent(db: DatabaseSync, e: {
  * LOOP_MIN_REPEATS identical calls in a row is a *loop* (the agent is stuck).
  */
 export function buildEventProbes(
-  sourceEvents: { sessionId: string; turnId: string | null; type: string; at: number; reason: string | null; detail: string | null; tokensBefore?: number | null; model?: string | null }[],
+  sourceEvents: {
+    sessionId: string;
+    turnId: string | null;
+    type: string;
+    at: number;
+    reason: string | null;
+    detail: string | null;
+    tokensBefore?: number | null;
+    model?: string | null;
+  }[],
   assistantBySession: Map<string, TurnCalc[]>,
-  opts: { enrichCompaction?: boolean } = {}
+  opts: { enrichCompaction?: boolean } = {},
 ): Map<string, ProbeEvent[]> {
   const out = new Map<string, ProbeEvent[]>();
   for (const e of sourceEvents) {
@@ -535,8 +790,18 @@ export function buildEventProbes(
 
         if (prev && within && (!prev.ok || !ok)) {
           probes.push({
-            type: "retry", at: prev.at, endAt: at, count: 1, turnId: t.id,
-            detail: { tool: tool.name, title: tool.title, sig: tool.sig, first_failed: !prev.ok, span_ms: at - prev.at },
+            type: "retry",
+            at: prev.at,
+            endAt: at,
+            count: 1,
+            turnId: t.id,
+            detail: {
+              tool: tool.name,
+              title: tool.title,
+              sig: tool.sig,
+              first_failed: !prev.ok,
+              span_ms: at - prev.at,
+            },
           });
         }
 
@@ -555,7 +820,11 @@ export function buildEventProbes(
     for (const [sig, chain] of chains) {
       if (chain.count >= LOOP_MIN_REPEATS) {
         probes.push({
-          type: "loop", at: chain.from, endAt: chain.to, count: chain.count, turnId: null,
+          type: "loop",
+          at: chain.from,
+          endAt: chain.to,
+          count: chain.count,
+          turnId: null,
           detail: { sig, repeats: chain.count, span_ms: chain.to - chain.from },
         });
       }
@@ -579,19 +848,37 @@ export function recomputeFlow(db: DatabaseSync, buckets: Set<number>): number {
   const rows = db
     .prepare(
       `SELECT project, bucket, session_id, model, input, output, reasoning, cache_read, cost, fill
-       FROM turns WHERE role='assistant' AND bucket IN (${ph})`
+       FROM turns WHERE role='assistant' AND bucket IN (${ph})`,
     )
     .all(...list) as any[];
 
-  const cells = new Map<string, {
-    project: string; bucket: number; gen: number; cacheRead: number; cost: number;
-    sessions: Set<string>; models: Map<string, number>; peak: number;
-  }>();
+  const cells = new Map<
+    string,
+    {
+      project: string;
+      bucket: number;
+      gen: number;
+      cacheRead: number;
+      cost: number;
+      sessions: Set<string>;
+      models: Map<string, number>;
+      peak: number;
+    }
+  >();
   for (const r of rows) {
     const key = `${r.project}|${r.bucket}`;
     let cell = cells.get(key);
     if (!cell) {
-      cell = { project: r.project, bucket: Number(r.bucket), gen: 0, cacheRead: 0, cost: 0, sessions: new Set(), models: new Map(), peak: 0 };
+      cell = {
+        project: r.project,
+        bucket: Number(r.bucket),
+        gen: 0,
+        cacheRead: 0,
+        cost: 0,
+        sessions: new Set(),
+        models: new Map(),
+        peak: 0,
+      };
       cells.set(key, cell);
     }
     const gen = Number(r.input) + Number(r.output) + Number(r.reasoning);
@@ -608,13 +895,22 @@ export function recomputeFlow(db: DatabaseSync, buckets: Set<number>): number {
   try {
     db.prepare(`DELETE FROM flow WHERE bucket IN (${ph})`).run(...list);
     const ins = db.prepare(
-      "INSERT INTO flow(project,bucket,tokens_gen,tokens_cache_read,cost,sessions,dominant_model,peak_fill) VALUES(?,?,?,?,?,?,?,?)"
+      "INSERT INTO flow(project,bucket,tokens_gen,tokens_cache_read,cost,sessions,dominant_model,peak_fill) VALUES(?,?,?,?,?,?,?,?)",
     );
     for (const c of cells.values()) {
       let dominant = "unknown";
       let best = -1;
       for (const [k, v] of c.models) if (v > best) ((best = v), (dominant = k));
-      ins.run(c.project, c.bucket, Math.round(c.gen), Math.round(c.cacheRead), c.cost, c.sessions.size, dominant, c.peak);
+      ins.run(
+        c.project,
+        c.bucket,
+        Math.round(c.gen),
+        Math.round(c.cacheRead),
+        c.cost,
+        c.sessions.size,
+        dominant,
+        c.peak,
+      );
     }
     db.exec("COMMIT");
   } catch (e) {
@@ -636,16 +932,35 @@ export function recomputeHeat(db: DatabaseSync, days: Set<number>): number {
   const rows = db
     .prepare(
       `SELECT project, day, hour, input, output, reasoning, cache_read, cost
-       FROM turns WHERE role='assistant' AND day IN (${ph})`
+       FROM turns WHERE role='assistant' AND day IN (${ph})`,
     )
     .all(...list) as any[];
 
-  const cells = new Map<string, { project: string; day: number; hour: number; gen: number; cacheRead: number; cost: number; turns: number }>();
+  const cells = new Map<
+    string,
+    {
+      project: string;
+      day: number;
+      hour: number;
+      gen: number;
+      cacheRead: number;
+      cost: number;
+      turns: number;
+    }
+  >();
   for (const r of rows) {
     const key = `${r.project}|${r.day}|${r.hour}`;
     let c = cells.get(key);
     if (!c) {
-      c = { project: r.project, day: Number(r.day), hour: Number(r.hour), gen: 0, cacheRead: 0, cost: 0, turns: 0 };
+      c = {
+        project: r.project,
+        day: Number(r.day),
+        hour: Number(r.hour),
+        gen: 0,
+        cacheRead: 0,
+        cost: 0,
+        turns: 0,
+      };
       cells.set(key, c);
     }
     c.gen += Number(r.input) + Number(r.output) + Number(r.reasoning);
@@ -657,8 +972,11 @@ export function recomputeHeat(db: DatabaseSync, days: Set<number>): number {
   db.exec("BEGIN");
   try {
     db.prepare(`DELETE FROM heat WHERE day IN (${ph})`).run(...list);
-    const ins = db.prepare("INSERT INTO heat(project,day,hour,tokens_gen,tokens_cache_read,cost,turns) VALUES(?,?,?,?,?,?,?)");
-    for (const c of cells.values()) ins.run(c.project, c.day, c.hour, Math.round(c.gen), Math.round(c.cacheRead), c.cost, c.turns);
+    const ins = db.prepare(
+      "INSERT INTO heat(project,day,hour,tokens_gen,tokens_cache_read,cost,turns) VALUES(?,?,?,?,?,?,?)",
+    );
+    for (const c of cells.values())
+      ins.run(c.project, c.day, c.hour, Math.round(c.gen), Math.round(c.cacheRead), c.cost, c.turns);
     db.exec("COMMIT");
   } catch (e) {
     try {

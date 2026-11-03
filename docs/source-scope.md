@@ -136,7 +136,7 @@ Overview 的 `stack by` 在它上面只剩 `model` 与 `cost` 两个选项，默
 | --- | --- |
 | 任意 `/api/*` + 头 `x-osm-source: qoder` | 读该源的库；缺省用服务端默认源 |
 | `?src=qoder` | 同上，只为 curl / 调试保留，前端不用 |
-| `GET /api/sources` | 菜单的全部数据：`available`（本机是否存在）、`ready`（是否物化）、`unit`、`tokenClasses`（是否记录 token 分类）、路径、计数 |
+| `GET /api/sources` | 菜单的全部数据：`available`（本机是否存在）、`ready`（是否物化）、`unit`、`tokenClasses`（是否记录 token 分类）、路径、`roots`（除主树外还读了哪些转录树）、计数 |
 | `POST /api/refresh` | 物化**请求头声明的那一个**源；库不存在时自动走全量 |
 | 未物化的库 | `/api/status` 回 200 + `ready:false` + 全零计数；分析类接口回 503 |
 

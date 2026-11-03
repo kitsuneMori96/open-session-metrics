@@ -53,7 +53,12 @@ export function TopBar({ onPalette }: { onPalette: () => void }) {
 
       <div className="flex-1" />
 
-      <button type="button" onClick={onPalette} className="btn flex items-center gap-2 px-2 py-1" title="search everything ( / )">
+      <button
+        type="button"
+        onClick={onPalette}
+        className="btn flex items-center gap-2 px-2 py-1"
+        title="search everything ( / )"
+      >
         <span className="text-ink-faint">⌕</span>
         <span>search sessions, tools, text</span>
         <KeyCap>/</KeyCap>
@@ -83,7 +88,7 @@ function NavItem({ to, label, keyCap }: { to: string; label: string; keyCap: str
       to={href(to)}
       className={clsx(
         "tape flex items-center gap-1 px-2 py-[3px] no-underline",
-        active ? "bg-ink font-bold text-paper" : "text-ink-soft hover:bg-ink/5"
+        active ? "bg-ink font-bold text-paper" : "text-ink-soft hover:bg-ink/5",
       )}
     >
       <span className={clsx("text-[8px]", active ? "text-paper/70" : "text-ink-faint")}>{keyCap}</span>
@@ -127,6 +132,7 @@ function SourceControl() {
   }, [open]);
 
   const active = scope.active;
+  const label = active?.label ?? scope.kind;
   const when = status.data?.materializedAt ?? active?.materializedAt ?? 0;
   const ready = status.data ? status.data.ready : !!active?.ready;
   const live = scope.list.sources.filter((s) => s.available);
@@ -143,7 +149,7 @@ function SourceControl() {
   if (live.length < 2) {
     return (
       <span className="tape shrink-0 text-ink-faint" title={title}>
-        {scope.kind}
+        {label}
         {ready ? (when ? ` · ${clockSec(when)}` : "") : " · no store"}
       </span>
     );
@@ -159,8 +165,10 @@ function SourceControl() {
         title={title}
       >
         <span className={clsx("turn text-[9px]", open && "rotate-180")}>▾</span>
-        <span>{scope.kind}</span>
-        <span className="tabular text-ink-faint">{ready ? (when ? clockSec(when) : "—") : "first build"}</span>
+        <span>{label}</span>
+        <span className="tabular text-ink-faint">
+          {ready ? (when ? clockSec(when) : "—") : "first build"}
+        </span>
       </button>
       {open && <SourceMenu onPick={() => setOpen(false)} />}
     </div>
@@ -193,12 +201,22 @@ function SourceMenu({ onPick }: { onPick: () => void }) {
           }}
         />
       ))}
-      <div className="tape border-t border-rule px-2 py-1 text-ink-faint">window and filters stay per source</div>
+      <div className="tape border-t border-rule px-2 py-1 text-ink-faint">
+        window and filters stay per source
+      </div>
     </div>
   );
 }
 
-function SourceRow({ source, current, onPick }: { source: SourceView; current: boolean; onPick: () => void }) {
+function SourceRow({
+  source,
+  current,
+  onPick,
+}: {
+  source: SourceView;
+  current: boolean;
+  onPick: () => void;
+}) {
   const glyph = !source.available ? "·" : !source.ready ? "◌" : current ? "◆" : "·";
   const right = !source.available
     ? "not found"
@@ -213,7 +231,7 @@ function SourceRow({ source, current, onPick }: { source: SourceView; current: b
       className={clsx(
         "flex w-full items-baseline gap-2 px-2 py-1 text-left",
         current ? "bg-flow/10" : source.available && "hover:bg-ink/5",
-        !source.available && "opacity-40"
+        !source.available && "opacity-40",
       )}
     >
       <span className={clsx("shrink-0 text-[9px]", current ? "text-flow" : "text-ink-faint")}>{glyph}</span>
@@ -269,7 +287,10 @@ export function SliceBar() {
       <FacetSelect
         label="project"
         value={facets.project}
-        options={(data?.projects ?? []).map((p) => ({ value: p.project, label: `${p.project} · ${p.sessions}` }))}
+        options={(data?.projects ?? []).map((p) => ({
+          value: p.project,
+          label: `${p.project} · ${p.sessions}`,
+        }))}
         onChange={(v) => setFacet("project", v)}
       />
       <FacetSelect
@@ -300,7 +321,8 @@ export function SliceBar() {
           className="tape shrink-0 tabular text-ink-faint"
           title={`everything materialized from the ${kind} store — the reference frame for this slice`}
         >
-          store {int(data.counts.sessions)} sessions · {tok(data.counts.turns)} turns · {int(data.counts.tools)} tool calls
+          store {int(data.counts.sessions)} sessions · {tok(data.counts.turns)} turns ·{" "}
+          {int(data.counts.tools)} tool calls
         </span>
       )}
     </div>
@@ -312,7 +334,13 @@ export function SliceBar() {
  * fits 200 columns — so an explicit unit is only for when you want a particular width, and
  * the server still refuses to ship a million columns if the span cannot afford it.
  */
-function GranSelect({ value, onChange }: { value: Granularity | null; onChange: (v: Granularity | null) => void }) {
+function GranSelect({
+  value,
+  onChange,
+}: {
+  value: Granularity | null;
+  onChange: (v: Granularity | null) => void;
+}) {
   return (
     <label className="flex shrink-0 items-center gap-1">
       <span className={clsx("micro", value ? "text-flow" : "text-ink-faint")}>by</span>

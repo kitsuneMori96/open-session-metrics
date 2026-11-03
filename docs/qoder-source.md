@@ -89,6 +89,63 @@ ECG、transcript、API）保持不变。
 **按会话 id 分组，父转录与它的子代理转录一起解析后合并**（轮次按时间重排、
 `message.id` 去重、积分与上下文相加）。
 
+### 3.4 标题：转录优先，桌面索引补缺
+
+标题只用于展示，不参与任何指标，来源按优先级取：
+
+1. 转录里的 `ai-title`（qodercli 自己生成的标题）；
+2. Qoder Desktop 的 `main.sqlite` → `chat_sessions.title`（`deleted_at IS NULL`）；
+3. `last-prompt` 的首行，截断 120 字符。
+
+Qoder Desktop 是 qodercli 的 Electron 壳，会话本来就在同一棵 `projects/` 转录树里，
+所以**它不是独立数据源**，`main.sqlite` 只当标题旁路：不增删会话，不提供轮次或积分。
+WSL 下该库位于 Windows 盘（DrvFs），WAL 锁无法就地获取，读取前复制
+`main.sqlite` + `-wal` + `-shm` 到 `<DATA_DIR>/qoder-title-snapshot/`，读完即删；
+标题表按库文件的 mtime/size 缓存，进程内只解析一次。
+
+### 3.5 跨 OS 的转录树：一个源、多个根
+
+qodercli 把转录写到**运行它的那一侧**的数据根。WSL 机器因此同时有两类树：
+
+```
+/home/<user>/.qoder/projects/<encoded-cwd>/<sessionId>.jsonl          # WSL 侧
+/mnt/c/Users/<name>/.qoder/projects/<encoded-cwd>/<sessionId>.jsonl   # Windows 侧
+```
+
+它们是同一个账号、同一个积分池，还共用同一个 `main.sqlite` 标题索引，所以
+**不另立数据源**：`QODER_PROJECT_ROOTS` 把这些根并列交给同一个 `QoderSource`。
+
+实测差异（2026-11-03，Windows 侧 3 个会话）：
+
+- schema 完全一致：`workspace-directories` / `runtime-config` / `user` / `assistant`
+  同款，`usage` 带 `credits` 与 `context_usage_ratio`（249 条响应、28.717 积分）；
+- `runtime-config.contextWindow` 为 `null`——与 WSL 侧同一副面孔，分母仍取钉住的
+  模型窗口，不需要新分支；
+- 工作目录是 Windows 绝对路径（`D:\Download\Code\qoder通用工作区`），`projectName`
+  按 `[\\/]` 切段就得到泳道名；工具入参里的路径也是盘符形式，`pathsOf` 必须认它，
+  否则这些会话的改动文件数恒为 0；
+- 3 个会话 id 与 WSL 侧的 77 个无重叠，**当前不会双计**。
+
+两条纪律：
+
+1. **同 id 出现在多个根 = 副本，不是两半**。Qoder 会把会话在树之间迁移（迁移前先留
+   `session-migration-backup-*` 再改库），此时两份文件讲的是同一个会话。取"文件更多、
+   其次 mtime 更新"的那一棵，另一棵整体丢弃——按行合并会把同一轮计两次。
+2. **就地读，不做镜像**。DrvFs 上全树扫描 + 全文读实测 271 ms（3 文件 2.5 MB），
+   mtime 精度到 ns，增量水位照常工作；副本只会多出"哪份是真的"这个问题。
+   `main.sqlite` 是例外：WAL 锁取不到（原地 open 直接 `disk I/O error`），必须走 §3.4 的快照。
+
+`OSM_QODER_HOME` 显式设置时**只用这一棵树**：测试与单机安装不能因为扫到 `/mnt/c`
+就改变结果。
+
+Windows 侧的 `logs/sessions/` **不读**（§3.2 的模型真实名仍只从 WSL 侧遥测取）：那一边
+目前只有 `session.config.loaded` 一个空事件，没有 `model.request.started`，喂进去只会
+把证据更少的名字当成权威。
+
+Windows 侧还在写的会话是另一种风险：一次读可能正好截在半个 JSON 行上。`/mnt/<盘>/`
+下的读取因此丢掉最后一段没有换行结尾的内容，不硬拼半条回复——下一轮 mtime 与 size
+一起变化，那一行会以完整形态重建。
+
 ---
 
 ## 4. 解析规则（必须遵守）
@@ -133,12 +190,14 @@ id=chatcmpl-…  [thinking]        usage=null
 压缩是**上下文归零**，所以在 token 空间里判定：相邻两轮的上下文下跌超过 50 000 tok →
 生成一条 `compaction` 事件，`tokensBefore = 前一轮上下文`，`tokensAfter = 本轮上下文`。
 
-不能用 ratio 判定，因为分母随模型变（§5.1）：同一个 167 k 的压缩在 Qwen 上是 0.93，
-在 DeepSeek 上是 0.17；而一次会话中换模型（`4a8b72e7` 就是 dfmodel → qfmodel）会让 ratio
-跳 5.9 倍，若按 ratio 判定就会凭空多出一次压缩。
+不能用 ratio 判定，因为分母随模型变（§5.1）：同一个约 166 k 的压缩在 Qwen 上读作 0.92，
+在 DeepSeek 上读作 0.83。只有换算到 token 才是可比的。
 
-本机实测：真实压缩的 `tokensBefore` 全部落在 **152 k – 167 k**，`tokensAfter` 落在 32 k – 50 k；
-最大的非压缩回落是 8 k。阈值 50 k 在这个 100 k 量级的空隙正中间。
+本机实测（分母按 §5.1 取值）：真实压缩的 `tokensBefore` 中位数 **164 k**，四分之三落在
+**150 k – 167 k**（含换模型时的重置，全距 103 k – 167 k）；`tokensAfter` 中位数 **35 k**，
+多数在 33 k – 39 k。同模型下最大的非压缩回落是 31 k，被判定为压缩的最小跌幅是 83 k；
+换模型时另有 30 k – 50 k 的上下文重算，阈值 50 k 有意不把它们算成压缩——宁可少记一次，
+也不误报。
 
 ---
 
@@ -165,20 +224,19 @@ if (l?.contextWindow !== void 0 && rS(D, l.contextWindow)) j.context_length = l.
 | 别名 | 显示名 | `availableContextWindows` | 选择器默认 | `maxInputTokens` | 比例分母 |
 |---|---|---:|---:|---:|---:|
 | `qfmodel` | Qwen3.8-Flash | 200 K / 400 K / 1 M | 200 000 | **180 000** | 180 000 |
-| `dfmodel` | DeepSeek-Flash | 200 K / 400 K / 1 M | 200 000 | **1 000 000** | 1 000 000 |
+| `dfmodel` | DeepSeek-Flash | 200 K / 400 K / 1 M | 200 000 | **200 000** | 200 000 |
 
-所以「模型宣称百万上下文但 Qoder 只给 20 万」这件事对**显示**成立、对**比例**不成立：
-选择器默认给 200 K，而比例仍按 1 M 算。DeepSeek 的 ratio 0.094 不是 19 k，而是 94 k。
+DeepSeek 虽然宣称可用 1 M 窗口，但这台机器上它始终跑在 200 K 模式里，比例的分母就是
+200 000。用压缩点可以验证，不需要相信目录：
 
-三条独立证据：
+- Qwen 会话在 ratio 0.82–0.93 处重置，× 180 000 ≈ **148 k – 167 k**；
+- DeepSeek 会话在 ratio 0.79–0.83 处重置，× 200 000 ≈ **158 k – 166 k**。
 
-1. **代码**：上面的分母表达式，以及 `context_config.200K.is_default: true` 与
-   `maxInputTokens` 并存于同一个模型对象；
-2. **同会话换模型**：`4a8b72e7` 从 `dfmodel` 换成 `qfmodel`，ratio 从 0.0967 跳到 0.5669，
-   而上下文只多了一点——`0.0967 × 1e6 = 96.7 k`、`0.5669 × 180 k = 102.0 k`，连续；
-   若共用 200 000 分母则读作 19 k → 113 k，等于凭空压缩一次；
-3. **压缩点**：两个模型的压缩都发生在 **164 k – 167 k**，这是同一个绝对位置，任何单一分母
-   都给不出来（200 000 下 DeepSeek 会停在 33 k）。
+两个模型的压缩都落在 **166 k** 附近同一个绝对预算上。若按 1 000 000 还原，
+DeepSeek 的压缩点会变成 790 k – 830 k，已经超出它实际运行的 200 K 窗口，自相矛盾。
+
+另一条佐证：`9da914dd` 同一会话内 `dfmodel` 与 `qfmodel` 交替，两类压缩点交错出现且都
+在 0.8 附近——若分母相差 5 倍，还原出的 token 会剧烈跳变。
 
 - 存入 `turns.input`，`output / reasoning / cache_read / cache_write` 全部为 0；
 - 于是 `prompt_total = input`、`fill = input / context_window = ratio`，与现有聚合完全兼容；
@@ -268,7 +326,11 @@ interface SourceLike {
 
 两库并存与切换的完整设计见 [source-scope.md](./source-scope.md)。
 
-Qoder 根目录：`OSM_QODER_HOME`（默认 `~/.qoder`）。
+Qoder 根目录：`OSM_QODER_HOME`（默认 `~/.qoder`）。转录树的完整清单是
+`QODER_PROJECT_ROOTS`——默认 `~/.qoder/projects` 加上 WSL 下每个 Windows 配置文件
+（`/mnt/<盘>/Users/<name>` 或搬家后的 `/mnt/<盘>/<name>`）里的 `.qoder/projects`，
+只在该目录真的含转录时才收；`OSM_QODER_PROJECT_ROOTS`（逗号分隔）整体覆盖。
+`/api/sources` 的 `roots` 报出除主树以外还读了哪些。
 
 增量：`maxMessageTime()` = 会话文件最大 mtime；`changedSessions(since)` = mtime > since 的会话。
 不维护偏移文件，避免与 Qoder 自己的写入竞争。
@@ -299,14 +361,24 @@ ALTER TABLE sessions ADD COLUMN credits_micro INTEGER DEFAULT 0;
 7. 子代理转录并入父会话：8 个文件不产生第 25 个会话，积分 +8.708；
 8. 项目泳道里不得出现 `-home-kitsunemori` 这类编码目录名；
 9. 模型面板不得出现 `<synthetic>`；
-10. 增量构建：改一个会话文件后只重建该会话。
+10. 增量构建：改一个会话文件后只重建该会话；
+11. 多个转录根并读：Windows 侧会话进同一个源，项目泳道取 `workspace-directories`
+    的反解名（`qoder通用工作区`），不是编码目录名（`D--Download-Code-qoder-----`）；
+12. 一个会话 id 出现在两棵树时只计一次，且取的是更完整的那一棵（副本不是两半）；
+13. Windows 会话的盘符路径要计入改动文件（`files_changed > 0`），不能因为
+    `D:\…` 不像 POSIX 路径就被丢掉。
 
 ---
 
 ## 10. 非目标
 
-- 不解析 Qoder 的 IDE SQLite（`local.db` / `atlas.db`）；
+- 不解析 Qoder 的 IDE SQLite（`local.db` / `atlas.db`）。`local.db` 仅存 2026-05 前的
+  17 个原生会话：正文加密、没有积分、模型只记 `auto`，并入积分库会让 tokens/credit 与
+  成本失真；Windows 侧当前 worker 会话也没有落本地转录。也不另存快照兜底：宁可将来
+  重新讨论是否接入，也不让一份来路不明的旧库先混进证据链。
 - 不估算输出 token、不伪造输入/输出拆分；
+- 不读 `~/.qoder/session-migration-backup-*`：那是 Qoder 自己在树之间搬家时留的旧
+  `main.sqlite` 副本，同一条会话已经活在新根里，读它只会制造双计；
 - 不做逐请求模型名归因（证据不同框）；
 - 不引入汇率与美元成本。
 

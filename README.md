@@ -3,10 +3,13 @@
 把本机 CLI 的编码会话物化成指标库，再用一个 Web 面板回看：跑了哪些会话、花了多少
 Token / 积分、调用了哪些工具、每个工具失败过几次、成本落在哪个项目上。
 
-支持两种数据源，两库并存、页眉一处切换：
+支持两种数据源，各库并存、页眉一处切换：
 
 - **OpenCode**：`~/.local/share/opencode/opencode.db`（SQLite，只读），成本单位美元；
-- **Qoder CLI**：`~/.qoder/projects/**/*.jsonl`（逐行转录），成本单位积分。
+- **Qoder CLI**：`~/.qoder/projects/**/*.jsonl`（逐行转录），成本单位积分。Qoder Desktop
+  底层就是 qodercli，它跑过的会话也写进同一棵转录树，因此不再单列一个源；WSL 机器上
+  Windows 侧那几棵树（`/mnt/c/Users/*/.qoder/projects`）属于同一个账号、同一个积分池，
+  一并读进这个源。
 
 两种来源归一成同一套会话 / 轮次 / 工具记录，聚合、切片、图表与正文面板完全共用。
 
@@ -28,9 +31,9 @@ osm upgrade             # 装最新版（--check 只看不装）
 ```
 
 要求 **Node 24+**（使用内置 `node:sqlite`，无原生依赖），且本机至少有一种数据源：
-`~/.local/share/opencode/opencode.db`（OpenCode）或 `~/.qoder/projects`（Qoder CLI）。
-默认源自动探测，也可以 `OSM_SOURCE=qoder osm` 指定，或启动后在页眉切换
-（见[数据源](#数据源)）。全局安装把指标库写在
+`~/.local/share/opencode/opencode.db`（OpenCode）或 `~/.qoder/projects`（Qoder）。
+默认源自动探测，也可以 `OSM_SOURCE=qoder osm` 指定，
+或启动后在页眉切换（见[数据源](#数据源)）。全局安装把指标库写在
 `~/.local/share/open-session-metrics`（`OSM_DATA_DIR` 或 `osm --data` 可改），
 升级包不会动到它。`osm run` 前台运行，`--port` / `--host` 改绑定。
 
@@ -194,17 +197,18 @@ Wipe（图表按内容指纹重画）。
 不知道会话来自哪个 CLI：
 
 ```
-OpenCode  opencode.db (只读) ──▸ SourceReader ──┐
-                                               ├──▸ SrcSession / SrcTurn / SrcTool
-Qoder CLI ~/.qoder/projects/*.jsonl ─▸ QoderSource ─┘        （归一化记录）
-                                                               │ 物化
-                                               ┌───────────────┴───────────────┐
-                                         metrics.db（美元）          metrics-qoder.db（积分）
-                                               └───────────────┬───────────────┘
-                                                               │ node:sqlite
-                                                     Express API :8787
-                                                               │
-                                                     Web 面板 (Vite/React)
+OpenCode        opencode.db (只读) ──▸ SourceReader ───────┐
+             ~/.qoder/projects/*.jsonl ─┐                  ├──▸ SrcSession / SrcTurn / SrcTool
+Qoder CLI     /mnt/c/Users/*/.qoder/  ──┴▸ QoderSource ────┤        （归一化记录）
+                    ▲                                     │
+        main.sqlite（仅补标题）                            │ 物化
+                                 ┌────────────────────────┴────────────────────────┐
+                           metrics.db（美元）                        metrics-qoder.db（积分）
+                                 └────────────────────────┬────────────────────────┘
+                                                          │ node:sqlite
+                                                Express API :8787
+                                                          │
+                                                Web 面板 (Vite/React)
 ```
 
 每个指标库里有 `turns · tools · parts · events · sessions · flow · heat · models`，
@@ -231,30 +235,45 @@ Qoder 是会话文件的 mtime——不维护偏移文件，避免与 CLI 自己
 
 ## 数据源
 
-面板可以读两种来源，两库并存、随时切换：
+面板可以读两种来源，各库并存、随时切换：
 
 | 来源 | 位置 | 成本单位 | 物化库 |
 | --- | --- | --- | --- |
 | OpenCode | `~/.local/share/opencode/opencode.db`（SQLite，只读） | 美元 | `metrics.db` |
-| Qoder CLI | `~/.qoder/projects/<encoded-cwd>/<sessionId>.jsonl`（JSONL） | 积分 | `metrics-qoder.db` |
+| Qoder CLI | `~/.qoder/projects/<encoded-cwd>/<sessionId>.jsonl`，WSL 下再加各 Windows 配置文件下的同名目录 | 积分 | `metrics-qoder.db` |
+
+Qoder Desktop 不是第三个源：它是 qodercli 的 Electron 壳，会话本来就在上面这棵 JSONL
+树里。桌面应用另有一份 `main.sqlite`，只在转录没写 `ai-title` 时用来补会话标题
+（标题生成由应用完成、落在 `chat_sessions.title`），不贡献轮次或积分。WSL 下这份
+Windows 数据库无法就地加锁，读取前会先快照 `main.sqlite` + `-wal`。
+
+同一台机器上 qodercli 会按**运行它的那一侧**落盘：WSL 里的会话写
+`~/.qoder/projects`，Windows 侧开的会话写 `C:\Users\<name>\.qoder\projects`。
+两边是同一个账号、同一个积分池，所以是**一个源、多个根**，全部并进一条时间线；
+一个会话被 Qoder 自己在两侧之间迁移而留下两份副本时，取文件更多、其次更新的那一份，
+另一份整棵丢弃，绝不重复计费。跨 OS 读 DrvFs 的代价实测过小（3 个会话 2.5MB 全扫
+271ms），因此就地读，不做镜像副本。
 
 数据源是**作用域**，不是筛选器：它是面板最高一层决定（高于路由、窗口、facet），在页眉右端
-一次性选定并记住，不写进 URL。两库各存一份切片，切回来还是原来的窗口与筛选。
+一次性选定并记住，不写进 URL。每库各存一份切片，切回来还是原来的窗口与筛选。
 完整设计（线框、像素账、API 契约、验收门）见
 [docs/source-scope.md](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/source-scope.md)。
 
 启动时的默认源：`OSM_SOURCE=opencode\|qoder` → 显式给了 `OSM_SOURCE_DB`（按 OpenCode 处理）→
-存在 `opencode.db` → 存在 `~/.qoder/projects`。启动只物化默认源；另一个库在你第一次切过去时
-才建（Qoder 约 4 秒），之后由 2 分钟一轮的增量同步跟着走。
+存在 `opencode.db` → 存在 `~/.qoder/projects`。
+启动只物化默认源；另一个库在你第一次切过去时才建（Qoder 约 4 秒），之后由 2 分钟一轮的
+增量同步跟着走。
 
 Qoder 没有会话数据库，转录是逐行 JSONL。两条格式陷阱决定了解析方式：一次模型响应会被
 拆成 2–4 个 `assistant` 事件（只有最后一条带 `usage`，必须按 `message.id` 合并），
 子代理的转录写在 `<sessionId>/subagents/` 下（`sessionId` 仍是父会话，必须并入父会话而不是
 另起一个会话）。token 字段恒为 0，上下文占用由 `context_usage_ratio` 乘该模型的分母还原
 （`runtime-config` 钉过窗口就取钉的值，否则取模型目录的 `max_input_tokens`——
-Qwen 180K、DeepSeek 1M，不是选择器显示的 200K）；积分按整数微积分
+Qwen 180K、DeepSeek 200K，与选择器一致）；积分按整数微积分
 （`credits_micro`，×1e6）入库，`cost` 列存同一数值供现有聚合使用。
-完整规则与验收门见 [docs/qoder-source.md](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/qoder-source.md)。
+标题优先取转录里的 `ai-title`；没有时查 Qoder Desktop 的 `chat_sessions.title`；再没有
+才回退到首条用户提示。完整规则与验收门见
+[docs/qoder-source.md](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/qoder-source.md)。
 
 成本单位由 `meta.unit` 声明、`/api/sources` 与 `/api/status` 透出，面板在渲染任何数字之前
 按当前库的单位把 `$` 换成 `cr`，不需要手工切换。
@@ -318,7 +337,7 @@ pid 与日志落在数据目录的 `osm.{pid,log}`。
 | 端点 | 说明 |
 | --- | --- |
 | `GET /api/status` | 物化状态、水位、各表行数 |
-| `GET /api/sources` | 两库的可用性、原始路径、成本单位（`usd` / `credit`）、行数与物化时间 |
+| `GET /api/sources` | 各库的可用性、原始路径、成本单位（`usd` / `credit`）、行数与物化时间 |
 | `GET /api/top/facets` | 过滤器取值：项目 / 模型 / agent / 工具，加时间跨度与总行数 |
 | `GET /api/top/analytics?from=&to=&project=&model=&agent=` | 当前切片的全部面板数据：totals、KPI 对比、时间桶与模型堆叠、热力图、效率百分位、四张排行表、最重的 200 个会话 |
 | `GET /api/top/sessions?...&q=&order=&dir=&limit=&cursor=` | 会话表：`limit` 个根会话及其子树（默认且上限 500），`cursor` 续上一页；`focus=<id>` 换成该会话的族谱 |
@@ -328,7 +347,7 @@ pid 与日志落在数据目录的 `osm.{pid,log}`。
 | `POST /api/refresh` | 手动重建，`{full:true}` 为全量 |
 
 `from` / `to` 是 epoch 毫秒；`from=0` 表示从最早的数据开始。非数字或 `from >= to` 返回 400。
-两库并存：请求头 `x-osm-source: opencode\|qoder` 选库（页眉切换时自动带上），省略则用
+各库并存：请求头 `x-osm-source: opencode\|qoder` 选库（页眉切换时自动带上），省略则用
 启动时的默认源；未物化的库在第一次被选中时按需建好。`analytics` 的响应与历史长度无关：
 时间轴按列预算取整，会话只带最重的 200 个（全历史约 200KB）。会话表本身用 `cursor`
 翻页，每页大小固定。
@@ -339,7 +358,7 @@ pid 与日志落在数据目录的 `osm.{pid,log}`。
   推理 Token 单独给出。这套口径与 `opencode-top` 的 `TokenUsage.total` 相同。
 - **Qoder 的 Token 口径**：CLI 不写 input / output / cache_*（恒为 0），唯一可还原的是
   `context_usage_ratio`。`input` 存「本轮累积上下文」= `ratio × 该模型的分母`
-  （Qwen 180K / DeepSeek 1M，未知模型回落 200K），其余四类为 0，`total` 即上下文流量；
+  （Qwen 180K / DeepSeek 200K，未知模型回落 200K），其余四类为 0，`total` 即上下文流量；
   图轴写 context 而不是 input。输出 token 不做估算，所以输出曲线恒为 0；生成速度、
   缓存命中这类按输出 / 缓存定义的指标在 Qoder 上没有可用值。压缩事件改在 token 空间
   判定（相邻两轮上下文回落 > 50K tok），不随分母漂移。成本列存积分：整数微积分
@@ -401,10 +420,13 @@ pnpm plans                  # 按两库实测单价算套餐性价比（见 docs
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `OSM_SOURCE` | 自动 | 默认数据源：`opencode` 或 `qoder`（页眉可切换，不设则自动探测） |
+| `OSM_SOURCE` | 自动 | 默认数据源：`opencode` / `qoder`（页眉可切换，不设则自动探测） |
 | `OSM_SOURCE_DB` | `~/.local/share/opencode/opencode.db` | OpenCode 源库路径（只读） |
-| `OSM_QODER_HOME` | `~/.qoder` | Qoder 数据根目录（读其下 `projects/` 与 `logs/`） |
-| `OSM_DATA_DIR` | `<项目根>/.data` | 两库（`metrics.db` / `metrics-qoder.db`）、价目与更新检查缓存（已 gitignore） |
+| `OSM_QODER_HOME` | `~/.qoder` | Qoder 数据根目录（读其下 `projects/` 与 `logs/`）；显式设置即只读这一棵树 |
+| `OSM_QODER_PROJECT_ROOTS` | 自动 | 逗号分隔的转录树清单，覆盖自动探测（默认 `~/.qoder/projects` 加 WSL 下各 Windows 配置文件的同名目录） |
+| `OSM_QODER_DESKTOP_HOME` | 自动探测 | Qoder Desktop 的 Electron 数据目录，仅供标题补全；默认扫描 `$APPDATA`、`~/.config`、`~/.local/share` 与 WSL 下各 Windows 盘的 `*/AppData/Roaming` |
+| `OSM_QODER_DESKTOP_DB` | `<HOME>/main.sqlite` | 直接指定桌面标题库（优先于 HOME） |
+| `OSM_DATA_DIR` | `<项目根>/.data` | 各指标库、标题库快照、价目与更新检查缓存（已 gitignore） |
 | `OSM_HOST` | `127.0.0.1` | API 监听地址 |
 | `OSM_PORT` | `8787` | API 端口 |
 | `OSM_OFFLINE` | — | 设为 `1` 时不访问 models.dev 与 npm 更新检查（版本检查仍可读缓存） |
@@ -446,13 +468,14 @@ server/src/
 ├── api.ts                # REST 端点（每库一份，x-osm-source 选库）
 ├── config.ts             # 路径、端口、时间桶宽度、默认源解析
 ├── source.ts             # OpenCode 源库 v1/v2 解析（含正文抽取）
-├── source-qoder.ts       # Qoder JSONL：按 message.id 合并、子代理并入、积分与上下文
+├── source-qoder.ts       # Qoder JSONL：多棵转录树、按 message.id 合并、子代理并入、积分与上下文
+├── qoder-titles.ts       # 从 Qoder Desktop 的 main.sqlite 补标题（WSL 快照读取）
 ├── source-select.ts      # 按数据源绑定适配器
 ├── cli/                  # osm materialize / plans
 └── metrics/
-    ├── schema.ts         # 指标库表结构（两库同构）
+    ├── schema.ts         # 指标库表结构（各库同构）
     ├── build.ts          # 物化逻辑（轮次指标、正文、事件探针、聚合）
-    ├── store.ts          # 增量编排、原子替换（两库各一份）
+    ├── store.ts          # 增量编排、原子替换（每库各一份）
     ├── analytics.ts      # 切片聚合：dashboard / toolDetail / facets
     └── catalog.ts        # 模型价目（缓存 + 手工覆盖）
 web/src/
@@ -471,9 +494,9 @@ web/src/
 - [docs/opencode-top-parity.md](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/opencode-top-parity.md) — 与 `opencode-top` 的功能对照，
   以及两处有意的口径差异
 - [docs/qoder-source.md](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/qoder-source.md) — Qoder CLI 数据源：
-  实测证据、解析规则、单位与模型映射、验收门
+  实测证据、解析规则、标题旁路、单位与模型映射、验收门
 - [docs/source-scope.md](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/source-scope.md) — 数据源切换：
-  作用域定位、页眉线框与像素账、两库契约、切片归属、验收门
+  作用域定位、页眉线框与像素账、各库契约、切片归属、验收门
 - [docs/backend-refactor.md](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/backend-refactor.md) — 2026-10 后端重构的接口变更明细
 - [docs/motion.md](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/motion.md) — 动效令牌、六个动词、交互对照与静态审计的规则
 - [docs/markdown-transcript.md](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/markdown-transcript.md) — transcript 的 Markdown 子集：
