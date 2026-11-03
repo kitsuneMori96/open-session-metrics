@@ -319,43 +319,6 @@ export interface ToolDetail {
   edited: { additions: number; deletions: number; files: number; chars: number };
 }
 
-/** One provider × model lane of the Speed screen. */
-export interface SpeedRow {
-  provider: string;
-  model: string;
-  calls: number;
-  /** Calls whose wait came from the source, not the whole-turn fallback. */
-  exactWaits: number;
-  waitP50: number;
-  waitP90: number;
-  waitMax: number;
-  /** tok/s; null where the source persists no stream span (Qoder). */
-  speedP50: number | null;
-}
-
-export interface SpeedPoint {
-  /** Bucket start, ms. Day/week buckets sit on local midnights. */
-  at: number;
-  provider: string;
-  model: string;
-  calls: number;
-  waitP25: number | null;
-  waitP50: number | null;
-  waitP75: number | null;
-  speedP25: number | null;
-  speedP50: number | null;
-  speedP75: number | null;
-}
-
-export interface SpeedResponse {
-  rows: SpeedRow[];
-  points: SpeedPoint[];
-  /** Every bucket start in the window, gaps included — the heatmap's column axis. */
-  axis: number[];
-  /** The unit the server bucketed at, after resolving `auto`. */
-  gran: Granularity;
-}
-
 export interface Facets {
   projects: { project: string; sessions: number; tokens: number; cost: number; updated: number }[];
   models: { id: string; label: string; calls: number }[];
@@ -535,21 +498,6 @@ export const useAnalytics = (
     queryKey: ["analytics", windowKey(win), facetKey(f), gran ?? "auto"],
     queryFn: ({ signal }) =>
       get<Dashboard>(`/api/top/analytics?${sliceQuery(sliceOf(win, f, gran))}`, signal),
-    placeholderData: keepPreviousData,
-    staleTime: 20_000,
-    refetchInterval: POLL_MS,
-  });
-
-/** Wait and output speed per API call, per provider × model — the Speed screen. */
-export const useSpeed = (
-  win: WindowSpec,
-  f: Facets0,
-  gran: Granularity | null = null,
-): UseQueryResult<SpeedResponse> =>
-  useQuery({
-    queryKey: ["speed", windowKey(win), facetKey(f), gran ?? "auto"],
-    queryFn: ({ signal }) =>
-      get<SpeedResponse>(`/api/top/speed?${sliceQuery(sliceOf(win, f, gran))}`, signal),
     placeholderData: keepPreviousData,
     staleTime: 20_000,
     refetchInterval: POLL_MS,

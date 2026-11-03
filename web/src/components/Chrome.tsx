@@ -13,7 +13,6 @@ export const NAV = [
   { to: "/sessions", label: "Sessions", key: "2" },
   { to: "/tools", label: "Tools", key: "3" },
   { to: "/compare", label: "Compare", key: "4" },
-  { to: "/speed", label: "Speed", key: "5" },
 ] as const;
 
 /* ------------------------------------------------------------------ *

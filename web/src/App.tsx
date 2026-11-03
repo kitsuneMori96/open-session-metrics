@@ -24,7 +24,6 @@ import Sessions from "./screens/Sessions";
 import SessionDetail from "./screens/SessionDetail";
 import Tools from "./screens/Tools";
 import Compare from "./screens/Compare";
-import Speed from "./screens/Speed";
 
 /**
  * The shell.
@@ -227,7 +226,6 @@ function Shell() {
           <Route path="/tools" element={<Tools />} />
           <Route path="/tools/:name" element={<Tools />} />
           <Route path="/compare" element={<Compare />} />
-          <Route path="/speed" element={<Speed />} />
           <Route path="*" element={<Navigate to={`/overview${location.search}`} replace />} />
         </Routes>
       </main>
