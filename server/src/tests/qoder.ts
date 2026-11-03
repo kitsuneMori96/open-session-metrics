@@ -316,8 +316,6 @@ async function main() {
     Math.abs(first.cost - 0.25) < 1e-9 && first.credits_micro === 250000,
     JSON.stringify({ cost: first.cost, micro: first.credits_micro }),
   );
-  // The prompt sits one second before the response's first row; the wait is that gap.
-  ok("wait is measured from the newest earlier evidence", first.wait_ms === 9 * sec, String(first.wait_ms));
   ok(
     "chars sums the body parts at their pre-truncation length",
     first.chars === "先看索引定义".length + "我先读一下文件。".length,
@@ -560,15 +558,10 @@ async function main() {
     multi.turns(new Set([sidW])).find((t) => t.role === "assistant")?.input === 72000,
     String(multi.turns(new Set([sidW])).find((t) => t.role === "assistant")?.input),
   );
-  // The user prompt sits one second before the assistant row, so the wait is exactly
-  // that gap; completed moves to the group's last row, which here is the same row.
+  // The user prompt sits one second before the assistant row; completed moves to the
+  // group's last row, which here is the same row.
   const winTurns = multi.turns(new Set([sidW]));
   const winWait = winTurns.find((t) => t.role === "assistant");
-  ok(
-    "a response's wait is measured from the newest earlier evidence",
-    winWait?.waitMs === 1000,
-    String(winWait?.waitMs),
-  );
   ok(
     "an assistant turn completes when its last row lands",
     winWait?.completed === winWait?.created,

@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS models (
 CREATE TABLE IF NOT EXISTS turns (
   id TEXT PRIMARY KEY, session_id TEXT NOT NULL, project TEXT NOT NULL,
   seq INTEGER, created INTEGER, completed INTEGER, dur_ms INTEGER,
-  wait_ms INTEGER, chars INTEGER,
+  chars INTEGER,
   role TEXT, provider TEXT, model TEXT, variant TEXT, agent TEXT,
   input INTEGER, output INTEGER, reasoning INTEGER,
   cache_read INTEGER, cache_write INTEGER, cost REAL,

@@ -758,7 +758,7 @@ async function main() {
     );
     CREATE TABLE turns (
       id TEXT PRIMARY KEY, session_id TEXT, role TEXT, created INTEGER, completed INTEGER,
-      dur_ms INTEGER, provider TEXT, wait_ms INTEGER, chars INTEGER, project TEXT, model TEXT,
+      dur_ms INTEGER, provider TEXT, chars INTEGER, project TEXT, model TEXT,
       agent TEXT, input INTEGER, output INTEGER,
       reasoning INTEGER, cache_read INTEGER, cache_write INTEGER, cost REAL, finish TEXT,
       fill REAL, context_window INTEGER, tool_calls INTEGER, tool_errors INTEGER,
@@ -783,7 +783,7 @@ async function main() {
     const d = new Date(at);
     d.setHours(0, 0, 0, 0);
     const turnId = `${sid}_${at}`;
-    rr.prepare(`INSERT INTO turns VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    rr.prepare(`INSERT INTO turns VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       turnId,
       sid,
       "assistant",
@@ -791,7 +791,6 @@ async function main() {
       at + dur,
       dur,
       model === "model-a" ? "prov-a" : "prov-b",
-      300,
       out * 3,
       project,
       model,
@@ -922,26 +921,6 @@ async function main() {
     JSON.stringify(daySeries.tools[0]),
   );
 
-  // The Speed screen answers from the perf rollups the same way: rows and per-day points
-  // must not move when the same window is re-read straight from turns.
-  const { speedOverview } = await import("../metrics/analytics");
-  const speedFast = windows.map(([, w]) => strip(speedOverview(rr, w)));
-  rr.exec("DELETE FROM meta WHERE key = 'rollVersion'");
-  const speedSlow = windows.map(([, w]) => strip(speedOverview(rr, w)));
-  for (const [i, [label]] of windows.entries()) {
-    ok(`speed lanes agree with the raw scan (${label})`, speedFast[i] === speedSlow[i], "");
-  }
-  const lanes = JSON.parse(speedFast[0]);
-  ok(
-    "every assistant call lands in exactly one speed lane",
-    lanes.rows.reduce((a: number, r: any) => a + r.calls, 0) === 96,
-    String(lanes.rows.reduce((a: number, r: any) => a + r.calls, 0)),
-  );
-  ok(
-    "a lane with stream spans always has a speed",
-    lanes.rows.every((r: any) => r.speedP50 > 0),
-    JSON.stringify(lanes.rows[0]),
-  );
   rr.close();
 
   console.log(failures ? `\n${failures} check(s) failed` : "\nall ETL checks passed");

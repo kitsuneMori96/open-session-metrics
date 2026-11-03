@@ -50,7 +50,7 @@ CREATE TABLE sessions (
 );
 CREATE TABLE turns (
   id TEXT PRIMARY KEY, session_id TEXT, role TEXT, created INTEGER, completed INTEGER,
-  dur_ms INTEGER, provider TEXT, wait_ms INTEGER, chars INTEGER, project TEXT, model TEXT,
+  dur_ms INTEGER, provider TEXT, chars INTEGER, project TEXT, model TEXT,
   agent TEXT, input INTEGER, output INTEGER,
   reasoning INTEGER, cache_read INTEGER, cache_write INTEGER, cost REAL, finish TEXT,
   fill REAL, context_window INTEGER, tool_calls INTEGER, tool_errors INTEGER,
@@ -92,7 +92,7 @@ function store(days: number, perDay: number): DatabaseSync {
     );
   }
   const insertTurn = db.prepare(
-    "INSERT INTO turns VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    "INSERT INTO turns VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
   );
   const insertTool = db.prepare("INSERT INTO tools VALUES (?,?,?,?,?,?)");
   let toolId = 0;
@@ -114,7 +114,6 @@ function store(days: number, perDay: number): DatabaseSync {
         at + dur,
         dur,
         MODELS[si % 2].startsWith("alpha") ? "prov-alpha" : "prov-beta",
-        300 + ((back * 17 + k * 5) % 2000),
         out * 4,
         PROJECTS[si % 2],
         MODELS[si % 2],

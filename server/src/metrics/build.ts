@@ -300,7 +300,6 @@ export async function build(
         "created",
         "completed",
         "dur_ms",
-        "wait_ms",
         "chars",
         "role",
         "provider",
@@ -346,11 +345,8 @@ export async function build(
       for (const t of turns) {
         const s = sessionById.get(t.sessionId);
         if (!s) continue;
-        // dur_ms = first → last event of the response (streaming span). wait_ms is the
-        // source-level wait when it exists; otherwise the whole turn stands in for it
-        // (OpenCode), which the Speed screen labels as an approximation.
+        // dur_ms = first → last event of the response (streaming span).
         const durMs = t.created && t.completed ? Math.max(0, t.completed - t.created) : null;
-        const waitMs = t.role === "assistant" ? (t.waitMs ?? (durMs && durMs > 0 ? durMs : null)) : null;
         const bodyChars =
           t.parts.reduce((a: number, p: SrcPart) => (p.kind === "tool" ? a : a + p.chars), 0) || null;
         insTurn.run(
@@ -361,7 +357,6 @@ export async function build(
           t.created,
           t.completed,
           durMs,
-          waitMs,
           bodyChars,
           t.role,
           t.provider,

@@ -126,27 +126,6 @@ interface Block {
   input?: any;
 }
 
-/**
- * wait_ms is how long the caller waited for a response: its first event minus the
- * newest earlier evidence — a user prompt, a tool result, or the previous response's
- * end. Walked on the merged timeline (parent + subagents), so a subagent file's first
- * turn still sees the parent's last event as evidence. Runs in both parse() and
- * merge(); the second pass just recomputes the same values over more evidence.
- */
-function waitPass(turns: SrcTurn[]): void {
-  let evidence = 0;
-  for (const t of turns) {
-    if (t.role !== "assistant") {
-      if (t.created > evidence) evidence = t.created;
-      continue;
-    }
-    if (evidence > 0 && t.created > evidence) t.waitMs = t.created - evidence;
-    let end = t.completed ?? t.created;
-    for (const tool of t.tools) if (tool.ended != null && tool.ended > end) end = tool.ended;
-    if (end > evidence) evidence = end;
-  }
-}
-
 interface Entry {
   id: string;
   /** First row's timestamp: when the response started arriving. */
@@ -538,7 +517,6 @@ export class QoderSource implements SourceLike {
       .sort((a, b) => a.created - b.created)
       .filter((t) => (seen.has(t.id) ? false : (seen.add(t.id), true)))
       .map((t, i) => ({ ...t, seq: i }));
-    waitPass(turns);
     const paths = new Set(parts.flatMap((p) => p.paths));
     const sum = (pick: (p: Parsed) => number) => parts.reduce((a, p) => a + pick(p), 0);
     const created = parts.map((p) => p.created).filter((t) => t > 0);
@@ -862,7 +840,6 @@ export class QoderSource implements SourceLike {
 
     items.sort((a, b) => a.ts - b.ts);
     const turns = items.map((it, i) => ({ ...it.turn, seq: i }));
-    waitPass(turns);
 
     // Compaction = a context reset the source never writes down. A drop of more
     // than COMPACTION_DROP_TOKENS between consecutive turns is the only evidence
