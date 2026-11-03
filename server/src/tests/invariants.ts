@@ -46,11 +46,12 @@ CREATE TABLE models (
 );
 CREATE TABLE sessions (
   id TEXT PRIMARY KEY, parent_id TEXT, title TEXT, project TEXT, agent TEXT, model TEXT,
-  created INTEGER, updated INTEGER, first_prompt TEXT, peak_fill REAL
+  created INTEGER, updated INTEGER, first_prompt TEXT, peak_fill REAL, msg_span_ms INTEGER
 );
 CREATE TABLE turns (
   id TEXT PRIMARY KEY, session_id TEXT, role TEXT, created INTEGER, completed INTEGER,
-  dur_ms INTEGER, project TEXT, model TEXT, agent TEXT, input INTEGER, output INTEGER,
+  dur_ms INTEGER, provider TEXT, wait_ms INTEGER, stream_ms INTEGER, chars INTEGER, project TEXT, model TEXT,
+  agent TEXT, input INTEGER, output INTEGER,
   reasoning INTEGER, cache_read INTEGER, cache_write INTEGER, cost REAL, finish TEXT,
   fill REAL, context_window INTEGER, tool_calls INTEGER, tool_errors INTEGER,
   additions INTEGER, deletions INTEGER, write_lines INTEGER, day INTEGER, hour INTEGER, bucket INTEGER
@@ -72,7 +73,7 @@ function store(days: number, perDay: number): DatabaseSync {
   const db = new DatabaseSync(":memory:");
   db.exec(LOCATION);
   const first = midnight(days - 1);
-  const insertSession = db.prepare("INSERT INTO sessions VALUES (?,?,?,?,?,?,?,?,?,?)");
+  const insertSession = db.prepare("INSERT INTO sessions VALUES (?,?,?,?,?,?,?,?,?,?,?)");
   for (let i = 0; i < SESSIONS; i++) {
     // One parent per quarter of the cast, so the grid sees a real forest, not a flat list.
     const parent = i >= 6 && i % 3 === 0 ? `gen-s${i - 6}` : null;
@@ -87,10 +88,11 @@ function store(days: number, perDay: number): DatabaseSync {
       first + days * 86400000,
       `generated prompt ${i}`,
       0.5,
+      days * 86400000,
     );
   }
   const insertTurn = db.prepare(
-    "INSERT INTO turns VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    "INSERT INTO turns VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
   );
   const insertTool = db.prepare("INSERT INTO tools VALUES (?,?,?,?,?,?)");
   let toolId = 0;
@@ -111,6 +113,10 @@ function store(days: number, perDay: number): DatabaseSync {
         at,
         at + dur,
         dur,
+        MODELS[si % 2].startsWith("alpha") ? "prov-alpha" : "prov-beta",
+        300 + ((back * 17 + k * 5) % 2000),
+        Math.max(dur - 300 - ((back * 17 + k * 5) % 2000), 0),
+        out * 4,
         PROJECTS[si % 2],
         MODELS[si % 2],
         AGENTS[si % 2],
