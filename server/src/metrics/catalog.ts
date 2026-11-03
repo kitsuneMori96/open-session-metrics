@@ -18,12 +18,16 @@ export type Catalog = Record<string, ModelInfo>;
 
 interface CacheFile {
   fetchedAt?: number;
+  /** When a fetch was last attempted, answered or not — the retry clock. */
+  attemptedAt?: number;
   models?: Catalog;
 }
 
 const FALLBACK_CONTEXT = 128000;
 /** Refresh pricing/context from models.dev at most this often. */
 const CATALOG_TTL_MS = 7 * 86400000;
+/** After a failed or unanswered lookup, try the network again no sooner than this. */
+const CATALOG_RETRY_MS = 3600000;
 
 /** Key used in the catalog: `${provider}/${model}` (models.dev convention). */
 export const catalogKey = (provider: string | null | undefined, model: string | null | undefined) =>
@@ -57,17 +61,21 @@ function normalize(modelID: string, providerID: string, m: any): ModelInfo {
   };
 }
 
-function readCache(): { fetchedAt: number; models: Catalog } {
-  if (!existsSync(MODEL_CATALOG)) return { fetchedAt: 0, models: {} };
+function readCache(): { fetchedAt: number; attemptedAt: number; models: Catalog } {
+  if (!existsSync(MODEL_CATALOG)) return { fetchedAt: 0, attemptedAt: 0, models: {} };
   try {
     const parsed = JSON.parse(readFileSync(MODEL_CATALOG, "utf8")) as CacheFile & Catalog;
     // tolerate both shapes: a bare catalog (v1) and {fetchedAt, models} (v2)
     if (parsed && typeof parsed === "object" && "models" in parsed && parsed.models) {
-      return { fetchedAt: Number(parsed.fetchedAt ?? 0), models: parsed.models as Catalog };
+      return {
+        fetchedAt: Number(parsed.fetchedAt ?? 0),
+        attemptedAt: Number(parsed.attemptedAt ?? parsed.fetchedAt ?? 0),
+        models: parsed.models as Catalog,
+      };
     }
-    return { fetchedAt: 0, models: parsed as Catalog };
+    return { fetchedAt: 0, attemptedAt: 0, models: parsed as Catalog };
   } catch {
-    return { fetchedAt: 0, models: {} };
+    return { fetchedAt: 0, attemptedAt: 0, models: {} };
   }
 }
 
@@ -115,33 +123,47 @@ export async function loadCatalog(wanted: Set<string>): Promise<Catalog> {
   const overrides = readOverrides();
   const stale = Date.now() - cache.fetchedAt > CATALOG_TTL_MS;
   const missing = [...wanted].filter((k) => !cache.models[k]);
+  // A model models.dev has never heard of stays missing forever, so an
+  // unanswered lookup is remembered (below) and a failed fetch is retried on a
+  // clock instead of every build — otherwise each tick pays a round trip.
+  const backoff = Date.now() - cache.attemptedAt < CATALOG_RETRY_MS;
 
   let fresh: Catalog = {};
   const offline = process.env.OSM_OFFLINE === "1";
-  if ((missing.length > 0 || stale) && !offline) {
+  if ((missing.length > 0 || stale) && !offline && !backoff) {
     try {
       const res = await fetch("https://models.dev/api.json", { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`models.dev HTTP ${res.status}`);
       fresh = fromModelsDev(await res.json(), wanted);
       writeFileSync(
         MODEL_CATALOG,
-        JSON.stringify({ fetchedAt: Date.now(), models: { ...cache.models, ...fresh } }),
+        JSON.stringify({ fetchedAt: Date.now(), attemptedAt: Date.now(), models: { ...cache.models, ...fresh } }),
       );
     } catch (err) {
-      if (!cache.fetchedAt) {
-        writeFileSync(MODEL_CATALOG, JSON.stringify({ fetchedAt: Date.now(), models: cache.models }));
-      }
+      writeFileSync(
+        MODEL_CATALOG,
+        JSON.stringify({ fetchedAt: cache.fetchedAt || Date.now(), attemptedAt: Date.now(), models: cache.models }),
+      );
       console.warn(`[catalog] models.dev unavailable (${(err as Error).message}); using cache/fallback`);
     }
   }
 
   const merged: Catalog = {};
+  const negative: Catalog = {};
   for (const key of wanted) {
     // cached entries may predate the `source` field — normalise before use
     const cached = cache.models[key];
-    merged[key] =
-      fresh[key] ??
-      (cached ? { ...fallbackEntry(key), ...cached, source: cached.source ?? "cache" } : fallbackEntry(key));
+    if (fresh[key]) merged[key] = fresh[key];
+    else if (cached) merged[key] = { ...fallbackEntry(key), ...cached, source: cached.source ?? "cache" };
+    else {
+      merged[key] = fallbackEntry(key);
+      negative[key] = merged[key];
+    }
+  }
+  if (Object.keys(negative).length) {
+    const next = { ...cache.models, ...negative };
+    cache.models = next;
+    writeFileSync(MODEL_CATALOG, JSON.stringify({ fetchedAt: cache.fetchedAt, attemptedAt: cache.attemptedAt, models: next }));
   }
   for (const [key, patch] of Object.entries(overrides)) {
     if (!wanted.has(key)) continue;
