@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { HOST, PORT, ROOT, SOURCE_KIND, SOURCE_KINDS, type SourceKind } from "./config";
 import { createApp } from "./api";
-import { current, hasStore, rebuild, sourceChanged } from "./metrics/store";
+import { current, hasStore, rebuild } from "./metrics/store";
 
 const REFRESH_MS = 120000;
 /**
@@ -14,7 +14,7 @@ const REFRESH_MS = 120000;
  */
 let queue: Promise<unknown> = Promise.resolve();
 
-function materialize(kind: SourceKind, opts: { force?: boolean; full?: boolean } = {}) {
+function materialize(kind: SourceKind, opts: { full?: boolean } = {}) {
   const run = queue.then(
     () => doMaterialize(kind, opts),
     () => doMaterialize(kind, opts),
@@ -24,14 +24,11 @@ function materialize(kind: SourceKind, opts: { force?: boolean; full?: boolean }
 }
 
 /**
- * Refresh is driven by the *source watermark*, not the wall clock: we only
- * re-materialize when the tool that owns it actually has newer rows than we
- * stored. The incremental path re-parses just the changed sessions (milliseconds).
+ * Refresh is driven by the *source watermark*, not the wall clock: the incremental
+ * path compares the source against the stored watermark and re-parses just the
+ * sessions that moved, reporting zero when nothing did.
  */
-async function doMaterialize(
-  kind: SourceKind,
-  { force = false, full = false }: { force?: boolean; full?: boolean },
-) {
+async function doMaterialize(kind: SourceKind, { full = false }: { full?: boolean }) {
   if (!hasStore(kind) || full) {
     console.log(`[osm] ${kind}: ${full ? "full rebuild requested" : "no store yet"} — materializing…`);
     const r = await rebuild(kind, { full: true });
@@ -40,18 +37,20 @@ async function doMaterialize(
     );
     return r;
   }
-  if (!force && !sourceChanged(kind)) return undefined;
+  // The incremental path answers with zero sessions when the source did not move,
+  // so there is no separate change check to pay for: it would walk the same tree.
   const r = await rebuild(kind);
-  console.log(
-    `[osm] ${kind}: ${r.mode} sync ${r.sessions} sessions / ${r.turns} turns / ${r.parts} parts / ${r.events} events in ${r.ms}ms`,
-  );
+  if (r.sessions > 0)
+    console.log(
+      `[osm] ${kind}: ${r.mode} sync ${r.sessions} sessions / ${r.turns} turns / ${r.parts} parts / ${r.events} events in ${r.ms}ms`,
+    );
   return r;
 }
 
 const app = createApp({
   db: (kind) => current(kind),
   hasStore: (kind) => hasStore(kind),
-  refresh: (kind, full) => materialize(kind, { force: true, full }),
+  refresh: (kind, full) => materialize(kind, { full }),
 });
 
 const webDist = path.join(ROOT, "web", "dist");

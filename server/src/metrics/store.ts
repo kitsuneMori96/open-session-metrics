@@ -75,21 +75,6 @@ export function closeReader(kind?: SourceKind) {
   }
 }
 
-/** True when the source has data we have not materialized yet. */
-export function sourceChanged(kind: SourceKind = SOURCE_KIND): boolean {
-  if (!hasStore(kind)) return true;
-  const prev = getMetaNumber(current(kind), "sourceMaxTime");
-  if (prev <= 0) return true;
-  const src = openSource(kind);
-  try {
-    return src.maxMessageTime() > prev;
-  } catch {
-    return false;
-  } finally {
-    src.close();
-  }
-}
-
 /**
  * Rebuild one source's metrics database.
  * - `full`: parse everything into a side file and swap it in atomically, so
@@ -128,10 +113,12 @@ async function fullRebuild(kind: SourceKind): Promise<BuildReport> {
 
   const writer = new DatabaseSync(next);
   writer.exec("PRAGMA journal_mode = WAL");
+  const src = openSource(kind);
   let report: BuildReport;
   try {
-    report = await build(writer, { mode: "full", kind });
+    report = await build(writer, { mode: "full", kind, reader: src });
   } finally {
+    src.close();
     writer.close();
   }
 
@@ -145,29 +132,29 @@ async function fullRebuild(kind: SourceKind): Promise<BuildReport> {
 async function incrementalRebuild(kind: SourceKind): Promise<BuildReport> {
   const db = current(kind);
   const prevWatermark = getMetaNumber(db, "sourceMaxTime");
+  // One walk of the source per tick: the same reader answers what changed and
+  // reads it back, so its snapshot of the transcript is one instant.
   const src = openSource(kind);
-  let changed: Set<string>;
   try {
-    changed = prevWatermark > 0 ? src.changedSessions(prevWatermark) : new Set<string>();
+    const changed = prevWatermark > 0 ? src.changedSessions(prevWatermark) : new Set<string>();
+    if (changed.size === 0) {
+      setMeta(db, "materializedAt", String(Date.now()));
+      return {
+        mode: "incremental",
+        schema: getMeta(db, "sourceSchema") ?? "v2",
+        sessions: 0,
+        turns: 0,
+        tools: 0,
+        parts: 0,
+        events: 0,
+        flow: 0,
+        heat: 0,
+        models: 0,
+        ms: 0,
+      };
+    }
+    return await build(db, { mode: "incremental", sessionIds: changed, kind, reader: src });
   } finally {
     src.close();
   }
-
-  if (changed.size === 0) {
-    setMeta(db, "materializedAt", String(Date.now()));
-    return {
-      mode: "incremental",
-      schema: getMeta(db, "sourceSchema") ?? "v2",
-      sessions: 0,
-      turns: 0,
-      tools: 0,
-      parts: 0,
-      events: 0,
-      flow: 0,
-      heat: 0,
-      models: 0,
-      ms: 0,
-    };
-  }
-  return build(db, { mode: "incremental", sessionIds: changed, kind });
 }

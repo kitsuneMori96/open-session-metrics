@@ -132,7 +132,9 @@ export interface SourceLike {
   /** The unit `cost` is expressed in for this source. */
   readonly unit: "usd" | "credit";
   readonly schema: string;
-  sessions(): SrcSession[];
+  sessions(sessionIds?: Set<string>): SrcSession[];
+  /** Every session id the source knows, without parsing any of them. */
+  sessionIds(): string[];
   turns(sessionIds?: Set<string>): SrcTurn[];
   events(sessionIds?: Set<string>): SrcEvent[];
   patchFileCounts(sessionIds?: Set<string>): Map<string, { files: number; paths: string[] }>;
@@ -354,16 +356,26 @@ export class SourceReader implements SourceLike {
     return out;
   }
 
-  sessions(): SrcSession[] {
+  /** Every session id the source knows, without parsing any transcript. */
+  sessionIds(): string[] {
     const table = this.schema === "v2" ? "session_v2" : "session";
+    return (this.db.prepare(`SELECT id FROM ${table} ORDER BY time_created ASC`).all() as any[]).map((r) =>
+      String(r.id),
+    );
+  }
+
+  sessions(sessionIds?: Set<string>): SrcSession[] {
+    const table = this.schema === "v2" ? "session_v2" : "session";
+    const where = sessionIds ? `WHERE s.id IN (${[...sessionIds].map(() => "?").join(",")})` : "";
+    const args = sessionIds ? [...sessionIds] : [];
     const rows = this.db
       .prepare(
         `SELECT s.id, s.parent_id, s.project_id, s.title, s.directory, s.agent, s.model,
                 s.time_created, s.time_updated, s.cost,
                 p.name AS project_name, p.worktree AS project_worktree
-         FROM ${table} s LEFT JOIN project p ON p.id = s.project_id`,
+         FROM ${table} s LEFT JOIN project p ON p.id = s.project_id ${where}`,
       )
-      .all() as any[];
+      .all(...args) as any[];
 
     const agg = new Map<
       string,
@@ -375,9 +387,9 @@ export class SourceReader implements SourceLike {
           `SELECT id AS sid, tokens_input AS i, tokens_output AS o, tokens_reasoning AS r,
                   tokens_cache_read AS cr, tokens_cache_write AS cw,
                   summary_additions AS a, summary_deletions AS d
-           FROM session_v2`,
+           FROM session_v2 ${sessionIds ? `WHERE id IN (${[...sessionIds].map(() => "?").join(",")})` : ""}`,
         )
-        .all() as any[]) {
+        .all(...args) as any[]) {
         agg.set(r.sid, {
           input: num(r.i),
           output: num(r.o),

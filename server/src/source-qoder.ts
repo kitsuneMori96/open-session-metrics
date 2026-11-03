@@ -230,6 +230,10 @@ export class QoderSource implements SourceLike {
   private evidence = new Map<string, Set<string>>();
   private logDirs: string[] | null = null;
   private roots: string[];
+  /**
+   * The roots as one walk — see `snap()`. A reader is bound to one materialize.
+   */
+  private snapshot: Map<string, string[]> | null = null;
 
   constructor(root: string | readonly string[] = QODER_PROJECTS) {
     this.roots = typeof root === "string" ? [root] : [...root];
@@ -239,6 +243,7 @@ export class QoderSource implements SourceLike {
   close() {
     this.cache.clear();
     this.evidence.clear();
+    this.snapshot = null;
   }
 
   /**
@@ -279,6 +284,19 @@ export class QoderSource implements SourceLike {
       }
     }
     return out;
+  }
+
+  /**
+   * The tree as one snapshot, shared by every read this reader makes: a build
+   * asks for sessions, turns, patches, events and the watermark, and re-walking
+   * two DrvFs trees for each of those costs more than parsing them. Because the
+   * watermark comes from the same walk as the parse, a file written while the
+   * build was working stays above it and is re-read by the next tick instead of
+   * being marked as materialized.
+   */
+  private snap(): Map<string, string[]> {
+    if (!this.snapshot) this.snapshot = this.index();
+    return this.snapshot;
   }
 
   /** The files one root holds for each session id it knows about. */
@@ -325,7 +343,7 @@ export class QoderSource implements SourceLike {
 
   maxMessageTime(): number {
     let max = 0;
-    for (const files of this.index().values())
+    for (const files of this.snap().values())
       for (const f of files) max = Math.max(max, this.stamp(f)?.mtime ?? 0);
     return max;
   }
@@ -333,7 +351,7 @@ export class QoderSource implements SourceLike {
   changedSessions(since: number): Set<string> {
     const out = new Set<string>();
     if (since <= 0) return out;
-    for (const [id, files] of this.index()) {
+    for (const [id, files] of this.snap()) {
       for (const f of files) {
         const st = this.stamp(f);
         if (st && st.mtime > since) {
@@ -347,12 +365,17 @@ export class QoderSource implements SourceLike {
 
   private all(sessionIds?: Set<string>): Parsed[] {
     const out: Parsed[] = [];
-    for (const [id, files] of this.index()) {
+    for (const [id, files] of this.snap()) {
       if (sessionIds && !sessionIds.has(id)) continue;
       const p = this.load(id, files);
       if (p) out.push(p);
     }
     return out;
+  }
+
+  /** Every session id the roots hold, without parsing any transcript. */
+  sessionIds(): string[] {
+    return [...this.snap().keys()];
   }
 
   sessions(sessionIds?: Set<string>): SrcSession[] {

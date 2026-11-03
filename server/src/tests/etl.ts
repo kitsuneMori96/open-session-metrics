@@ -478,6 +478,38 @@ async function main() {
   const heatAfter = rows("SELECT SUM(turns) t FROM heat")[0].t;
   ok("heat aggregates the new turn", heatAfter === 10, `got ${heatAfter}`);
 
+  // ---- tail window: a tick rewrites only the turns it can still be wrong about ----
+  const { setMeta } = await import("../metrics/schema");
+  const turnsBefore = rows("SELECT COUNT(*) c FROM turns")[0].c;
+  const oldTurn = one("SELECT id, session_id FROM turns WHERE session_id='ses_child' ORDER BY created ASC");
+  db.prepare("UPDATE turns SET chars = 424242 WHERE id = ?").run(oldTurn.id);
+  // A watermark six hours past every fixture turn puts the whole session below
+  // the tail: the sentinel has to survive, while the session row is still rebuilt
+  // from the full transcript.
+  setMeta(db, "sourceMaxTime", String(at + 7 * 60 * MIN));
+  const src5 = new SourceReader(process.env.OSM_SOURCE_DB!);
+  await build(db, { mode: "incremental", sessionIds: src5.changedSessions(watermark) });
+  src5.close();
+  ok(
+    "a turn outside the tail window is not rewritten",
+    one("SELECT chars FROM turns WHERE id = ?", oldTurn.id).chars === 424242,
+  );
+  ok("the tail window neither duplicates nor drops turns", rows("SELECT COUNT(*) c FROM turns")[0].c === turnsBefore);
+  ok(
+    "a tail-window tick still totals the whole session",
+    one("SELECT turns FROM sessions WHERE id='ses_child'").turns === 2,
+  );
+  // With the real watermark the same turn is inside the window and gets its value back.
+  setMeta(db, "sourceMaxTime", String(watermark));
+  const src6 = new SourceReader(process.env.OSM_SOURCE_DB!);
+  await build(db, { mode: "incremental", sessionIds: src6.changedSessions(watermark) });
+  src6.close();
+  ok(
+    "a turn inside the tail window is rewritten",
+    one("SELECT chars FROM turns WHERE id = ?", oldTurn.id).chars !== 424242,
+  );
+  ok("the tail window leaves no duplicate turns", rows("SELECT COUNT(*) c FROM turns")[0].c === turnsBefore);
+
   // ---- distribution machinery (S0): indexes and binned quantiles ----
   const toolIdx = one("SELECT COUNT(*) c FROM sqlite_master WHERE type='index' AND name='tools_turn'");
   ok("tools are indexed by turn, so a time-filtered join never scans the tool table", toolIdx.c === 1);

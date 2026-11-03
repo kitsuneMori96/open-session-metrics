@@ -1,8 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import { BUCKET_MS, type SourceKind } from "../config";
-import { type SrcTurn, type SrcSession, type SrcTool, type SrcPart } from "../source";
+import { type SrcTurn, type SrcSession, type SrcTool, type SrcPart, type SourceLike } from "../source";
 import { openSource } from "../source-select";
-import { initSchema, setMeta } from "./schema";
+import { getMetaNumber, initSchema, setMeta } from "./schema";
 import { catalogKey, loadCatalog, type Catalog } from "./catalog";
 import { ensureRollups, refreshRollups } from "./rollup";
 
@@ -132,30 +132,91 @@ export function accountOf(path: string | null | undefined): string | null {
 /**
  * Re-materialize `sessionIds` (all sessions when omitted) into `db`.
  * - `mode: "full"` assumes an empty target file (tables are created, never dropped here).
- * - `mode: "incremental"` deletes and rewrites only those sessions, then
- *   re-aggregates the flow/heat cells their turns touched.
+ * - `mode: "incremental"` rewrites the tail of those sessions, then re-aggregates
+ *   the flow/heat cells their turns touched. Session rows are always rewritten
+ *   whole, because their totals are summed over the full transcript.
  */
+/**
+ * A turn's row in the store stops changing once its response ends, so an
+ * incremental tick rewrites only the tail of the sessions it touched: everything
+ * the watermark already covers minus this grace. The grace is generous because
+ * both sources keep updating an assistant row while it streams, and a torn tail
+ * line is repaired by a later build.
+ */
+const TAIL_GRACE_MS = 6 * 3600_000;
+/** Turns inserted between these chunks hand the event loop back to HTTP. */
+const CHUNK_TURNS = 500;
+
+const yieldToEventLoop = () => new Promise<void>((res) => setImmediate(() => res()));
+
 export async function build(
   db: DatabaseSync,
-  opts: { sessionIds?: Set<string>; mode?: "full" | "incremental"; kind?: SourceKind } = {},
+  opts: {
+    sessionIds?: Set<string>;
+    mode?: "full" | "incremental";
+    kind?: SourceKind;
+    /** A reader already walked this tick. `build` closes only the one it opened. */
+    reader?: SourceLike;
+  } = {},
 ): Promise<BuildReport> {
   const t0 = Date.now();
   const mode = opts.mode ?? "full";
-  const src = openSource(opts.kind);
+  const ownsSource = !opts.reader;
+  const src = opts.reader ?? openSource(opts.kind);
   try {
     initSchema(db, { drop: mode === "full" });
     ensureRollups(db);
 
-    const allSessions = src.sessions();
-    const allById = new Map<string, SrcSession>(allSessions.map((s) => [s.id, s]));
-    const targetIds = opts.sessionIds ?? new Set(allSessions.map((s) => s.id));
-    const sessionById = new Map<string, SrcSession>(
-      allSessions.filter((s) => targetIds.has(s.id)).map((s) => [s.id, s]),
-    );
+    const prevWatermark = getMetaNumber(db, "sourceMaxTime");
+    const scope = mode === "incremental" && opts.sessionIds ? opts.sessionIds : null;
+    const tailFrom = scope && prevWatermark > 0 ? prevWatermark - TAIL_GRACE_MS : 0;
+
+    // Only the sessions this tick owns are parsed; everything else about them —
+    // the parent chain a sub-agent borrows its lane from, the account names that
+    // make a directory a junk lane — is already materialized in the store.
+    // A full build walks the corpus one session at a time, because the whole
+    // corpus in one call is seventeen seconds of event loop nobody else can have.
+    const walk = async <T>(pick: (ids: Set<string>) => T[], only?: Set<string>): Promise<T[]> => {
+      if (only) return pick(only);
+      const out: T[] = [];
+      for (const id of src.sessionIds()) {
+        out.push(...pick(new Set([id])));
+        await yieldToEventLoop();
+      }
+      return out;
+    };
+    const parsed = await walk<SrcSession>((ids) => src.sessions(ids), scope ?? undefined);
+    const allById = new Map<string, SrcSession>(parsed.map((s) => [s.id, s]));
+    // `accounts` must keep naming the same directories it did on the full build;
+    // a scoped tick sees only its own sessions, so it borrows the rest from the store.
+    const directories: string[] = parsed.map((s) => s.directory);
+    if (scope) {
+      const stored = db.prepare("SELECT id, parent_id, project, directory FROM sessions").all() as any[];
+      for (const r of stored) directories.push(String(r.directory ?? "/"));
+      const chain = new Map(stored.map((r) => [String(r.id), r]));
+      for (const s of [...allById.values()]) {
+        let parent = s.parentId ? chain.get(s.parentId) : null;
+        while (parent && !allById.has(String(parent.id))) {
+          allById.set(
+            String(parent.id),
+            stubSession(String(parent.id), parent.project, parent.directory, parent.parent_id),
+          );
+          directories.push(parent.directory ?? "/");
+          parent = chain.get(String(parent.parent_id ?? "")) ?? null;
+        }
+      }
+    }
+
+    const targetIds = scope ?? new Set(parsed.map((s) => s.id));
+    const sessionById = new Map<string, SrcSession>();
+    for (const id of targetIds) {
+      const s = allById.get(id);
+      if (s) sessionById.set(id, s);
+    }
 
     const wanted = new Set<string>();
     for (const s of sessionById.values()) if (s.model) wanted.add(catalogKey(s.provider, s.model));
-    const turnsRaw = src.turns(targetIds);
+    const turnsRaw = await walk<SrcTurn>((ids) => src.turns(ids), scope ?? undefined);
     for (const t of turnsRaw)
       if (t.role === "assistant" && t.model) wanted.add(catalogKey(t.provider, t.model));
     const catalog: Catalog = await loadCatalog(wanted);
@@ -174,7 +235,7 @@ export async function build(
       arr.push(...info.paths);
       pathsBySession.set(sid, arr);
     }
-    const accounts = new Set(allSessions.map((s) => accountOf(s.directory)).filter((a): a is string => !!a));
+    const accounts = new Set(directories.map((d) => accountOf(d)).filter((a): a is string => !!a));
     for (const s of sessionById.values()) {
       s.project = inferProject(pathsBySession.get(s.id) ?? [], s.project, accounts);
     }
@@ -264,11 +325,14 @@ export async function build(
     const affectedBuckets = new Set<number>();
     const affectedDays = new Set<number>();
     const idList = [...targetIds];
+    const ph = idList.map(() => "?").join(",");
     if (idList.length) {
-      const ph = idList.map(() => "?").join(",");
-      const oldCells = db
-        .prepare(`SELECT DISTINCT bucket, day FROM turns WHERE session_id IN (${ph})`)
-        .all(...idList) as any[];
+      const oldCells =
+        tailFrom > 0
+          ? (db
+              .prepare(`SELECT DISTINCT bucket, day FROM turns WHERE session_id IN (${ph}) AND created >= ?`)
+              .all(...idList, tailFrom) as any[])
+          : (db.prepare(`SELECT DISTINCT bucket, day FROM turns WHERE session_id IN (${ph})`).all(...idList) as any[]);
       for (const r of oldCells) {
         if (r.bucket != null) affectedBuckets.add(Number(r.bucket));
         if (r.day != null) affectedDays.add(Number(r.day));
@@ -284,11 +348,21 @@ export async function build(
     db.exec("BEGIN");
     try {
       if (idList.length) {
-        const ph = idList.map(() => "?").join(",");
-        db.prepare(`DELETE FROM tools WHERE session_id IN (${ph})`).run(...idList);
-        db.prepare(`DELETE FROM parts WHERE session_id IN (${ph})`).run(...idList);
-        db.prepare(`DELETE FROM events WHERE session_id IN (${ph})`).run(...idList);
-        db.prepare(`DELETE FROM turns WHERE session_id IN (${ph})`).run(...idList);
+        // With a tail window only the rows inside it are replaced: the rows below
+        // `tailFrom` are final, and re-writing them is what made every tick pay for
+        // the whole transcript. `sessions` is always rewritten from full aggregates.
+        if (tailFrom > 0) {
+          const tail = `session_id IN (${ph}) AND turn_id IN (SELECT id FROM turns WHERE session_id IN (${ph}) AND created >= ?)`;
+          db.prepare(`DELETE FROM tools WHERE ${tail}`).run(...idList, ...idList, tailFrom);
+          db.prepare(`DELETE FROM parts WHERE ${tail}`).run(...idList, ...idList, tailFrom);
+          db.prepare(`DELETE FROM events WHERE session_id IN (${ph}) AND at >= ?`).run(...idList, tailFrom);
+          db.prepare(`DELETE FROM turns WHERE session_id IN (${ph}) AND created >= ?`).run(...idList, tailFrom);
+        } else {
+          db.prepare(`DELETE FROM tools WHERE session_id IN (${ph})`).run(...idList);
+          db.prepare(`DELETE FROM parts WHERE session_id IN (${ph})`).run(...idList);
+          db.prepare(`DELETE FROM events WHERE session_id IN (${ph})`).run(...idList);
+          db.prepare(`DELETE FROM turns WHERE session_id IN (${ph})`).run(...idList);
+        }
         db.prepare(`DELETE FROM sessions WHERE id IN (${ph})`).run(...idList);
       }
 
@@ -345,6 +419,8 @@ export async function build(
       for (const t of turns) {
         const s = sessionById.get(t.sessionId);
         if (!s) continue;
+        if (tailFrom > 0 && t.created < tailFrom) continue;
+        if (turnCount > 0 && turnCount % CHUNK_TURNS === 0) await yieldToEventLoop();
         // dur_ms = first → last event of the response (streaming span).
         const durMs = t.created && t.completed ? Math.max(0, t.completed - t.created) : null;
         const bodyChars =
@@ -455,6 +531,7 @@ export async function build(
       for (const [sid, list] of eventsBySession) {
         const ts = assistantBySession.get(sid) ?? [];
         for (const e of list) {
+          if (tailFrom > 0 && e.at < tailFrom) continue;
           // Fill at the moment of the event = the last turn that had already been sent.
           let fill = 0;
           for (const t of ts) {
@@ -687,12 +764,37 @@ export async function build(
       ms: Date.now() - t0,
     };
   } finally {
-    src.close();
+    if (ownsSource) src.close();
   }
 }
 
-function depthOf(s: SrcSession, byId: Map<string, SrcSession>): number {
-  let d = 0;
+/** A session the store knows about but this tick did not parse: lane and parent only. */
+function stubSession(id: string, project: string, directory: string, parentId: string | null): SrcSession {
+  return {
+    id,
+    parentId,
+    project,
+    directory,
+    title: null,
+    agent: null,
+    provider: null,
+    model: null,
+    variant: null,
+    created: 0,
+    updated: 0,
+    cost: 0,
+    tInput: 0,
+    tOutput: 0,
+    tReasoning: 0,
+    tCacheRead: 0,
+    tCacheWrite: 0,
+    additions: 0,
+    deletions: 0,
+    files: 0,
+  };
+}
+
+function depthOf(s: SrcSession, byId: Map<string, SrcSession>): number {  let d = 0;
   let cur = s.parentId ? byId.get(s.parentId) : null;
   while (cur && d < 10) {
     d++;
