@@ -251,7 +251,17 @@ DeepSeek 的压缩点会变成 790 k – 830 k，已经超出它实际运行的 
 - 不建汇率表、不换算美元（订阅制，`billable` 恒为 false）；
 - 展示精度：<1 用 4 位、≥1 用 2 位、聚合可整数。
 
-### 5.3 模型名映射
+### 5.3 时间：wait 精确，speed 留空
+
+一个响应在 JSONL 里是一条事件行（多行响应才有多行跨度），实测绝大多数 `dur_ms` 为 0–1 ms。
+因此：
+
+- `wait_ms` = 首行落盘时刻 − 合并时间线上最新更早证据，精确可算（Speed 屏 exact 100%）；
+- 没有"首个 token → 写完"的流式跨度，Speed 屏的 speed 对 Qoder 显示 `—`，不做 chars/s 估算。
+
+完整口径见 [api-speed.md](api-speed.md)。
+
+### 5.4 模型名映射
 
 | 别名 | 真实名 |
 |---|---|
@@ -268,7 +278,7 @@ DeepSeek 的压缩点会变成 790 k – 830 k，已经超出它实际运行的 
    `<synthetic> + qfmodel`，把压缩提示当成一个模型）；
 5. 映射证据（会话、次数、是否冲突）写入 `sourceMeta`，别称变更可被发现。
 
-### 5.4 项目泳道
+### 5.5 项目泳道
 
 `inferProject` 从工具触达的路径投票决定项目泳道。Qoder 会把自己的状态目录
 （`.qoder/projects/<encoded>/memory/*`、`.qoder/tmp/<encoded>/tool-outputs/*`）

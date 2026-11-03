@@ -110,6 +110,13 @@ KPI 行（各带与上一等长窗口的对比）、按模型堆叠的 Token 时
 
 ![Compare](https://raw.githubusercontent.com/kitsuneMori96/open-session-metrics/master/docs/compare.png)
 
+### Speed — 每次 API 调用的等待与输出速度
+
+按 provider × model 一行：调用数、精确等待占比、wait p50 / p90 / max、输出速度 p50，
+右侧是等待与速度的按天中位线。OpenCode 的等待是首 token 证据、速度是写作段吞吐；
+Qoder 单行落盘没有流式时间戳，等待是整轮往返、速度留空（口径见
+[docs/api-speed.md](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/api-speed.md)）。
+
 ## 功能
 
 ### 全局切片（SliceBar）
@@ -168,7 +175,7 @@ KPI 行（各带与上一等长窗口的对比）、按模型堆叠的 Token 时
 
 | 键 | 作用 |
 | --- | --- |
-| `1` `2` `3` `4` | Overview / Sessions / Tools / Compare |
+| `1` `2` `3` `4` `5` | Overview / Sessions / Tools / Compare / Speed |
 | `/` 或 `⌘K` | 命令面板：跳转、切窗口、套用过滤、检索全库正文并跳会话 |
 | `r` | 触发一次增量物化 |
 | `esc` | 关闭面板 / 复位焦点 |
@@ -479,7 +486,7 @@ server/src/
     ├── analytics.ts      # 切片聚合：dashboard / toolDetail / facets
     └── catalog.ts        # 模型价目（缓存 + 手工覆盖）
 web/src/
-├── screens/              # Overview / Sessions / SessionDetail / Tools / Compare
+├── screens/              # Overview / Sessions / SessionDetail / Tools / Compare / Speed
 ├── components/
 │   ├── Chrome.tsx        # 顶栏、切片条、状态栏
 │   ├── DataTable.tsx     # 虚拟化表格（排序、树形展开）
@@ -497,6 +504,8 @@ web/src/
   实测证据、解析规则、标题旁路、单位与模型映射、验收门
 - [docs/source-scope.md](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/source-scope.md) — 数据源切换：
   作用域定位、页眉线框与像素账、各库契约、切片归属、验收门
+- [docs/api-speed.md](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/api-speed.md) — 每次 API 调用的
+  等待与输出速度：两源口径、写作段定义、直方图滚存、Speed 屏与验收门
 - [docs/backend-refactor.md](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/backend-refactor.md) — 2026-10 后端重构的接口变更明细
 - [docs/motion.md](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/motion.md) — 动效令牌、六个动词、交互对照与静态审计的规则
 - [docs/markdown-transcript.md](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/markdown-transcript.md) — transcript 的 Markdown 子集：
