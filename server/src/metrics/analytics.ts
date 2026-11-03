@@ -626,19 +626,31 @@ export interface SpeedRow {
   speedP50: number | null;
 }
 
-/** One day of one lane — the per-day lines on the Speed screen. */
+/** One time bucket of one lane — a row of the Speed screen's heatmap and a point on its
+ * focus band. Buckets are chosen the way every other axis chooses them; a bucket in which
+ * the lane ran nothing simply has no point. */
 export interface SpeedPoint {
-  day: number;
+  /** Bucket start, ms. Day/week buckets sit on local midnights; sub-day buckets on their
+   * own fixed-width boundary. */
+  at: number;
   provider: string;
   model: string;
   calls: number;
+  waitP25: number | null;
   waitP50: number | null;
+  waitP75: number | null;
+  speedP25: number | null;
   speedP50: number | null;
+  speedP75: number | null;
 }
 
 export interface SpeedResponse {
   rows: SpeedRow[];
   points: SpeedPoint[];
+  /** Every bucket start in the window, gaps included — the heatmap's column axis. */
+  axis: number[];
+  /** The unit the points were bucketed at, after the auto pick. */
+  gran: Granularity;
 }
 
 interface PerfAcc {
@@ -668,16 +680,29 @@ const laneKey = (provider: string, model: string): string => `${provider}\u0000$
  *
  * Whole days are answered from the day rollups (`roll_perf` / `roll_perf_day`), the cut
  * edge days from `turns`; a window with a project or agent filter reads raw throughout,
- * because the perf rollups do not carry those columns. Wait percentiles are histogram
- * quantiles on the ms ladder; speed uses the rate ladder, whose bins outlive the request.
+ * because the perf rollups do not carry those columns. Sub-day units never come from the
+ * rollups either — those store days — so they bucket `t.created` directly. Wait and rate
+ * percentiles are histogram quantiles on their ladders; the p25–p75 pair gives the focus
+ * band its spread without pretending the call-level distribution is symmetric.
  */
 export function speedOverview(db: DatabaseSync, slice: Slice): SpeedResponse {
-  const span = !slice.project && !slice.agent ? rollSpan(db, slice) : null;
-  const days = span ? perfDaySource(slice, span) : rawPerfDaySource(slice);
-  const bins = span ? perfBinsSource(slice, span) : rawPerfBinsSource(slice);
+  const { gran, from } = granularityOf(db, slice);
+  const subDay = gran === "5m" || gran === "hour";
+  const span = !subDay && !slice.project && !slice.agent ? rollSpan(db, slice) : null;
+  const calendar = gran === "month" || gran === "quarter" || gran === "year";
+  const rawKey = subDay
+    ? gran === "5m"
+      ? "(t.created - (t.created % 300000))"
+      : "(t.created - (t.created % 3600000))"
+    : bucketKeySql(gran);
+  const days = span ? perfDaySource(slice, span) : rawPerfDaySource(slice, rawKey);
+  const bins = span ? perfBinsSource(slice, span) : rawPerfBinsSource(slice, rawKey);
+
+  const starts = bucketStarts(from, slice.to, gran);
+  const place = bucketIndexer(gran, starts);
 
   type DayRow = {
-    day: number;
+    day: number | string;
     provider: string;
     model: string;
     calls: number;
@@ -688,16 +713,25 @@ export function speedOverview(db: DatabaseSync, slice: Slice): SpeedResponse {
   };
   const dayRows = db.prepare(days.sql).all(...(days.args as never[])) as unknown as DayRow[];
   const binRows = db.prepare(bins.sql).all(...(bins.args as never[])) as unknown as (BinRow & {
-    day: number;
+    day: number | string;
     provider: string;
     model: string;
     kind: string;
   })[];
 
+  // Rollup rows carry a day; raw rows already carry the bucket key the indexer expects.
+  const idxOf = (key: number | string): number => {
+    if (!span) return place(key);
+    const day = num(key);
+    return place(calendar ? calendarKey(day, gran) : day);
+  };
+
   const lanes = new Map<string, PerfAcc>();
-  const perDay = new Map<string, PerfAcc>();
+  const perBucket = new Map<string, PerfAcc>();
   for (const r of dayRows) {
     if (slice.model && r.model !== slice.model) continue;
+    const idx = idxOf(r.day);
+    if (idx < 0) continue;
     const key = laneKey(r.provider, r.model);
     const a = lanes.get(key) ?? perfAcc();
     const p = perfAcc();
@@ -708,10 +742,12 @@ export function speedOverview(db: DatabaseSync, slice: Slice): SpeedResponse {
     p.calls += num(r.calls);
     p.exactWaits += num(r.exact_waits);
     p.waitSum += num(r.wait_sum);
-    perDay.set(`${r.day}\u0000${key}`, p);
+    perBucket.set(`${idx}\u0000${key}`, p);
   }
   for (const r of binRows) {
     if (slice.model && r.model !== slice.model) continue;
+    const idx = idxOf(r.day);
+    if (idx < 0) continue;
     const kind = r.kind === "wait" ? "wait" : "speed";
     const bin = Number(r.bin) || 0;
     const n = num(r.n);
@@ -721,7 +757,7 @@ export function speedOverview(db: DatabaseSync, slice: Slice): SpeedResponse {
       if (kind === "wait") lane.waitTop = Math.max(lane.waitTop, bin);
       else lane.speedTop = Math.max(lane.speedTop, bin);
     }
-    const point = perDay.get(`${r.day}\u0000${laneKey(r.provider, r.model)}`);
+    const point = perBucket.get(`${idx}\u0000${laneKey(r.provider, r.model)}`);
     if (point) {
       point[kind].set(bin, (point[kind].get(bin) ?? 0) + n);
       if (kind === "wait") point.waitTop = Math.max(point.waitTop, bin);
@@ -746,22 +782,29 @@ export function speedOverview(db: DatabaseSync, slice: Slice): SpeedResponse {
   }
   rows.sort((x, y) => y.calls - x.calls);
 
+  const at = (h: Histogram, q: number, l: typeof ladder.ms | typeof ladder.rate, top: number) =>
+    h.size ? quantile(h, q, l, l.lower(top + 1)) : null;
+
   const points: SpeedPoint[] = [];
-  for (const [key, a] of perDay) {
-    const [dayStr, provider, model] = key.split("\u0000");
+  for (const [key, a] of perBucket) {
+    const [idxStr, provider, model] = key.split("\u0000");
     if (a.calls === 0) continue;
     points.push({
-      day: Number(dayStr),
+      at: starts[Number(idxStr)],
       provider,
       model,
       calls: a.calls,
-      waitP50: a.wait.size ? quantile(a.wait, 0.5, ladder.ms, ladder.ms.lower(a.waitTop + 1)) : null,
-      speedP50: a.speed.size ? quantile(a.speed, 0.5, ladder.rate, ladder.rate.lower(a.speedTop + 1)) : null,
+      waitP25: at(a.wait, 0.25, ladder.ms, a.waitTop),
+      waitP50: at(a.wait, 0.5, ladder.ms, a.waitTop),
+      waitP75: at(a.wait, 0.75, ladder.ms, a.waitTop),
+      speedP25: at(a.speed, 0.25, ladder.rate, a.speedTop),
+      speedP50: at(a.speed, 0.5, ladder.rate, a.speedTop),
+      speedP75: at(a.speed, 0.75, ladder.rate, a.speedTop),
     });
   }
-  points.sort((x, y) => x.day - y.day || y.calls - x.calls);
+  points.sort((x, y) => x.at - y.at || y.calls - x.calls);
 
-  return { rows, points };
+  return { rows, points, axis: starts, gran };
 }
 
 /** One point per session active in the slice — the scatter, the table and the picker. */

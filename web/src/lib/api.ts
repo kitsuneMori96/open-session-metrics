@@ -334,17 +334,26 @@ export interface SpeedRow {
 }
 
 export interface SpeedPoint {
-  day: number;
+  /** Bucket start, ms. Day/week buckets sit on local midnights. */
+  at: number;
   provider: string;
   model: string;
   calls: number;
+  waitP25: number | null;
   waitP50: number | null;
+  waitP75: number | null;
+  speedP25: number | null;
   speedP50: number | null;
+  speedP75: number | null;
 }
 
 export interface SpeedResponse {
   rows: SpeedRow[];
   points: SpeedPoint[];
+  /** Every bucket start in the window, gaps included — the heatmap's column axis. */
+  axis: number[];
+  /** The unit the server bucketed at, after resolving `auto`. */
+  gran: Granularity;
 }
 
 export interface Facets {
@@ -532,10 +541,15 @@ export const useAnalytics = (
   });
 
 /** Wait and output speed per API call, per provider × model — the Speed screen. */
-export const useSpeed = (win: WindowSpec, f: Facets0): UseQueryResult<SpeedResponse> =>
+export const useSpeed = (
+  win: WindowSpec,
+  f: Facets0,
+  gran: Granularity | null = null,
+): UseQueryResult<SpeedResponse> =>
   useQuery({
-    queryKey: ["speed", windowKey(win), facetKey(f)],
-    queryFn: ({ signal }) => get<SpeedResponse>(`/api/top/speed?${sliceQuery(sliceOf(win, f))}`, signal),
+    queryKey: ["speed", windowKey(win), facetKey(f), gran ?? "auto"],
+    queryFn: ({ signal }) =>
+      get<SpeedResponse>(`/api/top/speed?${sliceQuery(sliceOf(win, f, gran))}`, signal),
     placeholderData: keepPreviousData,
     staleTime: 20_000,
     refetchInterval: POLL_MS,

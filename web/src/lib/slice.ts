@@ -36,6 +36,9 @@ export interface SliceState {
   setPreset: (id: PresetId) => void;
   /** Commit an absolute window, the result of brushing a chart. */
   setWindow: (from: number, to: number) => void;
+  /** Commit a window and its axis unit together — a zoom sets both, and two calls in one
+   *  gesture would race each other for the same URL update. */
+  setView: (from: number, to: number, gran: Granularity | null) => void;
   /** `null` clears the facet. Setting a facet keeps the rest, so filters compose. */
   setFacet: (key: FacetKey, value: string | null) => void;
   clearFacets: () => void;
@@ -100,6 +103,18 @@ export function useSlice(): SliceState {
     [mutate],
   );
 
+  const setView = useCallback(
+    (from: number, to: number, g: Granularity | null) =>
+      mutate((next) => {
+        next.delete("range");
+        next.set("from", String(Math.round(from)));
+        next.set("to", String(Math.round(to)));
+        if (g) next.set("gran", g);
+        else next.delete("gran");
+      }),
+    [mutate],
+  );
+
   const setGran = useCallback(
     (g: Granularity | null) =>
       mutate((next) => {
@@ -148,6 +163,7 @@ export function useSlice(): SliceState {
     setGran,
     setPreset,
     setWindow,
+    setView,
     setFacet,
     clearFacets,
     reset,

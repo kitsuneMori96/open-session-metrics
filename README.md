@@ -112,9 +112,11 @@ KPI 行（各带与上一等长窗口的对比）、按模型堆叠的 Token 时
 
 ### Speed — 每次 API 调用的等待与输出速度
 
-按 provider × model 一行：调用数、精确等待占比、wait p50 / p90 / max、输出速度 p50，
-右侧是等待与速度的按天中位线。OpenCode 的等待是首 token 证据、速度是写作段吞吐；
-Qoder 单行落盘没有流式时间戳，等待是整轮往返、速度留空（口径见
+按 provider × model 一行：调用数、精确等待占比、wait p50 / p90、输出速度 p50；
+右侧是 lane × 时间桶的热力矩阵（颜色 = 桶中位数，空格 = 该桶没跑，不是 0），
+点一个格子就放大到那个桶，并展开该 lane 的 p25–p75 聚焦带与每桶调用数。
+OpenCode 的等待是首 token 证据、速度是写作段吞吐；Qoder 单行落盘没有流式时间戳，
+等待是整轮往返、速度留空（口径见
 [docs/api-speed.md](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/api-speed.md)）。
 
 ## 功能
