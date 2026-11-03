@@ -103,9 +103,27 @@ CREATE TABLE IF NOT EXISTS roll_tool_bin (
 
 /** The cell columns, in the order every rollup insert and read uses them. */
 const CELL_COLS = [
-  "session_id", "day", "project", "model", "agent", "turns", "input", "output", "reasoning",
-  "cache_read", "cache_write", "cost", "tools", "tool_errors", "additions", "deletions",
-  "write_lines", "win", "stopped", "first_created", "last_completed",
+  "session_id",
+  "day",
+  "project",
+  "model",
+  "agent",
+  "turns",
+  "input",
+  "output",
+  "reasoning",
+  "cache_read",
+  "cache_write",
+  "cost",
+  "tools",
+  "tool_errors",
+  "additions",
+  "deletions",
+  "write_lines",
+  "win",
+  "stopped",
+  "first_created",
+  "last_completed",
 ];
 
 const CELL_SELECT = `t.session_id, t.day, COALESCE(t.project,'—'), COALESCE(t.model,'unknown'), COALESCE(t.agent,'main'),
@@ -116,18 +134,22 @@ const CELL_SELECT = `t.session_id, t.day, COALESCE(t.project,'—'), COALESCE(t.
   SUM(CASE WHEN COALESCE(t.finish,'') <> '' AND t.finish <> 'stop' THEN 1 ELSE 0 END),
   MIN(t.created), MAX(COALESCE(t.completed, t.created))`;
 
-const CELL_GROUP = "GROUP BY t.session_id, t.day, COALESCE(t.project,'—'), COALESCE(t.model,'unknown'), COALESCE(t.agent,'main')";
+const CELL_GROUP =
+  "GROUP BY t.session_id, t.day, COALESCE(t.project,'—'), COALESCE(t.model,'unknown'), COALESCE(t.agent,'main')";
 
 const HOUR_SELECT = `t.day, t.hour, COALESCE(t.project,'—'), COALESCE(t.model,'unknown'), COALESCE(t.agent,'main'), COUNT(*)`;
-const HOUR_GROUP = "GROUP BY t.day, t.hour, COALESCE(t.project,'—'), COALESCE(t.model,'unknown'), COALESCE(t.agent,'main')";
+const HOUR_GROUP =
+  "GROUP BY t.day, t.hour, COALESCE(t.project,'—'), COALESCE(t.model,'unknown'), COALESCE(t.agent,'main')";
 
 const TOOL_SELECT = `t.day, tl.name, tl.session_id, COALESCE(t.project,'—'), COALESCE(t.model,'unknown'), COALESCE(t.agent,'main'),
   COUNT(*), SUM(CASE WHEN tl.status = 'error' THEN 1 ELSE 0 END),
   SUM(COALESCE(tl.dur_ms,0)), MAX(COALESCE(tl.dur_ms,0))`;
-const TOOL_GROUP = "GROUP BY tl.name, t.day, tl.session_id, COALESCE(t.project,'—'), COALESCE(t.model,'unknown'), COALESCE(t.agent,'main')";
+const TOOL_GROUP =
+  "GROUP BY tl.name, t.day, tl.session_id, COALESCE(t.project,'—'), COALESCE(t.model,'unknown'), COALESCE(t.agent,'main')";
 const TOOL_FROM = "FROM tools tl JOIN turns t ON t.id = tl.turn_id WHERE t.role = 'assistant'";
 
-const DROP = "DROP TABLE IF EXISTS roll_cell; DROP TABLE IF EXISTS roll_hour; DROP TABLE IF EXISTS roll_tool; DROP TABLE IF EXISTS roll_tool_bin;";
+const DROP =
+  "DROP TABLE IF EXISTS roll_cell; DROP TABLE IF EXISTS roll_hour; DROP TABLE IF EXISTS roll_tool; DROP TABLE IF EXISTS roll_tool_bin;";
 
 const ready = new WeakSet<DatabaseSync>();
 
@@ -162,10 +184,10 @@ export function rebuildAll(db: DatabaseSync): void {
   try {
     db.exec("DELETE FROM roll_cell; DELETE FROM roll_hour; DELETE FROM roll_tool; DELETE FROM roll_tool_bin");
     db.exec(
-      `INSERT INTO roll_cell(${CELL_COLS.join(",")}) SELECT ${CELL_SELECT} FROM turns t WHERE t.role = 'assistant' ${CELL_GROUP}`
+      `INSERT INTO roll_cell(${CELL_COLS.join(",")}) SELECT ${CELL_SELECT} FROM turns t WHERE t.role = 'assistant' ${CELL_GROUP}`,
     );
     db.exec(
-      `INSERT INTO roll_hour(day,hour,project,model,agent,turns) SELECT ${HOUR_SELECT} FROM turns t WHERE t.role = 'assistant' ${HOUR_GROUP}`
+      `INSERT INTO roll_hour(day,hour,project,model,agent,turns) SELECT ${HOUR_SELECT} FROM turns t WHERE t.role = 'assistant' ${HOUR_GROUP}`,
     );
     db.exec(`INSERT INTO roll_tool(day,name,session_id,project,model,agent,calls,errors,ms_sum,ms_max)
              SELECT ${TOOL_SELECT} ${TOOL_FROM} ${TOOL_GROUP}`);
@@ -174,7 +196,7 @@ export function rebuildAll(db: DatabaseSync): void {
        SELECT t.day, tl.name, ${ladder.ms.key("COALESCE(tl.dur_ms,0)")},
               COALESCE(t.project,'—'), COALESCE(t.model,'unknown'), COALESCE(t.agent,'main'), COUNT(*)
        ${TOOL_FROM}
-       GROUP BY 1,2,3,4,5,6`
+       GROUP BY 1,2,3,4,5,6`,
     );
     setMeta(db, "rollVersion", ROLL_VERSION);
     db.exec("COMMIT");
@@ -197,12 +219,7 @@ export function rebuildAll(db: DatabaseSync): void {
  * session column and is cheapest to rewrite a day at a time (the old days are passed in
  * so a session whose turns moved off a day does not leave that day's counts behind).
  */
-export function refreshRollups(
-  db: DatabaseSync,
-  sessionIds: string[],
-  days: number[],
-  full = false
-): void {
+export function refreshRollups(db: DatabaseSync, sessionIds: string[], days: number[], full = false): void {
   if (!hasTurns(db)) return;
   if (full) {
     db.exec("DELETE FROM roll_cell; DELETE FROM roll_hour; DELETE FROM roll_tool; DELETE FROM roll_tool_bin");
@@ -212,13 +229,13 @@ export function refreshRollups(
     db.prepare(`DELETE FROM roll_cell WHERE session_id IN (${ph})`).run(...sessionIds);
     db.prepare(
       `INSERT INTO roll_cell(${CELL_COLS.join(",")})
-       SELECT ${CELL_SELECT} FROM turns t WHERE t.role = 'assistant' AND t.session_id IN (${ph}) ${CELL_GROUP}`
+       SELECT ${CELL_SELECT} FROM turns t WHERE t.role = 'assistant' AND t.session_id IN (${ph}) ${CELL_GROUP}`,
     ).run(...sessionIds);
     db.prepare(`DELETE FROM roll_tool WHERE session_id IN (${ph})`).run(...sessionIds);
-    db.prepare(`INSERT INTO roll_tool(day,name,session_id,project,model,agent,calls,errors,ms_sum,ms_max)
-       SELECT ${TOOL_SELECT} ${TOOL_FROM} AND tl.session_id IN (${ph}) ${TOOL_GROUP}`).run(
-      ...sessionIds
-    );
+    db.prepare(
+      `INSERT INTO roll_tool(day,name,session_id,project,model,agent,calls,errors,ms_sum,ms_max)
+       SELECT ${TOOL_SELECT} ${TOOL_FROM} AND tl.session_id IN (${ph}) ${TOOL_GROUP}`,
+    ).run(...sessionIds);
     // The latency bins are rewritten a day at a time below: a call carries its turn's
     // day, so every day this build wrote is already in `days`.
   }
@@ -227,7 +244,7 @@ export function refreshRollups(
     db.prepare(`DELETE FROM roll_hour WHERE day IN (${ph})`).run(...days);
     db.prepare(
       `INSERT INTO roll_hour(day,hour,project,model,agent,turns)
-       SELECT ${HOUR_SELECT} FROM turns t WHERE t.role = 'assistant' AND t.day IN (${ph}) ${HOUR_GROUP}`
+       SELECT ${HOUR_SELECT} FROM turns t WHERE t.role = 'assistant' AND t.day IN (${ph}) ${HOUR_GROUP}`,
     ).run(...days);
     db.prepare(`DELETE FROM roll_tool_bin WHERE day IN (${ph})`).run(...days);
     db.prepare(
@@ -235,7 +252,7 @@ export function refreshRollups(
        SELECT t.day, tl.name, ${ladder.ms.key("COALESCE(tl.dur_ms,0)")},
               COALESCE(t.project,'—'), COALESCE(t.model,'unknown'), COALESCE(t.agent,'main'), COUNT(*)
        ${TOOL_FROM} AND t.day IN (${ph})
-       GROUP BY 1,2,3,4,5,6`
+       GROUP BY 1,2,3,4,5,6`,
     ).run(...days);
   }
   setMeta(db, "rollVersion", ROLL_VERSION);
@@ -322,7 +339,7 @@ function turnFacet(slice: { project: string | null; model: string | null; agent:
 /** The two partial days at the window edges, read from `turns` because they are cut. */
 export function edgeSql(
   slice: { from: number; to: number; project: string | null; model: string | null; agent: string | null },
-  span: RollSpan
+  span: RollSpan,
 ): Sql {
   const f = turnFacet(slice);
   return {

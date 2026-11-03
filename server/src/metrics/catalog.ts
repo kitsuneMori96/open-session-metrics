@@ -123,7 +123,10 @@ export async function loadCatalog(wanted: Set<string>): Promise<Catalog> {
       const res = await fetch("https://models.dev/api.json", { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`models.dev HTTP ${res.status}`);
       fresh = fromModelsDev(await res.json(), wanted);
-      writeFileSync(MODEL_CATALOG, JSON.stringify({ fetchedAt: Date.now(), models: { ...cache.models, ...fresh } }));
+      writeFileSync(
+        MODEL_CATALOG,
+        JSON.stringify({ fetchedAt: Date.now(), models: { ...cache.models, ...fresh } }),
+      );
     } catch (err) {
       if (!cache.fetchedAt) {
         writeFileSync(MODEL_CATALOG, JSON.stringify({ fetchedAt: Date.now(), models: cache.models }));
@@ -136,7 +139,9 @@ export async function loadCatalog(wanted: Set<string>): Promise<Catalog> {
   for (const key of wanted) {
     // cached entries may predate the `source` field — normalise before use
     const cached = cache.models[key];
-    merged[key] = fresh[key] ?? (cached ? { ...fallbackEntry(key), ...cached, source: cached.source ?? "cache" } : fallbackEntry(key));
+    merged[key] =
+      fresh[key] ??
+      (cached ? { ...fallbackEntry(key), ...cached, source: cached.source ?? "cache" } : fallbackEntry(key));
   }
   for (const [key, patch] of Object.entries(overrides)) {
     if (!wanted.has(key)) continue;

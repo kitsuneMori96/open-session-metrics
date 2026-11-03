@@ -1,5 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
-import { bucketIndexer, bucketKeySql, bucketStart, bucketStarts, calendarKey, pickGranularity, type Granularity } from "./buckets";
+import {
+  bucketIndexer,
+  bucketKeySql,
+  bucketStart,
+  bucketStarts,
+  calendarKey,
+  pickGranularity,
+  type Granularity,
+} from "./buckets";
 import { histogramOf, histMedian, ladder, quantile, type BinRow, type Histogram } from "./histogram";
 import {
   cellSource,
@@ -72,8 +80,20 @@ export interface Bucket extends Totals {
 }
 
 const ZERO: Totals = {
-  input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0, cost: 0,
-  turns: 0, tools: 0, errors: 0, sessions: 0, additions: 0, deletions: 0, writeLines: 0,
+  input: 0,
+  output: 0,
+  reasoning: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  total: 0,
+  cost: 0,
+  turns: 0,
+  tools: 0,
+  errors: 0,
+  sessions: 0,
+  additions: 0,
+  deletions: 0,
+  writeLines: 0,
 };
 
 const num = (v: unknown): number => {
@@ -103,10 +123,12 @@ function turnWhere(slice: Slice): { sql: string; args: (string | number)[] } {
   return { sql: parts.join(" AND "), args };
 }
 
-function granularityOf(db: DatabaseSync, slice: Slice): { gran: Granularity; from: number; requested: Granularity | null } {
-  const row = db
-    .prepare("SELECT MIN(created) a FROM turns WHERE role='assistant'")
-    .get() as { a: number | null } | undefined;
+function granularityOf(
+  db: DatabaseSync,
+  slice: Slice,
+): { gran: Granularity; from: number; requested: Granularity | null } {
+  const row = db.prepare("SELECT MIN(created) a FROM turns WHERE role='assistant'").get() as
+    { a: number | null } | undefined;
   const dataFrom = num(row?.a) || slice.to;
   const from = slice.from > 0 ? slice.from : dataFrom;
   const requested = slice.gran ?? null;
@@ -133,7 +155,7 @@ function totalsOf(db: DatabaseSync, slice: Slice): Totals {
               SUM(turns) calls, SUM(tools) tools, SUM(tool_errors) errors,
               COUNT(DISTINCT session_id) sessions,
               SUM(additions) adds, SUM(deletions) dels, SUM(write_lines) writes
-         FROM (${src.sql})`
+         FROM (${src.sql})`,
     )
     .get(...(src.args as never[])) as Record<string, unknown> | undefined;
 
@@ -206,7 +228,7 @@ function efficiencyOf(db: DatabaseSync, slice: Slice, totals: Totals): Efficienc
        UNION ALL
        SELECT 'peak', 0, MAX(fill) FROM x
        UNION ALL
-       SELECT 'stopped', 0, SUM(CASE WHEN finish <> '' AND finish <> 'stop' THEN 1 ELSE 0 END) FROM x`
+       SELECT 'stopped', 0, SUM(CASE WHEN finish <> '' AND finish <> 'stop' THEN 1 ELSE 0 END) FROM x`,
     )
     .all(...w.args) as unknown as (BinRow & { kind: string })[];
 
@@ -243,9 +265,18 @@ function efficiencyOf(db: DatabaseSync, slice: Slice, totals: Totals): Efficienc
 interface Cell {
   k: string | number;
   model: string;
-  i: number; o: number; r: number; cr: number; cw: number;
-  cost: number; calls: number; tools: number; errors: number;
-  adds: number; dels: number; writes: number;
+  i: number;
+  o: number;
+  r: number;
+  cr: number;
+  cw: number;
+  cost: number;
+  calls: number;
+  tools: number;
+  errors: number;
+  adds: number;
+  dels: number;
+  writes: number;
 }
 
 export interface Series {
@@ -291,7 +322,7 @@ function seriesOf(db: DatabaseSync, slice: Slice, gran: Granularity): Series {
               SUM(turns) calls, SUM(tools) tools, SUM(tool_errors) errors,
               SUM(additions) adds, SUM(deletions) dels, SUM(write_lines) writes
        FROM (${src.sql}) t
-       GROUP BY k, model`
+       GROUP BY k, model`,
     )
     .all(...(src.args as never[])) as unknown as Cell[];
 
@@ -395,7 +426,7 @@ function modelsOf(db: DatabaseSync, slice: Slice): ModelRow[] {
               SUM(input+output+cache_read+cache_write) tokens,
               SUM(input) input, SUM(output) output, SUM(cost) cost,
               COUNT(DISTINCT session_id) sessions
-       FROM (${src.sql}) t GROUP BY model ORDER BY tokens DESC`
+       FROM (${src.sql}) t GROUP BY model ORDER BY tokens DESC`,
     )
     .all(...(src.args as never[])) as Record<string, unknown>[];
   return rows.map((r) => ({
@@ -427,7 +458,7 @@ function projectsOf(db: DatabaseSync, slice: Slice): ProjectRow[] {
       `SELECT project, COUNT(DISTINCT session_id) sessions, SUM(turns) turns,
               SUM(input+output+cache_read+cache_write) tokens, SUM(cost) cost,
               SUM(tools) tools, SUM(tool_errors) errors
-       FROM (${src.sql}) t GROUP BY project ORDER BY tokens DESC`
+       FROM (${src.sql}) t GROUP BY project ORDER BY tokens DESC`,
     )
     .all(...(src.args as never[])) as Record<string, unknown>[];
   return rows.map((r) => ({
@@ -465,7 +496,7 @@ function agentsOf(db: DatabaseSync, slice: Slice): AgentRow[] {
               SUM(input+output+cache_read+cache_write) tokens, SUM(cost) cost,
               COUNT(DISTINCT session_id) sessions,
               SUM(tools) tools, SUM(tool_errors) errors
-       FROM (${src.sql}) t GROUP BY agent ORDER BY tokens DESC`
+       FROM (${src.sql}) t GROUP BY agent ORDER BY tokens DESC`,
     )
     .all(...(src.args as never[])) as Record<string, unknown>[];
   return rows.map((r) => ({
@@ -511,7 +542,7 @@ function toolsOf(db: DatabaseSync, slice: Slice): ToolRow[] {
     .prepare(
       `SELECT name, SUM(calls) calls, SUM(errors) errors, SUM(ms) ms, MAX(mx) maxMs,
               COUNT(DISTINCT session_id) sessions, COUNT(DISTINCT agent) agents
-       FROM (${sums.sql}) GROUP BY name`
+       FROM (${sums.sql}) GROUP BY name`,
     )
     .all(...(sums.args as never[])) as unknown as {
     name: string;
@@ -725,13 +756,34 @@ function sessionsOf(db: DatabaseSync, slice: Slice): SessionRow[] {
 }
 
 export type SessionOrder =
-  | "updated" | "created" | "tokens" | "cost" | "turns"
-  | "tools" | "errors" | "span" | "ctx" | "title" | "project" | "model" | "agent";
+  | "updated"
+  | "created"
+  | "tokens"
+  | "cost"
+  | "turns"
+  | "tools"
+  | "errors"
+  | "span"
+  | "ctx"
+  | "title"
+  | "project"
+  | "model"
+  | "agent";
 
 const SESSION_ORDER_COLUMN: Record<SessionOrder, string> = {
-  updated: "updated", created: "created", tokens: "tokens", cost: "cost",
-  turns: "turns", tools: "tools", errors: "errors", span: "span", ctx: "ctx",
-  title: "title", project: "project", model: "model", agent: "agent",
+  updated: "updated",
+  created: "created",
+  tokens: "tokens",
+  cost: "cost",
+  turns: "turns",
+  tools: "tools",
+  errors: "errors",
+  span: "span",
+  ctx: "ctx",
+  title: "title",
+  project: "project",
+  model: "model",
+  agent: "agent",
 };
 
 export const SESSION_ORDERS = Object.keys(SESSION_ORDER_COLUMN) as SessionOrder[];
@@ -766,7 +818,10 @@ export const encodeCursor = (value: { v: unknown; id: string }): string =>
 const decodeCursor = (raw: string | null | undefined): { v: unknown; id: string } | null => {
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as { v?: unknown; id?: unknown };
+    const parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as {
+      v?: unknown;
+      id?: unknown;
+    };
     if (parsed.id == null) return null;
     return { v: parsed.v ?? 0, id: String(parsed.id) };
   } catch {
@@ -796,7 +851,7 @@ export function sessionsPage(
     dir?: "asc" | "desc";
     limit?: number;
     cursor?: string | null;
-  } = {}
+  } = {},
 ): SessionPage {
   const agg = sessionAgg(db, slice);
   const q = (opts.q ?? "").trim();
@@ -860,7 +915,7 @@ export function sessionsPage(
               (SELECT SUM(errors) FROM matched) m_errors,
               (SELECT COUNT(*) FROM matched) m_sessions
          FROM agg a JOIN down d ON d.id = a.id
-         ORDER BY ${order} ${direction}, a.id ${direction}`
+         ORDER BY ${order} ${direction}, a.id ${direction}`,
     )
     .all(...args, ...cursorArgs, limit + 1) as Record<string, unknown>[];
 
@@ -875,7 +930,7 @@ export function sessionsPage(
     // …and its subtree has to go with it, or the page would quietly carry one root more
     // than the caller asked for. Rows are flat, so walk the parent links until stable.
     const drop = new Set<string>([cut]);
-    for (let grew = true; grew; ) {
+    for (let grew = true; grew;) {
       grew = false;
       for (const r of rows) {
         const id = String(r.id);
@@ -928,12 +983,11 @@ export function sessionContext(db: DatabaseSync, slice: Slice, id: string): Sess
        SELECT a.* FROM agg a
         WHERE a.id = ? OR a.id IN (SELECT id FROM up)
            OR a.parent = ? OR a.parent = (SELECT parent FROM focus)
-        ORDER BY updated DESC`
+        ORDER BY updated DESC`,
     )
     .all(...(agg.args as never[]), id, id, id) as Record<string, unknown>[];
   return toSessionRows(rows);
 }
-
 
 /* ------------------------------------------------------------------ *
  * Public payloads
@@ -1083,7 +1137,7 @@ export function toolDetail(db: DatabaseSync, raw: Slice, name: string): ToolDeta
               COALESCE(tl.additions,0) adds, COALESCE(tl.deletions,0) dels,
               COALESCE(tl.files,0) files, COALESCE(tl.output_chars,0) chars
        FROM tools tl JOIN turns t ON t.id = tl.turn_id
-       WHERE ${w.sql} AND tl.name = ?`
+       WHERE ${w.sql} AND tl.name = ?`,
     )
     .all(...args) as Record<string, unknown>[];
 
@@ -1094,7 +1148,9 @@ export function toolDetail(db: DatabaseSync, raw: Slice, name: string): ToolDeta
   const place = bucketIndexer(gran, starts);
   const idx = (ts: number) => {
     const start = bucketStart(ts, gran);
-    const i = place(gran === "month" || gran === "quarter" || gran === "year" ? calendarKey(start, gran) : start);
+    const i = place(
+      gran === "month" || gran === "quarter" || gran === "year" ? calendarKey(start, gran) : start,
+    );
     return i < 0 ? 0 : i;
   };
 
@@ -1148,11 +1204,20 @@ export function toolDetail(db: DatabaseSync, raw: Slice, name: string): ToolDeta
       const key = errorKey(body);
       const s = signatures.get(key);
       if (s) s.count++;
-      else signatures.set(key, { message: body.split("\n")[0].slice(0, 160), count: 1, sample: body.slice(0, 400) });
+      else
+        signatures.set(key, {
+          message: body.split("\n")[0].slice(0, 160),
+          count: 1,
+          sample: body.slice(0, 400),
+        });
     }
 
     if (isError && String(r.error) && recentErrors.length < 12) {
-      recentErrors.push({ at: num(r.started), session: String(r.session), error: String(r.error).slice(0, 400) });
+      recentErrors.push({
+        at: num(r.started),
+        session: String(r.session),
+        error: String(r.error).slice(0, 400),
+      });
     }
   }
   for (const b of buckets) b.avgMs = b.calls > 0 ? b.totalMs / b.calls : 0;
@@ -1202,7 +1267,7 @@ export function facets(db: DatabaseSync): Facets {
       `SELECT COALESCE(s.project,'—') project, COUNT(*) sessions,
               SUM(COALESCE(s.t_input,0)+COALESCE(s.t_output,0)+COALESCE(s.t_cache_read,0)+COALESCE(s.t_cache_write,0)) tokens,
               SUM(COALESCE(s.cost,0)) cost, MAX(COALESCE(s.updated,0)) updated
-       FROM sessions s GROUP BY COALESCE(s.project,'—') ORDER BY sessions DESC`
+       FROM sessions s GROUP BY COALESCE(s.project,'—') ORDER BY sessions DESC`,
     )
     .all() as Record<string, unknown>[];
   // Turns carry the bare model id (`deepseek-v4-flash-free`); the `models` table keys on
@@ -1212,7 +1277,7 @@ export function facets(db: DatabaseSync): Facets {
     .prepare(
       `SELECT COALESCE(t.model,'unknown') id, COUNT(*) calls
        FROM turns t WHERE t.role='assistant'
-       GROUP BY COALESCE(t.model,'unknown') ORDER BY calls DESC`
+       GROUP BY COALESCE(t.model,'unknown') ORDER BY calls DESC`,
     )
     .all() as Record<string, unknown>[];
   const catalogue = new Map<string, string>();
@@ -1230,12 +1295,12 @@ export function facets(db: DatabaseSync): Facets {
   const agents = db
     .prepare(
       `SELECT COALESCE(agent,'main') agent, COUNT(*) calls FROM turns WHERE role='assistant'
-       GROUP BY COALESCE(agent,'main') ORDER BY calls DESC`
+       GROUP BY COALESCE(agent,'main') ORDER BY calls DESC`,
     )
     .all() as Record<string, unknown>[];
-  const extent = db.prepare("SELECT MIN(created) a, MAX(created) b FROM turns WHERE role='assistant'").get() as
-    | { a: number | null; b: number | null }
-    | undefined;
+  const extent = db
+    .prepare("SELECT MIN(created) a, MAX(created) b FROM turns WHERE role='assistant'")
+    .get() as { a: number | null; b: number | null } | undefined;
 
   // The tool list rides along so the search palette can offer every tool as a target
   // without a second round trip.
@@ -1261,7 +1326,9 @@ export function facets(db: DatabaseSync): Facets {
     extent: { from: num(extent?.a), to: num(extent?.b) || Date.now() },
     counts: {
       sessions: num((db.prepare("SELECT COUNT(*) c FROM sessions").get() as { c: number })?.c),
-      turns: num((db.prepare("SELECT COUNT(*) c FROM turns WHERE role='assistant'").get() as { c: number })?.c),
+      turns: num(
+        (db.prepare("SELECT COUNT(*) c FROM turns WHERE role='assistant'").get() as { c: number })?.c,
+      ),
       tools: num((db.prepare("SELECT COUNT(*) c FROM tools").get() as { c: number })?.c),
       parts: num((db.prepare("SELECT COUNT(*) c FROM parts").get() as { c: number })?.c),
     },

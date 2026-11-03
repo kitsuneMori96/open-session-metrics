@@ -1,0 +1,9 @@
+node_modules
+dist
+.data
+pnpm-lock.yaml
+server/dist
+web/dist
+# Prettier aligns markdown tables by character count, which is width-blind for
+# CJK columns; docs are hand-wrapped on purpose.
+*.md

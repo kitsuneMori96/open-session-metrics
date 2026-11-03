@@ -59,14 +59,17 @@ export function Figure({
       <div ref={plot} className="relative" style={{ height }}>
         <ParentSize debounceTime={0}>
           {({ width, height: h }) =>
-            width > 0 && h > 0 ? (
-              children({
-                width,
-                height: h,
-                margin,
-                inner: { width: Math.max(10, width - margin.left - margin.right), height: Math.max(10, h - margin.top - margin.bottom - 6) },
-              })
-            ) : null
+            width > 0 && h > 0
+              ? children({
+                  width,
+                  height: h,
+                  margin,
+                  inner: {
+                    width: Math.max(10, width - margin.left - margin.right),
+                    height: Math.max(10, h - margin.top - margin.bottom - 6),
+                  },
+                })
+              : null
           }
         </ParentSize>
       </div>
@@ -197,7 +200,12 @@ export function Tip({ tip }: { tip: TipState | null }) {
   if (!tip) return null;
   return (
     <>
-      <span ref={anchor} aria-hidden className="absolute" style={{ left: tip.x, top: tip.y, width: 0, height: 0 }} />
+      <span
+        ref={anchor}
+        aria-hidden
+        className="absolute"
+        style={{ left: tip.x, top: tip.y, width: 0, height: 0 }}
+      />
       {createPortal(
         <div
           ref={box}
@@ -211,7 +219,7 @@ export function Tip({ tip }: { tip: TipState | null }) {
         >
           {tip.node}
         </div>,
-        document.body
+        document.body,
       )}
     </>
   );
@@ -267,7 +275,10 @@ export function Legend({
             key={item.key}
             type="button"
             onClick={onToggle ? () => onToggle(item.key) : undefined}
-            className={clsx("flex items-center gap-1 font-mono text-[9px] tracking-[0.06em]", onToggle && "cursor-pointer")}
+            className={clsx(
+              "flex items-center gap-1 font-mono text-[9px] tracking-[0.06em]",
+              onToggle && "cursor-pointer",
+            )}
             style={{ color: on ? "var(--color-ink-soft)" : "var(--color-ink-faint)", opacity: on ? 1 : 0.55 }}
             title={onToggle ? "toggle series" : undefined}
           >
@@ -285,11 +296,29 @@ export function Legend({
  * ------------------------------------------------------------------ */
 
 /** Evenly spaced vertical hairlines; the only grid a chart in this theme gets. */
-export function Rows({ ticks, y, left, width }: { ticks: number[]; y: (v: number) => number; left: number; width: number }) {
+export function Rows({
+  ticks,
+  y,
+  left,
+  width,
+}: {
+  ticks: number[];
+  y: (v: number) => number;
+  left: number;
+  width: number;
+}) {
   return (
     <g>
       {ticks.map((t) => (
-        <line key={t} x1={left} x2={left + width} y1={y(t)} y2={y(t)} stroke="var(--chart-grid)" strokeWidth={1} />
+        <line
+          key={t}
+          x1={left}
+          x2={left + width}
+          y1={y(t)}
+          y2={y(t)}
+          stroke="var(--chart-grid)"
+          strokeWidth={1}
+        />
       ))}
     </g>
   );

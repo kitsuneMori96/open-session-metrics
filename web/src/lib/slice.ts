@@ -60,7 +60,7 @@ export function useSlice(): SliceState {
 
   const facets = useMemo<Facets0>(
     () => ({ project: params.get("project"), model: params.get("model"), agent: params.get("agent") }),
-    [params]
+    [params],
   );
 
   const gran = useMemo(() => granOf(params.get("gran")), [params]);
@@ -73,20 +73,21 @@ export function useSlice(): SliceState {
           fn(next);
           return next;
         },
-        { replace: true }
+        { replace: true },
       );
     },
-    [setParams]
+    [setParams],
   );
 
   const setPreset = useCallback(
-    (id: PresetId) => mutate((next) => {
-      next.delete("from");
-      next.delete("to");
-      if (id === DEFAULT_PRESET) next.delete("range");
-      else next.set("range", id);
-    }),
-    [mutate]
+    (id: PresetId) =>
+      mutate((next) => {
+        next.delete("from");
+        next.delete("to");
+        if (id === DEFAULT_PRESET) next.delete("range");
+        else next.set("range", id);
+      }),
+    [mutate],
   );
 
   const setWindow = useCallback(
@@ -96,7 +97,7 @@ export function useSlice(): SliceState {
         next.set("from", String(Math.round(from)));
         next.set("to", String(Math.round(to)));
       }),
-    [mutate]
+    [mutate],
   );
 
   const setGran = useCallback(
@@ -105,7 +106,7 @@ export function useSlice(): SliceState {
         if (g) next.set("gran", g);
         else next.delete("gran");
       }),
-    [mutate]
+    [mutate],
   );
 
   const setFacet = useCallback(
@@ -114,23 +115,24 @@ export function useSlice(): SliceState {
         if (value === null) next.delete(key);
         else next.set(key, value);
       }),
-    [mutate]
+    [mutate],
   );
 
   const clearFacets = useCallback(
     () => mutate((next) => FACET_KEYS.forEach((k) => next.delete(k))),
-    [mutate]
+    [mutate],
   );
 
   const reset = useCallback(
-    () => mutate((next) => {
-      FACET_KEYS.forEach((k) => next.delete(k));
-      next.delete("from");
-      next.delete("to");
-      next.delete("range");
-      next.delete("gran");
-    }),
-    [mutate]
+    () =>
+      mutate((next) => {
+        FACET_KEYS.forEach((k) => next.delete(k));
+        next.delete("from");
+        next.delete("to");
+        next.delete("range");
+        next.delete("gran");
+      }),
+    [mutate],
   );
 
   const slice = useMemo(() => sliceOf(window, facets, gran), [window, facets, gran]);
@@ -140,7 +142,8 @@ export function useSlice(): SliceState {
     facets,
     slice,
     label: windowLabel(window),
-    filtered: FACET_KEYS.some((k) => facets[k] !== null) || window.kind === "custom" || window.id !== DEFAULT_PRESET,
+    filtered:
+      FACET_KEYS.some((k) => facets[k] !== null) || window.kind === "custom" || window.id !== DEFAULT_PRESET,
     gran,
     setGran,
     setPreset,
@@ -152,7 +155,8 @@ export function useSlice(): SliceState {
 }
 
 /** The same state, readable from any component under the router. */
-export const windowTimes = (w: WindowSpec, now = Date.now()): { from: number; to: number } => resolveWindow(w, now);
+export const windowTimes = (w: WindowSpec, now = Date.now()): { from: number; to: number } =>
+  resolveWindow(w, now);
 
 /**
  * Only these travel between screens. The window is relative to now, so it has to stay
@@ -183,6 +187,6 @@ export function useSliceHref(): (to: string) => string {
       const query = next.toString();
       return query ? `${path}?${query}` : path;
     },
-    [params]
+    [params],
   );
 }

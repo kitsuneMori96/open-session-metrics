@@ -91,7 +91,13 @@ for (const full of files) {
 
 // The safety net has to be present, or all of the above is decoration.
 const motionCss = readFileSync(join(SRC, MOTION_CSS), "utf8");
-for (const needed of ["prefers-reduced-motion", "--motion-fast", "--motion-base", "--motion-slow", "--ease-mech"]) {
+for (const needed of [
+  "prefers-reduced-motion",
+  "--motion-fast",
+  "--motion-base",
+  "--motion-slow",
+  "--ease-mech",
+]) {
   if (!motionCss.includes(needed)) add(MOTION_CSS, 0, `missing ${needed}`);
 }
 const indexCss = readFileSync(join(SRC, "index.css"), "utf8");

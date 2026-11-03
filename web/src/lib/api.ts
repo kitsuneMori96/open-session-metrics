@@ -43,7 +43,15 @@ export interface Slice {
  * reachable, but asking for it over a decade answers monthly instead of a million columns.
  */
 export type Granularity = "5m" | "hour" | "day" | "week" | "month" | "quarter" | "year";
-export const GRANULARITIES: readonly Granularity[] = ["5m", "hour", "day", "week", "month", "quarter", "year"];
+export const GRANULARITIES: readonly Granularity[] = [
+  "5m",
+  "hour",
+  "day",
+  "week",
+  "month",
+  "quarter",
+  "year",
+];
 
 export const DAY = 86_400_000;
 
@@ -233,8 +241,19 @@ export interface SessionRow {
 
 /** Columns the session grid can be sorted by, server-side. */
 export type SessionOrder =
-  | "updated" | "created" | "tokens" | "cost" | "turns"
-  | "tools" | "errors" | "span" | "ctx" | "title" | "project" | "model" | "agent";
+  | "updated"
+  | "created"
+  | "tokens"
+  | "cost"
+  | "turns"
+  | "tools"
+  | "errors"
+  | "span"
+  | "ctx"
+  | "title"
+  | "project"
+  | "model"
+  | "agent";
 
 export interface SessionTotals {
   sessions: number;
@@ -440,16 +459,29 @@ export interface Facets0 {
 const facetKey = (f: Facets0): string => `${f.project ?? ""}|${f.model ?? ""}|${f.agent ?? ""}`;
 
 /** Resolve a symbolic window plus the cross-filter into a concrete slice. */
-export const sliceOf = (win: WindowSpec, f: Facets0, gran: Granularity | null = null, now = Date.now()): Slice => {
+export const sliceOf = (
+  win: WindowSpec,
+  f: Facets0,
+  gran: Granularity | null = null,
+  now = Date.now(),
+): Slice => {
   const { from, to } = resolveWindow(win, now);
   return { from, to, ...f, gran };
 };
 
 export const useStatus = () =>
-  useQuery({ queryKey: ["status"], queryFn: ({ signal }) => get<Status>("/api/status", signal), refetchInterval: 30_000 });
+  useQuery({
+    queryKey: ["status"],
+    queryFn: ({ signal }) => get<Status>("/api/status", signal),
+    refetchInterval: 30_000,
+  });
 
 export const useFacets = () =>
-  useQuery({ queryKey: ["facets"], queryFn: ({ signal }) => get<Facets>("/api/top/facets", signal), staleTime: POLL_MS });
+  useQuery({
+    queryKey: ["facets"],
+    queryFn: ({ signal }) => get<Facets>("/api/top/facets", signal),
+    staleTime: POLL_MS,
+  });
 
 /**
  * The window stays symbolic in the key, so a preset does not re-key the cache on
@@ -458,7 +490,7 @@ export const useFacets = () =>
 export const useAnalytics = (
   win: WindowSpec,
   f: Facets0,
-  gran: Granularity | null = null
+  gran: Granularity | null = null,
 ): UseQueryResult<Dashboard> =>
   useQuery({
     queryKey: ["analytics", windowKey(win), facetKey(f), gran ?? "auto"],
@@ -473,12 +505,15 @@ export const useToolDetail = (
   win: WindowSpec,
   f: Facets0,
   name: string | null,
-  gran: Granularity | null = null
+  gran: Granularity | null = null,
 ) =>
   useQuery({
     queryKey: ["tool", name, windowKey(win), facetKey(f), gran ?? "auto"],
     queryFn: ({ signal }) =>
-      get<ToolDetail>(`/api/top/tool?name=${encodeURIComponent(name!)}&${sliceQuery(sliceOf(win, f, gran))}`, signal),
+      get<ToolDetail>(
+        `/api/top/tool?name=${encodeURIComponent(name!)}&${sliceQuery(sliceOf(win, f, gran))}`,
+        signal,
+      ),
     enabled: !!name,
     placeholderData: keepPreviousData,
     staleTime: 20_000,
@@ -494,7 +529,7 @@ export const useToolDetail = (
 export const useSessionPages = (
   win: WindowSpec,
   f: Facets0,
-  opts: { q: string; order: SessionOrder; dir: "asc" | "desc"; limit: number }
+  opts: { q: string; order: SessionOrder; dir: "asc" | "desc"; limit: number },
 ) =>
   useInfiniteQuery({
     queryKey: ["sessions", windowKey(win), facetKey(f), opts.q, opts.order, opts.dir, opts.limit],
@@ -516,7 +551,7 @@ export const useSessionContext = (win: WindowSpec, f: Facets0, id: string | null
     queryFn: ({ signal }) =>
       get<{ rows: SessionRow[] }>(
         `/api/top/sessions?focus=${encodeURIComponent(id!)}&${sliceQuery(sliceOf(win, f))}`,
-        signal
+        signal,
       ),
   });
 
@@ -531,7 +566,8 @@ export const useTranscript = (id: string | null) =>
 export const useSearch = (q: string) =>
   useQuery({
     queryKey: ["search", q],
-    queryFn: ({ signal }) => get<{ query: string; hits: SearchHit[] }>(`/api/top/search?q=${encodeURIComponent(q)}`, signal),
+    queryFn: ({ signal }) =>
+      get<{ query: string; hits: SearchHit[] }>(`/api/top/search?q=${encodeURIComponent(q)}`, signal),
     enabled: q.trim().length >= 2,
     staleTime: 60_000,
   });
@@ -548,5 +584,3 @@ export async function refresh(full = false): Promise<{ ok: boolean; report?: unk
 /* ------------------------------------------------------------------ *
  * Windows
  * ------------------------------------------------------------------ */
-
-

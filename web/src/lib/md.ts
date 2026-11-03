@@ -65,7 +65,7 @@ export function parseInline(src: string): Inline[] {
     buf = "";
   };
 
-  for (let i = 0; i < src.length; ) {
+  for (let i = 0; i < src.length;) {
     const c = src[i];
     if (c === "`") {
       const end = src.indexOf("`", i + 1);
@@ -144,7 +144,7 @@ export function parseMd(src: string): Block[] {
     para.length = 0;
   };
 
-  for (let i = 0; i < lines.length; ) {
+  for (let i = 0; i < lines.length;) {
     const line = lines[i];
 
     if (!line.trim()) {

@@ -3,7 +3,19 @@ import { useNavigate, useSearchParams } from "react-router";
 import { DEFAULT_PRESET, useAnalytics, useStatus, type SessionRow } from "../lib/api";
 import { granLabel } from "../lib/chart";
 import { TOKEN_CLASSES, paletteFor } from "../lib/chart";
-import { dur, int, pct, pctInt, perMLabel, rate, shortModel, spendLabel, tok, usd, usdPerM } from "../lib/format";
+import {
+  dur,
+  int,
+  pct,
+  pctInt,
+  perMLabel,
+  rate,
+  shortModel,
+  spendLabel,
+  tok,
+  usd,
+  usdPerM,
+} from "../lib/format";
 import { useSlice, useSliceHref } from "../lib/slice";
 import { useScope } from "../lib/scope";
 import { SessionScatter } from "../components/charts/scatter";
@@ -116,7 +128,11 @@ export default function Overview() {
             prev={tok(kpis.tokens.prev)}
             tone="flow"
             spark={<Sparkline values={seriesTokens} color="var(--color-flow)" />}
-            note={hasBaseline ? "change against the previous window of equal length" : "all time — no earlier window to compare"}
+            note={
+              hasBaseline
+                ? "change against the previous window of equal length"
+                : "all time — no earlier window to compare"
+            }
           />
           <Tile
             label={spendLabel()}
@@ -217,9 +233,8 @@ export default function Overview() {
             ]}
           />
           <div className="micro mt-1">
-            drag across the series to set the window for the whole page ·{" "}
-            {series?.buckets.length ?? 0} buckets ·{" "}
-            {hasBaseline ? "baseline: previous window" : "baseline: none (all time)"}
+            drag across the series to set the window for the whole page · {series?.buckets.length ?? 0}{" "}
+            buckets · {hasBaseline ? "baseline: previous window" : "baseline: none (all time)"}
           </div>
         </div>
 
@@ -231,12 +246,15 @@ export default function Overview() {
             xKey={scatterX}
             yKey={scatterY}
             onAxes={(x, y) =>
-              setParams((prev) => {
-                const next = new URLSearchParams(prev);
-                next.set("sx", x);
-                next.set("sy", y);
-                return next;
-              }, { replace: true })
+              setParams(
+                (prev) => {
+                  const next = new URLSearchParams(prev);
+                  next.set("sx", x);
+                  next.set("sy", y);
+                  return next;
+                },
+                { replace: true },
+              )
             }
             onPick={openSession}
             highlightId={hoverSession}
@@ -249,7 +267,9 @@ export default function Overview() {
               <div className="mb-1 flex items-baseline gap-2">
                 <span className="micro shrink-0">turn volume, by hour</span>
                 <span className="h-px min-w-2 flex-1 bg-rule" />
-                <span className="tape shrink-0 text-ink-faint">peak {int(Math.max(...(series?.hourly ?? [0])))}</span>
+                <span className="tape shrink-0 text-ink-faint">
+                  peak {int(Math.max(...(series?.hourly ?? [0])))}
+                </span>
               </div>
               <HourStrip hourly={series?.hourly ?? []} />
             </div>
@@ -352,20 +372,39 @@ export default function Overview() {
               tone="flow"
               title="share of context tokens that came from the prompt cache"
             />
-            <Stat label="output rate" value={rate(efficiency.outputRate)} tone="good" title="median over turns that produced output" />
-            <Stat label="turn p50 / p90" value={`${dur(efficiency.turnMs.p50)} / ${dur(efficiency.turnMs.p90)}`} />
+            <Stat
+              label="output rate"
+              value={rate(efficiency.outputRate)}
+              tone="good"
+              title="median over turns that produced output"
+            />
+            <Stat
+              label="turn p50 / p90"
+              value={`${dur(efficiency.turnMs.p50)} / ${dur(efficiency.turnMs.p90)}`}
+            />
             <Stat label="turn p99" value={dur(efficiency.turnMs.p99)} tone="faint" />
             <Stat
               label="context fill"
               value={`${pctInt(efficiency.fill.p50)} / ${pctInt(efficiency.fill.p90)} · max ${pctInt(efficiency.fill.max)}`}
               title="per-turn occupancy of the model window; a sawtooth here is compaction"
             />
-            <Stat label="turns ended early" value={int(efficiency.stopped)} tone={efficiency.stopped > 0 ? "warning" : "faint"} />
-            <Stat label="tool failure rate" value={pct(apiRate)} tone={apiRate > 0.02 ? "warning" : "faint"} />
+            <Stat
+              label="turns ended early"
+              value={int(efficiency.stopped)}
+              tone={efficiency.stopped > 0 ? "warning" : "faint"}
+            />
+            <Stat
+              label="tool failure rate"
+              value={pct(apiRate)}
+              tone={apiRate > 0.02 ? "warning" : "faint"}
+            />
             <SectionHeader title="code written" />
             <Stat label="lines added" value={`+${int(totals.additions)}`} tone="good" />
             <Stat label="lines removed" value={`−${int(totals.deletions)}`} tone="danger" />
-            <Stat label="net" value={`${totals.additions - totals.deletions >= 0 ? "+" : "−"}${int(Math.abs(totals.additions - totals.deletions))}`} />
+            <Stat
+              label="net"
+              value={`${totals.additions - totals.deletions >= 0 ? "+" : "−"}${int(Math.abs(totals.additions - totals.deletions))}`}
+            />
           </Panel>
 
           <Panel title="rhythm">

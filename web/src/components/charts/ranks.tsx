@@ -81,19 +81,21 @@ export function RankBars({
               r.sub
                 ? (e) => {
                     const host = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
-                    tip.show(e.clientX - host.left, e.clientY - host.top, (
+                    tip.show(
+                      e.clientX - host.left,
+                      e.clientY - host.top,
                       <>
                         <TipTitle>{r.label}</TipTitle>
                         <TipNote>{r.sub}</TipNote>
-                      </>
-                    ));
+                      </>,
+                    );
                   }
                 : undefined
             }
             className={clsx(
               "grid w-full items-center gap-x-1.5 py-[3px] text-left",
               r.onClick && "cursor-pointer hover:bg-ink/5",
-              r.active && "bg-flow/10"
+              r.active && "bg-flow/10",
             )}
             style={{ gridTemplateColumns: cols }}
           >
@@ -101,7 +103,10 @@ export function RankBars({
               {r.label}
             </span>
             <span className="relative block h-[9px] w-full bg-ink/10">
-              <i className="absolute inset-y-0 left-0 block" style={{ width: `${pct}%`, background: r.color ?? "var(--color-ink)" }} />
+              <i
+                className="absolute inset-y-0 left-0 block"
+                style={{ width: `${pct}%`, background: r.color ?? "var(--color-ink)" }}
+              />
             </span>
             <span className="tape tabular whitespace-nowrap text-right text-ink-soft">{readout(r)}</span>
             {split && <span className="tape text-center text-ink-faint">·</span>}
@@ -109,7 +114,7 @@ export function RankBars({
               <span
                 className={clsx(
                   "tape tabular whitespace-nowrap text-right",
-                  r.right2Tone ? RIGHT2_TONE[r.right2Tone] : "text-ink-soft"
+                  r.right2Tone ? RIGHT2_TONE[r.right2Tone] : "text-ink-soft",
                 )}
               >
                 {r.right2 ?? ""}
@@ -183,7 +188,10 @@ export function TimeBars({
       height={height}
       right={right}
       note={note}
-      wipeKey={fingerprint(values.map((v) => v.value), `${values.length}:${values[0]?.ts ?? 0}`)}
+      wipeKey={fingerprint(
+        values.map((v) => v.value),
+        `${values.length}:${values[0]?.ts ?? 0}`,
+      )}
     >
       {(box) => {
         const { margin, inner, width } = box;
@@ -209,7 +217,11 @@ export function TimeBars({
                 const rect = e.currentTarget.getBoundingClientRect();
                 const px = e.clientX - rect.left - margin.left;
                 const i = Math.round((px / Math.max(1, inner.width)) * (n - 1));
-                setHover(px >= 0 && i >= 0 && i < n ? { x: e.clientX - rect.left, y: e.clientY - rect.top, i } : null);
+                setHover(
+                  px >= 0 && i >= 0 && i < n
+                    ? { x: e.clientX - rect.left, y: e.clientY - rect.top, i }
+                    : null,
+                );
               }}
             >
               <Group top={margin.top} left={margin.left}>
@@ -257,7 +269,9 @@ export function TimeBars({
                   left={0}
                   scale={x}
                   tickValues={labelIdx}
-                  format={(v) => (xFormat ? xFormat(Math.round(v)) : timeTick(values[Math.round(v)]?.ts ?? 0, gran))}
+                  format={(v) =>
+                    xFormat ? xFormat(Math.round(v)) : timeTick(values[Math.round(v)]?.ts ?? 0, gran)
+                  }
                 />
                 {hover && (
                   // Plot coordinates: this used to add the margin again inside the group,
@@ -274,7 +288,9 @@ export function TimeBars({
                       y: hover.y,
                       node: (
                         <>
-                          <TipTitle>{xFormat ? xFormat(hover.i) : timeTooltip(values[hover.i].ts, gran)}</TipTitle>
+                          <TipTitle>
+                            {xFormat ? xFormat(hover.i) : timeTooltip(values[hover.i].ts, gran)}
+                          </TipTitle>
                           <TipRow label={label} value={format(values[hover.i].value)} />
                           {tipExtra?.(hover.i).map((r) => (
                             <TipRow key={r.label} label={r.label} value={r.value} />
@@ -315,7 +331,16 @@ export function Histogram({
   const peak = Math.max(...bins.map((b) => b.count), 1);
   const total = bins.reduce((a, b) => a + b.count, 0);
   return (
-    <Figure label={label} height={height} right={right} note={note} wipeKey={fingerprint(bins.map((b) => b.count), bins.length)}>
+    <Figure
+      label={label}
+      height={height}
+      right={right}
+      note={note}
+      wipeKey={fingerprint(
+        bins.map((b) => b.count),
+        bins.length,
+      )}
+    >
       {(box) => {
         const { margin, inner, width } = box;
         const plotH = inner.height - 12;
@@ -335,12 +360,23 @@ export function Histogram({
                 const rect = e.currentTarget.getBoundingClientRect();
                 const px = e.clientX - rect.left - margin.left;
                 const i = Math.floor(px / band);
-                setHover(px >= 0 && i >= 0 && i < bins.length ? { i, x: e.clientX - rect.left, y: e.clientY - rect.top } : null);
+                setHover(
+                  px >= 0 && i >= 0 && i < bins.length
+                    ? { i, x: e.clientX - rect.left, y: e.clientY - rect.top }
+                    : null,
+                );
               }}
             >
               <Group top={margin.top} left={margin.left}>
                 {hover && (
-                  <rect x={hover.i * band} y={0} width={band} height={plotH} fill="var(--color-ink)" fillOpacity={0.05} />
+                  <rect
+                    x={hover.i * band}
+                    y={0}
+                    width={band}
+                    height={plotH}
+                    fill="var(--color-ink)"
+                    fillOpacity={0.05}
+                  />
                 )}
                 <Rows ticks={yTicks(peak, 2)} y={(v) => y(v)} left={0} width={inner.width} />
                 {bins.map((b, i) => (
@@ -354,7 +390,14 @@ export function Histogram({
                     fillOpacity={hover === null || hover.i === i ? 0.85 : 0.3}
                   />
                 ))}
-                <line x1={0} x2={inner.width} y1={plotH} y2={plotH} stroke="var(--color-rule-strong)" strokeWidth={1} />
+                <line
+                  x1={0}
+                  x2={inner.width}
+                  y1={plotH}
+                  y2={plotH}
+                  stroke="var(--color-rule-strong)"
+                  strokeWidth={1}
+                />
                 {bins.map((b, i) => (
                   <text
                     key={b.label}
@@ -409,7 +452,7 @@ export function DeltaBar({ delta, width = 46 }: { delta: number; width?: number 
         className="absolute inset-y-0"
         style={{
           background: good ? "var(--color-good)" : DANGER,
-          left: good ? "50%" : `${50 - (pct * 50)}%`,
+          left: good ? "50%" : `${50 - pct * 50}%`,
           width: `${pct * 50}%`,
         }}
       />

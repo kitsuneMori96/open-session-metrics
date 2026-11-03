@@ -7,7 +7,13 @@ import {
   useLegacyTable,
   type LegacyColumnDef,
 } from "@tanstack/react-table/legacy";
-import { flexRender, type ExpandedState, type RowData, type SortingState, type Updater } from "@tanstack/react-table";
+import {
+  flexRender,
+  type ExpandedState,
+  type RowData,
+  type SortingState,
+  type Updater,
+} from "@tanstack/react-table";
 import clsx from "clsx";
 
 /**
@@ -106,7 +112,10 @@ export function DataTable<T extends RowData>({
   });
 
   const header = table.getHeaderGroups()[0];
-  const template = header.headers.map((h) => h.column.columnDef.size ?? 120).map((w) => `${w}px`).join(" ");
+  const template = header.headers
+    .map((h) => h.column.columnDef.size ?? 120)
+    .map((w) => `${w}px`)
+    .join(" ");
   // The tracks are fixed pixel widths, so on a narrow panel the grid is wider than its
   // container. Giving the sticky header and the rows the same explicit min-width keeps
   // them in one scroller: the panel scrolls sideways, the document does not.
@@ -123,7 +132,10 @@ export function DataTable<T extends RowData>({
               return (
                 <div
                   key={h.id}
-                  className={clsx("grid-cell flex items-center gap-1 py-[3px]", align === "right" && "justify-end")}
+                  className={clsx(
+                    "grid-cell flex items-center gap-1 py-[3px]",
+                    align === "right" && "justify-end",
+                  )}
                   style={{ width: h.column.columnDef.size }}
                 >
                   {h.column.getCanSort() ? (
@@ -140,14 +152,16 @@ export function DataTable<T extends RowData>({
                         className={clsx(
                           "turn text-[8px] text-flow",
                           sorted === "desc" && "rotate-180",
-                          !sorted && "opacity-0"
+                          !sorted && "opacity-0",
                         )}
                       >
                         ▲
                       </span>
                     </button>
                   ) : (
-                    <span className="micro truncate">{flexRender(h.column.columnDef.header, h.getContext())}</span>
+                    <span className="micro truncate">
+                      {flexRender(h.column.columnDef.header, h.getContext())}
+                    </span>
                   )}
                 </div>
               );
@@ -168,9 +182,13 @@ export function DataTable<T extends RowData>({
                     className={clsx(
                       "grid-row absolute left-0 top-0 grid w-full",
                       onRowClick && "cursor-pointer",
-                      activeId === id && "grid-row-on"
+                      activeId === id && "grid-row-on",
                     )}
-                    style={{ gridTemplateColumns: template, height: rowHeight, transform: `translateY(${item.start}px)` }}
+                    style={{
+                      gridTemplateColumns: template,
+                      height: rowHeight,
+                      transform: `translateY(${item.start}px)`,
+                    }}
                     onClick={onRowClick ? () => onRowClick(row.original) : undefined}
                     onMouseEnter={onRowHover ? () => onRowHover(row.original) : undefined}
                     onMouseLeave={onRowHover ? () => onRowHover(null) : undefined}
@@ -178,12 +196,20 @@ export function DataTable<T extends RowData>({
                     {row.getVisibleCells().map((cell) => {
                       const align = (cell.column.columnDef.meta as { align?: string } | undefined)?.align;
                       return (
-                        <div key={cell.id} className={clsx("grid-cell flex items-center", align === "right" && "justify-end")}>
+                        <div
+                          key={cell.id}
+                          className={clsx("grid-cell flex items-center", align === "right" && "justify-end")}
+                        >
                           {flexRender(cell.column.columnDef.cell, cell.getContext())}
                         </div>
                       );
                     })}
-                    {row.depth > 0 && <span className="pointer-events-none absolute left-0 top-0 h-full" style={{ width: 1 }} />}
+                    {row.depth > 0 && (
+                      <span
+                        className="pointer-events-none absolute left-0 top-0 h-full"
+                        style={{ width: 1 }}
+                      />
+                    )}
                   </div>
                 );
               })}
@@ -196,7 +222,15 @@ export function DataTable<T extends RowData>({
 }
 
 /** The caret an expandable row shows; a leaf row keeps the indent. */
-export function Caret({ open, hasChildren, onToggle }: { open?: boolean; hasChildren?: boolean; onToggle?: () => void }) {
+export function Caret({
+  open,
+  hasChildren,
+  onToggle,
+}: {
+  open?: boolean;
+  hasChildren?: boolean;
+  onToggle?: () => void;
+}) {
   if (!hasChildren) return <span className="inline-block w-[12px] shrink-0" />;
   return (
     <button

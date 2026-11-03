@@ -30,7 +30,9 @@ export class Boundary extends Component<{ children: ReactNode }, { error: Error 
               ? "A new bundle replaced the one this tab had loaded, so a part of the app could no longer be fetched. Reloading picks up the new code."
               : "The store answered, but something in the view threw while drawing it. The numbers below are untouched — a reload usually clears it."}
           </p>
-          <pre className="tape max-h-40 overflow-auto whitespace-pre-wrap text-ink-faint">{error.message}</pre>
+          <pre className="tape max-h-40 overflow-auto whitespace-pre-wrap text-ink-faint">
+            {error.message}
+          </pre>
           <button type="button" className="btn" onClick={() => location.reload()}>
             reload
           </button>

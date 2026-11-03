@@ -14,7 +14,7 @@ try {
   entry = require.resolve("@kitsunemori96/open-session-metrics/bin/osm.js");
 } catch {
   process.stderr.write(
-    "osm: the renamed package is missing — run: npm i -g @kitsunemori96/open-session-metrics\n"
+    "osm: the renamed package is missing — run: npm i -g @kitsunemori96/open-session-metrics\n",
   );
   process.exit(1);
 }

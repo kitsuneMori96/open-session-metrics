@@ -95,7 +95,7 @@ function findHits(src: string, query: string): Hit[] {
   if (!q) return [];
   const hay = src.toLowerCase();
   const out: Hit[] = [];
-  for (let at = 0; ; ) {
+  for (let at = 0; ;) {
     const i = hay.indexOf(q, at);
     if (i < 0) return out;
     out.push([i, i + q.length]);
@@ -117,7 +117,7 @@ function marked(token: Inline, hits: Hit[]): ReactNode {
     parts.push(
       <mark className="mark" key={s}>
         {text.slice(s - at, e - at)}
-      </mark>
+      </mark>,
     );
     cursor = e;
   }
@@ -259,7 +259,10 @@ function GridView({ block, query }: { block: Block & { kind: "table" }; query: s
         <thead>
           <tr className="border-b border-rule">
             {block.head.map((h, c) => (
-              <th key={c} className={clsx("micro pr-3 pb-[2px] font-normal", side(block.align[c], numeric[c]))}>
+              <th
+                key={c}
+                className={clsx("micro pr-3 pb-[2px] font-normal", side(block.align[c], numeric[c]))}
+              >
                 <InlineView src={h} query={query} />
               </th>
             ))}

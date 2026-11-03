@@ -131,12 +131,12 @@ function ScopeHost({ boot }: { boot: Boot }) {
       const pathname = /^\/sessions\/[^/]+$/.test(location.pathname) ? "/sessions" : location.pathname;
       navigate({ pathname, search: storedSlice(next) }, { replace: true });
     },
-    [kind, list, location.pathname, location.search, navigate]
+    [kind, list, location.pathname, location.search, navigate],
   );
 
   const scope = useMemo<ScopeValue>(
     () => ({ kind, list, active: list.sources.find((s) => s.kind === kind), switchTo, reload }),
-    [kind, list, switchTo, reload]
+    [kind, list, switchTo, reload],
   );
 
   // A store that has never been built is built by the switch that asked for it, not

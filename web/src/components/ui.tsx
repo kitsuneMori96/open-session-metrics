@@ -24,7 +24,13 @@ export function Panel({
   tone?: "plain";
 }) {
   return (
-    <section className={clsx("panel flex min-w-0 flex-col", tone === "plain" && "border-transparent bg-transparent", className)}>
+    <section
+      className={clsx(
+        "panel flex min-w-0 flex-col",
+        tone === "plain" && "border-transparent bg-transparent",
+        className,
+      )}
+    >
       {title !== undefined && (
         <header className="panel-head">
           <span className="micro shrink-0">{title}</span>
@@ -137,7 +143,7 @@ export function Tile({
     <div
       className={clsx(
         "hairline relative flex min-w-0 flex-col gap-1 px-2 pt-1.5 pb-1",
-        onClick && "cursor-pointer hover:bg-ink/5"
+        onClick && "cursor-pointer hover:bg-ink/5",
       )}
       onClick={onClick}
       title={note}
@@ -149,7 +155,7 @@ export function Tile({
           <span
             className={clsx(
               "tape tabular shrink-0",
-              !known || flat ? "text-ink-faint" : good ? "text-good" : "text-danger"
+              !known || flat ? "text-ink-faint" : good ? "text-good" : "text-danger",
             )}
             title={
               known
@@ -198,7 +204,13 @@ export function Chip({
       title={title}
       onClick={onClick}
       disabled={disabled}
-      className={clsx("btn", active && "btn-on", !active && tone && TONE[tone], disabled && "opacity-40", className)}
+      className={clsx(
+        "btn",
+        active && "btn-on",
+        !active && tone && TONE[tone],
+        disabled && "opacity-40",
+        className,
+      )}
     >
       {children}
     </button>
@@ -230,7 +242,13 @@ export function Select({
 }) {
   return (
     <span className="field-wrap">
-      <select className={clsx("field", className)} value={value} title={title} style={style} onChange={onChange}>
+      <select
+        className={clsx("field", className)}
+        value={value}
+        title={title}
+        style={style}
+        onChange={onChange}
+      >
         {children}
       </select>
     </span>
@@ -239,7 +257,9 @@ export function Select({
 
 export function KeyCap({ children }: { children: ReactNode }) {
   return (
-    <kbd className="hairline inline-block px-1 font-mono text-[9px] leading-[14px] text-ink-soft">{children}</kbd>
+    <kbd className="hairline inline-block px-1 font-mono text-[9px] leading-[14px] text-ink-soft">
+      {children}
+    </kbd>
   );
 }
 
@@ -314,7 +334,7 @@ export function Mark({ text, query }: { text: string; query: string }) {
     parts.push(
       <mark className="mark" key={key++}>
         {text.slice(idx, idx + q.length)}
-      </mark>
+      </mark>,
     );
     at = idx + q.length;
   }
@@ -324,7 +344,15 @@ export function Mark({ text, query }: { text: string; query: string }) {
 }
 
 /** Continuous fill bar for a ratio readout. */
-export function FillBar({ value, tone = "var(--color-ink)", height = 6 }: { value: number; tone?: string; height?: number }) {
+export function FillBar({
+  value,
+  tone = "var(--color-ink)",
+  height = 6,
+}: {
+  value: number;
+  tone?: string;
+  height?: number;
+}) {
   const pct = Math.max(0, Math.min(1, value));
   return (
     <span className="hairline block w-full" style={{ height }}>
@@ -337,8 +365,17 @@ export function FillBar({ value, tone = "var(--color-ink)", height = 6 }: { valu
 export function RateBar({ rate, width = 44, tone }: { rate: number; width?: number; tone?: string }) {
   const v = Math.max(0, Math.min(1, rate));
   return (
-    <span className="relative inline-block align-middle" style={{ width, height: 5, background: "var(--color-rule)" }}>
-      <i className="absolute inset-y-0 left-0 block" style={{ width: `${v * 100}%`, background: tone ?? (v > 0.1 ? "var(--color-danger)" : "var(--color-warning)") }} />
+    <span
+      className="relative inline-block align-middle"
+      style={{ width, height: 5, background: "var(--color-rule)" }}
+    >
+      <i
+        className="absolute inset-y-0 left-0 block"
+        style={{
+          width: `${v * 100}%`,
+          background: tone ?? (v > 0.1 ? "var(--color-danger)" : "var(--color-warning)"),
+        }}
+      />
     </span>
   );
 }

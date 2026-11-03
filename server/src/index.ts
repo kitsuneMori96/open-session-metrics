@@ -15,7 +15,10 @@ const REFRESH_MS = 120000;
 let queue: Promise<unknown> = Promise.resolve();
 
 function materialize(kind: SourceKind, opts: { force?: boolean; full?: boolean } = {}) {
-  const run = queue.then(() => doMaterialize(kind, opts), () => doMaterialize(kind, opts));
+  const run = queue.then(
+    () => doMaterialize(kind, opts),
+    () => doMaterialize(kind, opts),
+  );
   queue = run.catch(() => undefined);
   return run;
 }
@@ -25,19 +28,22 @@ function materialize(kind: SourceKind, opts: { force?: boolean; full?: boolean }
  * re-materialize when the tool that owns it actually has newer rows than we
  * stored. The incremental path re-parses just the changed sessions (milliseconds).
  */
-async function doMaterialize(kind: SourceKind, { force = false, full = false }: { force?: boolean; full?: boolean }) {
+async function doMaterialize(
+  kind: SourceKind,
+  { force = false, full = false }: { force?: boolean; full?: boolean },
+) {
   if (!hasStore(kind) || full) {
     console.log(`[osm] ${kind}: ${full ? "full rebuild requested" : "no store yet"} — materializing…`);
     const r = await rebuild(kind, { full: true });
     console.log(
-      `[osm] ${kind}: built ${r.sessions} sessions / ${r.turns} turns / ${r.tools} tools / ${r.parts} parts in ${r.ms}ms`
+      `[osm] ${kind}: built ${r.sessions} sessions / ${r.turns} turns / ${r.tools} tools / ${r.parts} parts in ${r.ms}ms`,
     );
     return r;
   }
   if (!force && !sourceChanged(kind)) return undefined;
   const r = await rebuild(kind);
   console.log(
-    `[osm] ${kind}: ${r.mode} sync ${r.sessions} sessions / ${r.turns} turns / ${r.parts} parts / ${r.events} events in ${r.ms}ms`
+    `[osm] ${kind}: ${r.mode} sync ${r.sessions} sessions / ${r.turns} turns / ${r.parts} parts / ${r.events} events in ${r.ms}ms`,
   );
   return r;
 }
@@ -71,7 +77,9 @@ app.listen(PORT, HOST, async () => {
     // a deliberate act (the browser asks for it when you switch to it).
     for (const kind of SOURCE_KINDS) {
       if (!hasStore(kind)) continue;
-      void materialize(kind).catch((e) => console.error(`[osm] ${kind} refresh failed:`, (e as Error).message));
+      void materialize(kind).catch((e) =>
+        console.error(`[osm] ${kind} refresh failed:`, (e as Error).message),
+      );
     }
   }, REFRESH_MS);
 });

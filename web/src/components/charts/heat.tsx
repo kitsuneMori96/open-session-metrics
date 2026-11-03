@@ -37,8 +37,8 @@ export function ActivityHeatmap({
       wipeKey={fingerprint(heat.flat())}
       note={
         <>
-          peak {int(peak)} turns in one weekday-hour · column shading is per hour, so a
-          quiet evening hour still shows its own shape
+          peak {int(peak)} turns in one weekday-hour · column shading is per hour, so a quiet evening hour
+          still shows its own shape
         </>
       }
     >
@@ -71,7 +71,7 @@ export function ActivityHeatmap({
                       }}
                     />
                   );
-                })
+                }),
               )}
               {DAYS.map((d, i) => (
                 <text
@@ -119,7 +119,13 @@ export function ActivityHeatmap({
                           <div className="tip-row">
                             <span className="tip-key">share of week</span>
                             <span className="tip-val">
-                              {peak > 0 ? ((heat[hover.d][hover.h] / heat.flat().reduce((a, b) => a + b, 0)) * 100).toFixed(1) : "0.0"}%
+                              {peak > 0
+                                ? (
+                                    (heat[hover.d][hover.h] / heat.flat().reduce((a, b) => a + b, 0)) *
+                                    100
+                                  ).toFixed(1)
+                                : "0.0"}
+                              %
                             </span>
                           </div>
                         </>
@@ -136,7 +142,15 @@ export function ActivityHeatmap({
 }
 
 /** 24-hour profile as a single row of columns, for the corner of a panel. */
-export function HourStrip({ hourly, color = "var(--color-good)", height = 34 }: { hourly: number[]; color?: string; height?: number }) {
+export function HourStrip({
+  hourly,
+  color = "var(--color-good)",
+  height = 34,
+}: {
+  hourly: number[];
+  color?: string;
+  height?: number;
+}) {
   const tip = useTip();
   const strip = useRef<HTMLDivElement | null>(null);
   useWipe(strip, fingerprint(hourly));
@@ -154,18 +168,23 @@ export function HourStrip({ hourly, color = "var(--color-good)", height = 34 }: 
             // The strip is the reference frame for both the anchor and the readout, so the
             // tip lands on the bar that was pointed at rather than on the figure's corner.
             const host = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
-            tip.show(e.clientX - host.left, e.clientY - host.top, (
+            tip.show(
+              e.clientX - host.left,
+              e.clientY - host.top,
               <>
                 <TipTitle>{String(h).padStart(2, "0")}:00</TipTitle>
                 <TipRow label="turns" value={int(v)} />
                 <TipRow label="share of day" value={total > 0 ? `${((v / total) * 100).toFixed(1)}%` : "—"} />
-              </>
-            ));
+              </>,
+            );
           }}
         >
           <i
             className="w-full"
-            style={{ height: `${Math.max(v > 0 ? 4 : 0, (v / peak) * 100)}%`, background: v > 0 ? color : "var(--color-rule)" }}
+            style={{
+              height: `${Math.max(v > 0 ? 4 : 0, (v / peak) * 100)}%`,
+              background: v > 0 ? color : "var(--color-rule)",
+            }}
           />
         </span>
       ))}

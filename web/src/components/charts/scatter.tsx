@@ -76,7 +76,8 @@ export function SessionScatter({
   const groups = useMemo(() => {
     const byLabel = new Map<string, SessionRow[]>();
     for (const s of sessions) {
-      const label = colorBy === "project" ? s.project : colorBy === "model" ? shortModel(s.model) : s.agent ?? "main";
+      const label =
+        colorBy === "project" ? s.project : colorBy === "model" ? shortModel(s.model) : (s.agent ?? "main");
       const list = byLabel.get(label) ?? [];
       list.push(s);
       byLabel.set(label, list);
@@ -86,7 +87,8 @@ export function SessionScatter({
     const rest = ranked.slice(7);
     const colors = paletteFor([...top.map(([l]) => l), "other"]);
     const out = top.map(([label, rows]) => ({ label, rows, color: colors.get(label)! }));
-    if (rest.length) out.push({ label: "other", rows: rest.flatMap(([, r]) => r), color: colors.get("other")! });
+    if (rest.length)
+      out.push({ label: "other", rows: rest.flatMap(([, r]) => r), color: colors.get("other")! });
     return out;
   }, [sessions, colorBy]);
 
@@ -96,7 +98,10 @@ export function SessionScatter({
     <Figure
       label="sessions"
       height={250}
-      wipeKey={fingerprint(sessions.map((s) => s.tokens), `${sessions.length}:${xKey}:${yKey}:${colorBy}:${log}`)}
+      wipeKey={fingerprint(
+        sessions.map((s) => s.tokens),
+        `${sessions.length}:${xKey}:${yKey}:${colorBy}:${log}`,
+      )}
       right={
         <span className="flex items-center gap-1">
           <Select value={xKey} onChange={(e) => onAxes(e.target.value, yKey)} title="x axis">
@@ -121,7 +126,11 @@ export function SessionScatter({
           >
             log
           </button>
-          <Select value={colorBy} onChange={(e) => setColorBy(e.target.value as typeof colorBy)} title="colour">
+          <Select
+            value={colorBy}
+            onChange={(e) => setColorBy(e.target.value as typeof colorBy)}
+            title="colour"
+          >
             <option value="project">by project</option>
             <option value="model">by model</option>
             <option value="agent">by agent</option>
@@ -133,8 +142,7 @@ export function SessionScatter({
           {total != null && total > sessions.length
             ? `the ${sessions.length} heaviest of ${int(total)} sessions in the window`
             : `${sessions.length} sessions active in the window`}{" "}
-          ·{" "}
-          <span style={{ color: FAINT }}>{hover ? "" : "hover a point to read it, click to open"}</span>
+          · <span style={{ color: FAINT }}>{hover ? "" : "hover a point to read it, click to open"}</span>
         </>
       }
     >
@@ -179,7 +187,11 @@ export function SessionScatter({
           : xR
             ? logTicks(xR[0], xR[1])
             : yTicks(grow(x0, x1, 1), 4);
-        const yTicksV = fy.time ? tickValuesFor(y0, y1, 4) : yR ? logTicks(yR[0], yR[1]) : yTicks(grow(y0, y1, 1), 4);
+        const yTicksV = fy.time
+          ? tickValuesFor(y0, y1, 4)
+          : yR
+            ? logTicks(yR[0], yR[1])
+            : yTicks(grow(y0, y1, 1), 4);
         const fmtX = (v: number) => (fx.time ? dayStamp(v) : fx.fmt(v));
         const fmtY = (v: number) => (fy.time ? dayStamp(v) : fy.fmt(v));
         // Zero and near-zero readings cannot sit on a log axis; they rest on its floor.
@@ -201,7 +213,12 @@ export function SessionScatter({
               }}
             >
               <Group top={margin.top} left={margin.left}>
-                <Rows ticks={yTicksV.map((t) => (fy.time ? yScale(t) : t))} y={(v) => (fy.time ? v : yScale(v))} left={0} width={inner.width} />
+                <Rows
+                  ticks={yTicksV.map((t) => (fy.time ? yScale(t) : t))}
+                  y={(v) => (fy.time ? v : yScale(v))}
+                  left={0}
+                  width={inner.width}
+                />
                 <AxisY top={0} left={0} scale={yScale} tickValues={yTicksV} format={fmtY} />
                 <AxisX top={plotH} left={0} scale={xScale} tickValues={xTicks} format={fmtX} />
                 {groups.map((g) =>
@@ -220,17 +237,26 @@ export function SessionScatter({
                         strokeWidth={hovering ? 1.5 : 0.75}
                         style={{ cursor: "pointer" }}
                         onMouseEnter={(e) => {
-                          const rect = (e.target as SVGCircleElement).ownerSVGElement!.getBoundingClientRect();
+                          const rect = (
+                            e.target as SVGCircleElement
+                          ).ownerSVGElement!.getBoundingClientRect();
                           setHover({ x: e.clientX - rect.left, y: e.clientY - rect.top, s });
                           onHighlight?.(s.id);
                         }}
                         onClick={() => onPick(s.id)}
                       />
                     );
-                  })
+                  }),
                 )}
                 {sessions.length === 0 && (
-                  <text x={inner.width / 2} y={plotH / 2} textAnchor="middle" fill={FAINT} fontSize={10} fontFamily="JetBrains Mono, monospace">
+                  <text
+                    x={inner.width / 2}
+                    y={plotH / 2}
+                    textAnchor="middle"
+                    fill={FAINT}
+                    fontSize={10}
+                    fontFamily="JetBrains Mono, monospace"
+                  >
                     no sessions in this window
                   </text>
                 )}

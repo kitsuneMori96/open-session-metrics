@@ -135,7 +135,10 @@ export default function Sessions() {
         accessorKey: "model",
         cell: ({ row }) => (
           <span className="flex min-w-0 items-center gap-1">
-            <i className="block h-[7px] w-[7px] shrink-0" style={{ background: modelColor(row.original.model) }} />
+            <i
+              className="block h-[7px] w-[7px] shrink-0"
+              style={{ background: modelColor(row.original.model) }}
+            />
             <span className="tape truncate" title={row.original.model ?? ""}>
               {shortModel(row.original.model)}
             </span>
@@ -169,7 +172,14 @@ export default function Sessions() {
           </span>
         ),
       },
-      { id: "turns", header: "turns", size: 58, accessorKey: "turns", meta: { align: "right" }, cell: ({ row }) => <span className="tape tabular">{int(row.original.turns)}</span> },
+      {
+        id: "turns",
+        header: "turns",
+        size: 58,
+        accessorKey: "turns",
+        meta: { align: "right" },
+        cell: ({ row }) => <span className="tape tabular">{int(row.original.turns)}</span>,
+      },
       {
         id: "tools",
         header: "calls",
@@ -185,7 +195,11 @@ export default function Sessions() {
         accessorKey: "errors",
         meta: { align: "right" },
         cell: ({ row }) =>
-          row.original.errors > 0 ? <span className="tape tabular text-danger">{row.original.errors}</span> : <span className="tape text-ink-faint">—</span>,
+          row.original.errors > 0 ? (
+            <span className="tape tabular text-danger">{row.original.errors}</span>
+          ) : (
+            <span className="tape text-ink-faint">—</span>
+          ),
       },
       {
         id: "span",
@@ -204,7 +218,9 @@ export default function Sessions() {
         cell: ({ row }) => (
           <span className="flex items-center justify-end gap-2" title="context tokens over the model window">
             <RateBar rate={row.original.contextPct} tone="var(--color-flow)" />
-            <span className="tape tabular w-[28px] text-right text-ink-faint">{pct(Math.min(1, row.original.contextPct), 0)}</span>
+            <span className="tape tabular w-[28px] text-right text-ink-faint">
+              {pct(Math.min(1, row.original.contextPct), 0)}
+            </span>
           </span>
         ),
       },
@@ -257,7 +273,11 @@ export default function Sessions() {
         <span className="tape shrink-0 text-ink-faint">window {label}</span>
       </div>
 
-      <Panel title={undefined} bodyClass="flex min-h-0 flex-1 flex-col p-0" className="min-h-0 flex-1 border-0">
+      <Panel
+        title={undefined}
+        bodyClass="flex min-h-0 flex-1 flex-col p-0"
+        className="min-h-0 flex-1 border-0"
+      >
         <DataTable<Node>
           rows={tree}
           columns={columns}
@@ -265,9 +285,13 @@ export default function Sessions() {
           getSubRows={(n) => n.children}
           sorting={sorting}
           manualSorting
-          onSortingChange={(u: Updater<SortingState>) => setSorting((prev) => (typeof u === "function" ? u(prev) : u))}
+          onSortingChange={(u: Updater<SortingState>) =>
+            setSorting((prev) => (typeof u === "function" ? u(prev) : u))
+          }
           expanded={expanded}
-          onExpandedChange={(u: Updater<ExpandedState>) => setExpanded((prev) => (typeof u === "function" ? u(prev) : u))}
+          onExpandedChange={(u: Updater<ExpandedState>) =>
+            setExpanded((prev) => (typeof u === "function" ? u(prev) : u))
+          }
           onRowClick={(n) => navigate(href(`/sessions/${n.id}`))}
           onRowHover={(n) => setHover(n?.id ?? null)}
           onEndReached={loadMore}
@@ -288,7 +312,10 @@ export default function Sessions() {
           </Chip>
         )}
         <span className="flex-1" />
-        <span className="tape shrink-0 text-ink-faint">{q ? "filtered · " : ""}{order} {dir === "desc" ? "↓" : "↑"}</span>
+        <span className="tape shrink-0 text-ink-faint">
+          {q ? "filtered · " : ""}
+          {order} {dir === "desc" ? "↓" : "↑"}
+        </span>
       </div>
 
       <StatusBar

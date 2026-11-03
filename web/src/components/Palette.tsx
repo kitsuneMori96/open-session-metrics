@@ -36,7 +36,16 @@ export default function Palette({ onClose }: { onClose: () => void }) {
 
   const commands = useMemo<Command[]>(() => {
     const out: Command[] = [];
-    const go = (to: string, label: string) => out.push({ id: `go:${to}`, group: "go", label, run: () => { navigate(href(to)); onClose(); } });
+    const go = (to: string, label: string) =>
+      out.push({
+        id: `go:${to}`,
+        group: "go",
+        label,
+        run: () => {
+          navigate(href(to));
+          onClose();
+        },
+      });
     go("/overview", "Overview — dashboard");
     go("/sessions", "Sessions — every session in the slice");
     go("/tools", "Tools — call volume, latency, failures");
@@ -53,7 +62,15 @@ export default function Palette({ onClose }: { onClose: () => void }) {
         },
       });
     }
-    out.push({ id: "clear", group: "window", label: "clear filters and window", run: () => { reset(); onClose(); } });
+    out.push({
+      id: "clear",
+      group: "window",
+      label: "clear filters and window",
+      run: () => {
+        reset();
+        onClose();
+      },
+    });
     out.push({
       id: "last-7-of-all",
       group: "window",
@@ -119,11 +136,15 @@ export default function Palette({ onClose }: { onClose: () => void }) {
 
   const needle = q.trim().toLowerCase();
   const filtered = useMemo(
-    () => (needle ? commands.filter((c) => `${c.label} ${c.group}`.toLowerCase().includes(needle)) : commands).slice(0, 60),
-    [commands, needle]
+    () =>
+      (needle
+        ? commands.filter((c) => `${c.label} ${c.group}`.toLowerCase().includes(needle))
+        : commands
+      ).slice(0, 60),
+    [commands, needle],
   );
 
-  const sessionHits = debounced.trim().length >= 2 ? hits.data?.hits ?? [] : [];
+  const sessionHits = debounced.trim().length >= 2 ? (hits.data?.hits ?? []) : [];
 
   const items = useMemo(
     () => [
@@ -139,7 +160,7 @@ export default function Palette({ onClose }: { onClose: () => void }) {
       })),
       ...filtered,
     ],
-    [sessionHits, filtered, href, navigate, onClose]
+    [sessionHits, filtered, href, navigate, onClose],
   );
 
   useEffect(() => setCursor(0), [needle, debounced]);
@@ -150,7 +171,10 @@ export default function Palette({ onClose }: { onClose: () => void }) {
   }, [cursor]);
 
   return (
-    <div className="ink-fast fixed inset-0 z-50 flex items-start justify-center bg-ink/20 pt-[10vh]" onClick={onClose}>
+    <div
+      className="ink-fast fixed inset-0 z-50 flex items-start justify-center bg-ink/20 pt-[10vh]"
+      onClick={onClose}
+    >
       <div
         className="ink hairline w-[min(720px,92vw)] bg-paper-raised shadow-[0_2px_0_var(--color-rule-strong)]"
         onClick={(e) => e.stopPropagation()}
@@ -203,7 +227,7 @@ export default function Palette({ onClose }: { onClose: () => void }) {
                      rest are simply there. */
                   className={clsx(
                     "ink-fast flex w-full items-baseline gap-2 px-2 py-1 text-left",
-                    i === cursor ? "bg-flow/10" : "hover:bg-ink/5"
+                    i === cursor ? "bg-flow/10" : "hover:bg-ink/5",
                   )}
                   style={{ animationDelay: `${Math.min(i, 4) * STAGGER}ms` }}
                 >

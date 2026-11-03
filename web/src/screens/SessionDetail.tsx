@@ -1,6 +1,13 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import { useAnalytics, useSessionContext, useTranscript, type Bucket, type SessionRow, type Turn } from "../lib/api";
+import {
+  useAnalytics,
+  useSessionContext,
+  useTranscript,
+  type Bucket,
+  type SessionRow,
+  type Turn,
+} from "../lib/api";
 import { TOKEN_CLASSES } from "../lib/chart";
 import {
   ago,
@@ -91,7 +98,11 @@ export default function SessionDetail() {
       if (t.durMs > 0 && t.tokens.output > 0) rates.push((t.tokens.output / t.durMs) * 1000);
     }
     rates.sort((a, b) => a - b);
-    const median = rates.length ? (rates.length % 2 ? rates[rates.length >> 1] : (rates[(rates.length >> 1) - 1] + rates[rates.length >> 1]) / 2) : 0;
+    const median = rates.length
+      ? rates.length % 2
+        ? rates[rates.length >> 1]
+        : (rates[(rates.length >> 1) - 1] + rates[rates.length >> 1]) / 2
+      : 0;
     return {
       input,
       output,
@@ -138,7 +149,7 @@ export default function SessionDetail() {
           writeLines: t.writeLines,
         };
       }),
-    [turns]
+    [turns],
   );
 
   const related = useMemo(() => {
@@ -153,8 +164,9 @@ export default function SessionDetail() {
       cursor = parent.parentId;
     }
     const children = all.filter((s) => s.parentId === id);
-    const siblings = (byId.get(id)?.parentId ? all.filter((s) => s.parentId === byId.get(id)!.parentId) : [])
-      .filter((s) => s.id !== id);
+    const siblings = (
+      byId.get(id)?.parentId ? all.filter((s) => s.parentId === byId.get(id)!.parentId) : []
+    ).filter((s) => s.id !== id);
     return { ancestors, children, siblings };
   }, [context.data, id]);
 
@@ -238,15 +250,36 @@ export default function SessionDetail() {
             <Stat label="reasoning" value={tok(stats.reasoning)} labelWidth={92} />
             <Stat label="cache read" value={tok(stats.cacheRead)} labelWidth={92} />
             <Stat label="cache write" value={tok(stats.cacheWrite)} labelWidth={92} />
-            <Stat label={costLabel()} value={stats.cost > 0 ? usd(stats.cost) : "free"} tone="good" labelWidth={92} />
+            <Stat
+              label={costLabel()}
+              value={stats.cost > 0 ? usd(stats.cost) : "free"}
+              tone="good"
+              labelWidth={92}
+            />
             <Stat label={perMLabel()} value={usdPerM(stats.cost, stats.total)} tone="faint" labelWidth={92} />
           </Panel>
 
           <Panel title="shape">
             <Stat label="turns" value={int(turnCount)} labelWidth={92} />
-            <Stat label="tool calls" value={`${int(stats.tools)}${stats.errors > 0 ? ` · ${stats.errors}×` : ""}`} tone={stats.errors > 0 ? "warning" : "ink"} labelWidth={92} />
-            <Stat label="wall clock" value={dur(stats.spanMs)} labelWidth={92} title="first turn to last completion" />
-            <Stat label="output rate" value={rate(stats.rate)} tone="good" labelWidth={92} title="median tokens/second across turns" />
+            <Stat
+              label="tool calls"
+              value={`${int(stats.tools)}${stats.errors > 0 ? ` · ${stats.errors}×` : ""}`}
+              tone={stats.errors > 0 ? "warning" : "ink"}
+              labelWidth={92}
+            />
+            <Stat
+              label="wall clock"
+              value={dur(stats.spanMs)}
+              labelWidth={92}
+              title="first turn to last completion"
+            />
+            <Stat
+              label="output rate"
+              value={rate(stats.rate)}
+              tone="good"
+              labelWidth={92}
+              title="median tokens/second across turns"
+            />
             <Stat label="context window" value={tok(stats.windowTokens)} labelWidth={92} />
             <div className="mt-1 flex items-center gap-2 py-[2px]">
               <span className="tape shrink-0 text-ink-soft" style={{ width: 92 }}>
@@ -258,7 +291,12 @@ export default function SessionDetail() {
             </div>
             <SectionHeader title="code written" />
             <Stat label="lines" value={`+${int(stats.additions)} −${int(stats.deletions)}`} labelWidth={92} />
-            <Stat label="written bytes" value={`${int(stats.writeLines)} lines`} tone="faint" labelWidth={92} />
+            <Stat
+              label="written bytes"
+              value={`${int(stats.writeLines)} lines`}
+              tone="faint"
+              labelWidth={92}
+            />
           </Panel>
 
           <Panel title="tools used">
@@ -271,11 +309,18 @@ export default function SessionDetail() {
                 const cols = toolsByName.reduce((w, [, t]) => Math.max(w, int(t.calls).length), 2);
                 return toolsByName.map(([name, t]) => (
                   <div key={name} className="flex items-baseline gap-2 py-px">
-                    <Link to={link(`/tools/${encodeURIComponent(name)}`)} className="tape w-[92px] shrink-0 truncate no-underline hover:underline" title={`open ${name}`}>
+                    <Link
+                      to={link(`/tools/${encodeURIComponent(name)}`)}
+                      className="tape w-[92px] shrink-0 truncate no-underline hover:underline"
+                      title={`open ${name}`}
+                    >
                       {name}
                     </Link>
                     <RateBar rate={t.calls > 0 ? t.errors / t.calls : 0} width={54} />
-                    <span className="tape tabular shrink-0 text-right text-ink-soft" style={{ width: `${cols}ch` }}>
+                    <span
+                      className="tape tabular shrink-0 text-right text-ink-soft"
+                      style={{ width: `${cols}ch` }}
+                    >
                       {int(t.calls)}
                     </span>
                     {t.errors > 0 && <span className="tape shrink-0 text-danger">{t.errors}×</span>}
@@ -291,13 +336,21 @@ export default function SessionDetail() {
             ) : (
               <>
                 {related.ancestors.map((a) => (
-                  <Link key={a.id} to={href(a.id)} className="tape block truncate py-px pl-2 text-ink-soft no-underline hover:bg-ink/5 hover:underline">
+                  <Link
+                    key={a.id}
+                    to={href(a.id)}
+                    className="tape block truncate py-px pl-2 text-ink-soft no-underline hover:bg-ink/5 hover:underline"
+                  >
                     ↑ {a.title ?? a.id}
                   </Link>
                 ))}
                 <div className="tape py-px font-semibold">◆ {title}</div>
                 {related.children.map((c) => (
-                  <Link key={c.id} to={href(c.id)} className="tape block truncate py-px pl-2 no-underline hover:bg-ink/5 hover:underline">
+                  <Link
+                    key={c.id}
+                    to={href(c.id)}
+                    className="tape block truncate py-px pl-2 no-underline hover:bg-ink/5 hover:underline"
+                  >
                     └ {c.title ?? c.id} <span className="text-ink-faint">{shortModel(c.model)}</span>
                   </Link>
                 ))}
@@ -312,7 +365,13 @@ export default function SessionDetail() {
 
         {/* ── timeline + transcript ─────────────────────────────── */}
         <div className="flex min-w-0 flex-col gap-3">
-          <Panel title="turn timeline" bodyClass="p-2" right={<span className="tape text-ink-faint">{turnCount} turns · brush to narrow the transcript</span>}>
+          <Panel
+            title="turn timeline"
+            bodyClass="p-2"
+            right={
+              <span className="tape text-ink-faint">{turnCount} turns · brush to narrow the transcript</span>
+            }
+          >
             <TimeArea
               buckets={buckets}
               keys={TOKEN_CLASSES.map((c) => ({ key: c.key, label: c.label, color: c.color }))}
@@ -398,7 +457,10 @@ export default function SessionDetail() {
             </div>
           </Panel>
 
-          <Panel title="spend per turn" right={<Sparkline values={turns.map((t) => t.cost)} color="var(--color-good)" height={16} />}>
+          <Panel
+            title="spend per turn"
+            right={<Sparkline values={turns.map((t) => t.cost)} color="var(--color-good)" height={16} />}
+          >
             <div className="tape text-ink-faint">
               {(() => {
                 const billed = turns.filter((t) => t.cost > 0).length;
@@ -421,7 +483,8 @@ export default function SessionDetail() {
         }
         info={
           <>
-            window {label} · {int(turnCount)} turns · {tok(stats.total)} tokens · {stats.cost > 0 ? usd(stats.cost) : "free"}
+            window {label} · {int(turnCount)} turns · {tok(stats.total)} tokens ·{" "}
+            {stats.cost > 0 ? usd(stats.cost) : "free"}
           </>
         }
       />

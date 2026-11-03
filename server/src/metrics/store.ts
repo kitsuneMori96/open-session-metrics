@@ -100,7 +100,7 @@ export function sourceChanged(kind: SourceKind = SOURCE_KIND): boolean {
  */
 export async function rebuild(
   kind: SourceKind = SOURCE_KIND,
-  opts: { full?: boolean } = {}
+  opts: { full?: boolean } = {},
 ): Promise<BuildReport> {
   mkdirSync(DATA_DIR, { recursive: true });
   // `full: false` is an explicit request for the incremental path, so the schema check
@@ -123,7 +123,8 @@ const nextFile = (kind: SourceKind) => `${metricsDbPath(kind)}.next`;
 
 async function fullRebuild(kind: SourceKind): Promise<BuildReport> {
   const next = nextFile(kind);
-  for (const suffix of ["", "-wal", "-shm"]) if (existsSync(next + suffix)) rmSync(next + suffix, { force: true });
+  for (const suffix of ["", "-wal", "-shm"])
+    if (existsSync(next + suffix)) rmSync(next + suffix, { force: true });
 
   const writer = new DatabaseSync(next);
   writer.exec("PRAGMA journal_mode = WAL");
@@ -157,8 +158,15 @@ async function incrementalRebuild(kind: SourceKind): Promise<BuildReport> {
     return {
       mode: "incremental",
       schema: getMeta(db, "sourceSchema") ?? "v2",
-      sessions: 0, turns: 0, tools: 0, parts: 0, events: 0, flow: 0, heat: 0,
-      models: 0, ms: 0,
+      sessions: 0,
+      turns: 0,
+      tools: 0,
+      parts: 0,
+      events: 0,
+      flow: 0,
+      heat: 0,
+      models: 0,
+      ms: 0,
     };
   }
   return build(db, { mode: "incremental", sessionIds: changed, kind });

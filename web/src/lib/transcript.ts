@@ -72,10 +72,28 @@ export function buildRows(turns: Turn[], prompts: PromptLine[] = []): Row[] {
     for (const part of turn.parts as Part[]) {
       if (part.kind === "text") {
         const text = part.text.trim();
-        if (text) rows.push({ id: `text-${turn.id}-${part.ordinal}`, kind: "text", turn, turnIndex, text, part: null, cumTokens: cum });
+        if (text)
+          rows.push({
+            id: `text-${turn.id}-${part.ordinal}`,
+            kind: "text",
+            turn,
+            turnIndex,
+            text,
+            part: null,
+            cumTokens: cum,
+          });
       } else if (part.kind === "reasoning") {
         const text = part.text.trim();
-        if (text) rows.push({ id: `reason-${turn.id}-${part.ordinal}`, kind: "reasoning", turn, turnIndex, text, part: null, cumTokens: cum });
+        if (text)
+          rows.push({
+            id: `reason-${turn.id}-${part.ordinal}`,
+            kind: "reasoning",
+            turn,
+            turnIndex,
+            text,
+            part: null,
+            cumTokens: cum,
+          });
       } else {
         rows.push({
           id: `tool-${turn.id}-${part.ordinal}`,
@@ -108,7 +126,7 @@ export function rowMatches(
   query: string,
   from: number,
   to: number,
-  md = false
+  md = false,
 ): boolean {
   if (row.turnIndex < from || row.turnIndex > to) return false;
   if (filter !== "all" && row.kind !== "turn") {
@@ -278,7 +296,8 @@ export const OUT_ROWS = 40;
  * notation: the error signatures on the tools screen count in `4×`. `✗` (U+2717) is in
  * neither face and was being drawn by whatever font the OS offered instead.
  */
-export const statusGlyph = (status: string): string => (status === "completed" ? "✓" : status === "error" ? "×" : "◌");
+export const statusGlyph = (status: string): string =>
+  status === "completed" ? "✓" : status === "error" ? "×" : "◌";
 
 /**
  * The text as it is *read*, with the markers gone.
@@ -293,15 +312,17 @@ export const statusGlyph = (status: string): string => (status === "completed" ?
  * pipes, stars and hashes are content, not syntax.
  */
 export function plainText(src: string): string {
-  return src
-    .replace(/^ {0,3}(?:`{3,}|~{3,}).*$/gm, "")
-    .replace(/^ {0,3}#{1,6}[ \t]+/gm, "")
-    // An unordered marker is drawn as `·`, an ordered one keeps its number, so the
-    // projection does the same: searching "1." has to find a numbered item.
-    .replace(/^([ \t]*)[-*+][ \t]+/gm, "$1· ")
-    .replace(/^ {0,3}>[ \t]?/gm, "")
-    .replace(/^[ \t]*\|?[ \t:|-]+\|$/gm, "")
-    .replace(/\|/g, " ")
-    .replace(/\*\*/g, "")
-    .replace(/`/g, "");
+  return (
+    src
+      .replace(/^ {0,3}(?:`{3,}|~{3,}).*$/gm, "")
+      .replace(/^ {0,3}#{1,6}[ \t]+/gm, "")
+      // An unordered marker is drawn as `·`, an ordered one keeps its number, so the
+      // projection does the same: searching "1." has to find a numbered item.
+      .replace(/^([ \t]*)[-*+][ \t]+/gm, "$1· ")
+      .replace(/^ {0,3}>[ \t]?/gm, "")
+      .replace(/^[ \t]*\|?[ \t:|-]+\|$/gm, "")
+      .replace(/\|/g, " ")
+      .replace(/\*\*/g, "")
+      .replace(/`/g, "")
+  );
 }

@@ -14,7 +14,15 @@
 export type Granularity = "5m" | "hour" | "day" | "week" | "month" | "quarter" | "year";
 
 /** Finest to coarsest — the order `pickGranularity` climbs. */
-export const GRANULARITIES: readonly Granularity[] = ["5m", "hour", "day", "week", "month", "quarter", "year"];
+export const GRANULARITIES: readonly Granularity[] = [
+  "5m",
+  "hour",
+  "day",
+  "week",
+  "month",
+  "quarter",
+  "year",
+];
 
 /** Hard ceiling on columns in one series. 200 keeps a 30 h window readable at 1 h … */
 export const MAX_COLS = 200;
@@ -161,8 +169,10 @@ export function bucketKeySql(gran: Granularity): string {
     case "month":
       return "strftime('%Y-%m', t.created / 1000, 'unixepoch', 'localtime')";
     case "quarter":
-      return "strftime('%Y', t.created / 1000, 'unixepoch', 'localtime') || '-Q' || " +
-        "CAST((CAST(strftime('%m', t.created / 1000, 'unixepoch', 'localtime') AS INTEGER) - 1) / 3 AS INTEGER)";
+      return (
+        "strftime('%Y', t.created / 1000, 'unixepoch', 'localtime') || '-Q' || " +
+        "CAST((CAST(strftime('%m', t.created / 1000, 'unixepoch', 'localtime') AS INTEGER) - 1) / 3 AS INTEGER)"
+      );
     case "year":
       return "strftime('%Y', t.created / 1000, 'unixepoch', 'localtime')";
   }

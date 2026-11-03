@@ -57,10 +57,12 @@ export const usdPerM = (cost: number, tokens: number): string => {
 };
 
 /** Exact money for a single row: four decimals, never rounded away. */
-export const usd4 = (n: number): string => (MONEY_UNIT === "credit" ? `${n.toFixed(4)} cr` : `$${n.toFixed(4)}`);
+export const usd4 = (n: number): string =>
+  MONEY_UNIT === "credit" ? `${n.toFixed(4)} cr` : `$${n.toFixed(4)}`;
 
 /** A cost-per-volume figure whose amount is already normalised (per Mtok / per Mctx). */
-export const perMRate = (v: number): string => (MONEY_UNIT === "credit" ? `${v.toFixed(2)} cr` : `$${v.toFixed(2)}`);
+export const perMRate = (v: number): string =>
+  MONEY_UNIT === "credit" ? `${v.toFixed(2)} cr` : `$${v.toFixed(2)}`;
 
 /** Axis/panel captions that name the unit (they cannot be formatted numbers). */
 export const perMLabel = (): string => (MONEY_UNIT === "credit" ? "cr/Mctx" : "$/Mtok");
@@ -73,7 +75,8 @@ export const pct = (ratio: number, digits = 1): string => `${(ratio * 100).toFix
 export const pctInt = (ratio: number): string => `${Math.round(ratio * 100)}%`;
 
 /** `+12.4%` / `−3.1%`, with the sign a comparison needs. */
-export const signed = (ratio: number, digits = 1): string => `${ratio >= 0 ? "+" : "−"}${(Math.abs(ratio) * 100).toFixed(digits)}%`;
+export const signed = (ratio: number, digits = 1): string =>
+  `${ratio >= 0 ? "+" : "−"}${(Math.abs(ratio) * 100).toFixed(digits)}%`;
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -101,7 +104,11 @@ export const durInline = (ms: number): string => {
 };
 
 export const rate = (tokensPerSecond: number): string =>
-  tokensPerSecond >= 100 ? `${Math.round(tokensPerSecond)} tok/s` : tokensPerSecond > 0 ? `${tokensPerSecond.toFixed(1)} tok/s` : "—";
+  tokensPerSecond >= 100
+    ? `${Math.round(tokensPerSecond)} tok/s`
+    : tokensPerSecond > 0
+      ? `${tokensPerSecond.toFixed(1)} tok/s`
+      : "—";
 
 export const clockSec = (ts: number): string => {
   const d = new Date(ts);

@@ -44,7 +44,14 @@ export default function Tools() {
         accessorKey: "name",
         cell: ({ row }) => <span className="tape truncate">{row.original.name}</span>,
       },
-      { id: "calls", header: "calls", size: 66, accessorKey: "calls", meta: { align: "right" }, cell: ({ row }) => <span className="tape tabular">{int(row.original.calls)}</span> },
+      {
+        id: "calls",
+        header: "calls",
+        size: 66,
+        accessorKey: "calls",
+        meta: { align: "right" },
+        cell: ({ row }) => <span className="tape tabular">{int(row.original.calls)}</span>,
+      },
       {
         id: "errors",
         header: "err",
@@ -53,19 +60,64 @@ export default function Tools() {
         meta: { align: "right" },
         cell: ({ row }) => (
           <span className="flex items-center justify-end gap-2">
-            <RateBar rate={row.original.calls > 0 ? row.original.errors / row.original.calls : 0} width={34} />
+            <RateBar
+              rate={row.original.calls > 0 ? row.original.errors / row.original.calls : 0}
+              width={34}
+            />
             <span className="tape tabular w-[20px] text-right">{row.original.errors}</span>
           </span>
         ),
       },
-      { id: "p50Ms", header: "p50", size: 62, accessorKey: "p50Ms", meta: { align: "right" }, cell: ({ row }) => <span className="tape tabular text-ink-soft">{dur(row.original.p50Ms)}</span> },
-      { id: "p95Ms", header: "p95", size: 62, accessorKey: "p95Ms", meta: { align: "right" }, cell: ({ row }) => <span className="tape tabular text-ink-soft">{dur(row.original.p95Ms)}</span> },
-      { id: "maxMs", header: "max", size: 66, accessorKey: "maxMs", meta: { align: "right" }, cell: ({ row }) => <span className="tape tabular text-ink-faint">{dur(row.original.maxMs)}</span> },
-      { id: "avgMs", header: "mean", size: 66, accessorKey: "avgMs", meta: { align: "right" }, cell: ({ row }) => <span className="tape tabular text-ink-faint">{dur(row.original.avgMs)}</span> },
-      { id: "sessions", header: "sessions", size: 72, accessorKey: "sessions", meta: { align: "right" }, cell: ({ row }) => <span className="tape tabular text-ink-faint">{row.original.sessions}</span> },
-      { id: "agents", header: "agents", size: 62, accessorKey: "agents", meta: { align: "right" }, cell: ({ row }) => <span className="tape tabular text-ink-faint">{row.original.agents}</span> },
+      {
+        id: "p50Ms",
+        header: "p50",
+        size: 62,
+        accessorKey: "p50Ms",
+        meta: { align: "right" },
+        cell: ({ row }) => <span className="tape tabular text-ink-soft">{dur(row.original.p50Ms)}</span>,
+      },
+      {
+        id: "p95Ms",
+        header: "p95",
+        size: 62,
+        accessorKey: "p95Ms",
+        meta: { align: "right" },
+        cell: ({ row }) => <span className="tape tabular text-ink-soft">{dur(row.original.p95Ms)}</span>,
+      },
+      {
+        id: "maxMs",
+        header: "max",
+        size: 66,
+        accessorKey: "maxMs",
+        meta: { align: "right" },
+        cell: ({ row }) => <span className="tape tabular text-ink-faint">{dur(row.original.maxMs)}</span>,
+      },
+      {
+        id: "avgMs",
+        header: "mean",
+        size: 66,
+        accessorKey: "avgMs",
+        meta: { align: "right" },
+        cell: ({ row }) => <span className="tape tabular text-ink-faint">{dur(row.original.avgMs)}</span>,
+      },
+      {
+        id: "sessions",
+        header: "sessions",
+        size: 72,
+        accessorKey: "sessions",
+        meta: { align: "right" },
+        cell: ({ row }) => <span className="tape tabular text-ink-faint">{row.original.sessions}</span>,
+      },
+      {
+        id: "agents",
+        header: "agents",
+        size: 62,
+        accessorKey: "agents",
+        meta: { align: "right" },
+        cell: ({ row }) => <span className="tape tabular text-ink-faint">{row.original.agents}</span>,
+      },
     ],
-    []
+    [],
   );
 
   if (isLoading || !data) return <Skeleton tiles={4} rows={1} />;
@@ -77,7 +129,8 @@ export default function Tools() {
       <div className="hairline-b flex shrink-0 flex-wrap items-center gap-2 px-2 py-1">
         <span className="micro shrink-0">tools</span>
         <span className="tape shrink-0 text-ink-faint">
-          {tools.length} distinct · {int(totals.calls)} calls · {(totals.rate * 100).toFixed(2)}% failed · {dur(totals.ms)} in tool time
+          {tools.length} distinct · {int(totals.calls)} calls · {(totals.rate * 100).toFixed(2)}% failed ·{" "}
+          {dur(totals.ms)} in tool time
         </span>
         <span className="flex-1" />
         {name && (
@@ -95,7 +148,9 @@ export default function Tools() {
             columns={columns}
             getRowId={(t) => t.name}
             sorting={sorting}
-            onSortingChange={(u: Updater<SortingState>) => setSorting((prev) => (typeof u === "function" ? u(prev) : u))}
+            onSortingChange={(u: Updater<SortingState>) =>
+              setSorting((prev) => (typeof u === "function" ? u(prev) : u))
+            }
             expanded={expanded}
             onRowClick={(t) => navigate(href(`/tools/${encodeURIComponent(t.name)}`))}
             activeId={name ?? null}
@@ -115,19 +170,29 @@ export default function Tools() {
                 <span className="text-[15px] font-semibold">{active.name}</span>
                 {active.totals && (
                   <span className="tape text-ink-faint">
-                    {int(active.totals.calls)} calls in {active.totals.sessions} sessions by {active.totals.agents} agents
+                    {int(active.totals.calls)} calls in {active.totals.sessions} sessions by{" "}
+                    {active.totals.agents} agents
                   </span>
                 )}
               </div>
 
               <div className="grid grid-cols-2 gap-x-4 sm:grid-cols-4">
-                <Stat label="failed" value={`${active.totals?.errors ?? 0} (${pct(active.totals && active.totals.calls > 0 ? active.totals.errors / active.totals.calls : 0)})`} tone={(active.totals?.errors ?? 0) > 0 ? "danger" : "good"} labelWidth={52} />
+                <Stat
+                  label="failed"
+                  value={`${active.totals?.errors ?? 0} (${pct(active.totals && active.totals.calls > 0 ? active.totals.errors / active.totals.calls : 0)})`}
+                  tone={(active.totals?.errors ?? 0) > 0 ? "danger" : "good"}
+                  labelWidth={52}
+                />
                 <Stat label="median" value={dur(active.totals?.p50Ms ?? 0)} labelWidth={52} />
                 <Stat label="p95" value={dur(active.totals?.p95Ms ?? 0)} labelWidth={52} />
                 <Stat label="max" value={dur(active.totals?.maxMs ?? 0)} labelWidth={52} />
                 <Stat label="mean" value={dur(active.totals?.avgMs ?? 0)} tone="faint" labelWidth={52} />
                 <Stat label="total" value={dur(active.totals?.totalMs ?? 0)} tone="faint" labelWidth={52} />
-                <Stat label="edited" value={`+${int(active.edited.additions)} −${int(active.edited.deletions)}`} labelWidth={52} />
+                <Stat
+                  label="edited"
+                  value={`+${int(active.edited.additions)} −${int(active.edited.deletions)}`}
+                  labelWidth={52}
+                />
                 <Stat label="files" value={int(active.edited.files)} tone="faint" labelWidth={52} />
               </div>
 
@@ -145,7 +210,10 @@ export default function Tools() {
               />
               <TimeBars
                 label="failure rate"
-                values={active.buckets.map((b) => ({ ts: b.ts, value: b.calls > 0 ? b.errors / b.calls : 0 }))}
+                values={active.buckets.map((b) => ({
+                  ts: b.ts,
+                  value: b.calls > 0 ? b.errors / b.calls : 0,
+                }))}
                 gran={active.gran}
                 mode="line"
                 color="var(--color-danger)"
@@ -154,10 +222,12 @@ export default function Tools() {
                 note={`${active.totals?.errors ?? 0} failures across ${active.buckets.length} buckets`}
                 tipExtra={(i) => {
                   const b = active.buckets[i];
-                  return b ? [
-                    { label: "failures", value: int(b.errors) },
-                    { label: "calls", value: int(b.calls) },
-                  ] : [];
+                  return b
+                    ? [
+                        { label: "failures", value: int(b.errors) },
+                        { label: "calls", value: int(b.calls) },
+                      ]
+                    : [];
                 }}
               />
               <Histogram
@@ -200,7 +270,10 @@ export default function Tools() {
                 </Panel>
               </div>
 
-              <Panel title="error signatures" right={<span className="tape text-ink-faint">grouped by message</span>}>
+              <Panel
+                title="error signatures"
+                right={<span className="tape text-ink-faint">grouped by message</span>}
+              >
                 {active.signatures.length === 0 ? (
                   <Empty>this tool has not failed in the window</Empty>
                 ) : (
@@ -211,14 +284,19 @@ export default function Tools() {
                         <span className="tape min-w-0 flex-1 truncate text-ink">{sig.message}</span>
                       </div>
                       {sig.sample.includes("\n") && (
-                        <pre className="out mt-1 max-h-[120px] overflow-auto border border-rule bg-paper/60 p-2 text-[10px]">{sig.sample}</pre>
+                        <pre className="out mt-1 max-h-[120px] overflow-auto border border-rule bg-paper/60 p-2 text-[10px]">
+                          {sig.sample}
+                        </pre>
                       )}
                     </div>
                   ))
                 )}
               </Panel>
 
-              <Panel title="recent failures" right={<span className="tape text-ink-faint">click to open the session</span>}>
+              <Panel
+                title="recent failures"
+                right={<span className="tape text-ink-faint">click to open the session</span>}
+              >
                 {active.recentErrors.length === 0 ? (
                   <Empty>none</Empty>
                 ) : (
@@ -247,7 +325,11 @@ export default function Tools() {
             <BaseHints /> · click a row to open the tool
           </>
         }
-        info={<>{tools.length} tools · {tok(data.series.buckets.reduce((a, b) => a + b.total, 0))} tokens in slice</>}
+        info={
+          <>
+            {tools.length} tools · {tok(data.series.buckets.reduce((a, b) => a + b.total, 0))} tokens in slice
+          </>
+        }
       />
     </div>
   );

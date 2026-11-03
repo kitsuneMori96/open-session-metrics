@@ -125,7 +125,8 @@ if (flags.check && command !== "upgrade") fail("--check is only valid with `osm 
 
 const HOST = flags.host ?? process.env.OSM_HOST ?? "127.0.0.1";
 const PORT = flags.port ?? Number(process.env.OSM_PORT ?? 8787);
-if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) fail(`invalid port: ${flags.port ?? process.env.OSM_PORT}`);
+if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535)
+  fail(`invalid port: ${flags.port ?? process.env.OSM_PORT}`);
 // Same rule as server/src/config.ts: a checkout keeps state in `<repo>/.data`,
 // a global install goes to the XDG data dir.
 const INSTALLED = `${path.sep}node_modules${path.sep}`;
@@ -242,9 +243,7 @@ function listenerPid() {
 }
 
 function onPath(bin) {
-  return (process.env.PATH ?? "")
-    .split(path.delimiter)
-    .some((dir) => dir && existsSync(path.join(dir, bin)));
+  return (process.env.PATH ?? "").split(path.delimiter).some((dir) => dir && existsSync(path.join(dir, bin)));
 }
 
 function openBrowser() {
@@ -255,7 +254,11 @@ function openBrowser() {
   let cmd;
   if (process.platform === "darwin") cmd = ["open", [URL]];
   else if (process.platform === "win32") cmd = ["cmd", ["/c", "start", "", URL]];
-  else if (existsSync("/proc/version") && readFileSync("/proc/version", "utf8").toLowerCase().includes("microsoft") && onPath("wslview"))
+  else if (
+    existsSync("/proc/version") &&
+    readFileSync("/proc/version", "utf8").toLowerCase().includes("microsoft") &&
+    onPath("wslview")
+  )
     cmd = ["wslview", [URL]];
   else if (onPath("xdg-open")) cmd = ["xdg-open", [URL]];
   if (!cmd) {
@@ -307,7 +310,8 @@ function lastLines(file, count) {
 }
 
 function checkInstall() {
-  if (!existsSync(SERVER_ENTRY)) fail(`server bundle missing (${SERVER_ENTRY}) — reinstall: npm i -g ${PKG.name}`);
+  if (!existsSync(SERVER_ENTRY))
+    fail(`server bundle missing (${SERVER_ENTRY}) — reinstall: npm i -g ${PKG.name}`);
   if (!existsSync(WEB_INDEX)) fail(`web bundle missing (${WEB_INDEX}) — reinstall: npm i -g ${PKG.name}`);
 }
 
@@ -439,7 +443,8 @@ async function status() {
   const holder = pid ?? (up ? listenerPid() : null);
   note(`${up ? "up" : "down"} — ${URL}`);
   if (pid) note(`  pid     ${pid}`);
-  else if (up) note(`  pid     ${holder ? `${holder} (not started by osm)` : "unknown (not started by osm)"}`);
+  else if (up)
+    note(`  pid     ${holder ? `${holder} (not started by osm)` : "unknown (not started by osm)"}`);
   note(`  data    ${DATA_DIR}${existsSync(path.join(DATA_DIR, "metrics.db")) ? "" : " (no metrics.db yet)"}`);
   note(`  source  ${SOURCE_DB}${existsSync(SOURCE_DB) ? "" : " (missing)"}`);
   if (existsSync(WEB_INDEX)) {
@@ -486,10 +491,12 @@ const MANAGERS = {
 function globalManager() {
   const root = ROOT.toLowerCase();
   const sep = path.sep;
-  if (process.env.PNPM_HOME && root.startsWith(path.join(process.env.PNPM_HOME, "global").toLowerCase())) return "pnpm";
+  if (process.env.PNPM_HOME && root.startsWith(path.join(process.env.PNPM_HOME, "global").toLowerCase()))
+    return "pnpm";
   if (root.includes(`${sep}pnpm${sep}global${sep}`)) return "pnpm";
   if (root.includes(`${sep}.bun${sep}install${sep}global${sep}`)) return "bun";
-  if (root.includes(`${sep}yarn${sep}global${sep}`) || root.includes(`${sep}.config${sep}yarn${sep}`)) return "yarn";
+  if (root.includes(`${sep}yarn${sep}global${sep}`) || root.includes(`${sep}.config${sep}yarn${sep}`))
+    return "yarn";
   return "npm";
 }
 
@@ -541,7 +548,8 @@ async function upgrade() {
   if (flags.check) {
     if (info?.error) fail(`could not check the registry (${info.error})`);
     if (info.newer) note(`${info.latest} available (running ${PKG.version}) — osm upgrade`);
-    else if (isNewer(PKG.version, info.latest)) note(`running ${PKG.version}; the registry has ${info.latest}`);
+    else if (isNewer(PKG.version, info.latest))
+      note(`running ${PKG.version}; the registry has ${info.latest}`);
     else note(`${PKG.version} is the latest`);
     return;
   }

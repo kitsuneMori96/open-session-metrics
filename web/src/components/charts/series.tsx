@@ -5,7 +5,17 @@ import { Brush } from "@visx/brush";
 import { curveLinear } from "@visx/curve";
 import { scaleLinear } from "@visx/scale";
 import type { Bucket } from "../../lib/api";
-import { RULE, RULE_STRONG, SOFT, granLabel, tickIndices, timeTick, timeTooltip, yTicks, type GranularityLike } from "../../lib/chart";
+import {
+  RULE,
+  RULE_STRONG,
+  SOFT,
+  granLabel,
+  tickIndices,
+  timeTick,
+  timeTooltip,
+  yTicks,
+  type GranularityLike,
+} from "../../lib/chart";
 import { AxisX, AxisY, Figure, Rows, Tip, TipNote, TipRow, TipTitle, useTip, type Box } from "./base";
 import { tok } from "../../lib/format";
 import { fingerprint } from "../../lib/motion";
@@ -48,7 +58,14 @@ export function Sparkline({
         fill={color}
         fillOpacity={0.14}
       />
-      <LinePath data={points} x={(d) => d[0]} y={(d) => d[1]} stroke={color} strokeWidth={strokeWidth} curve={curveLinear} />
+      <LinePath
+        data={points}
+        x={(d) => d[0]}
+        y={(d) => d[1]}
+        stroke={color}
+        strokeWidth={strokeWidth}
+        curve={curveLinear}
+      />
     </svg>
   );
 }
@@ -129,11 +146,11 @@ export function TimeArea({
         for (const k of shown) row[k.key] = (b[k.key as keyof Bucket] as number) || 0;
         return row;
       }),
-    [buckets, shown]
+    [buckets, shown],
   );
   const totals = useMemo(
     () => buckets.map((b) => shown.reduce((sum, k) => sum + ((b[k.key as keyof Bucket] as number) || 0), 0)),
-    [buckets, shown]
+    [buckets, shown],
   );
   const peak = Math.max(...totals, 0);
 
@@ -152,12 +169,18 @@ export function TimeArea({
         </span>
       }
       note={peak === 0 ? "no assistant traffic in this window" : undefined}
-      wipeKey={fingerprint(totals, `${buckets.length}:${buckets[buckets.length - 1]?.ts ?? 0}:${shown.length}`)}
+      wipeKey={fingerprint(
+        totals,
+        `${buckets.length}:${buckets[buckets.length - 1]?.ts ?? 0}:${shown.length}`,
+      )}
     >
       {(box: Box) => {
         const { margin, inner, width } = box;
         const plotH = inner.height;
-        const x = scaleLinear<number>({ domain: [0, Math.max(1, buckets.length - 1)], range: [0, inner.width] });
+        const x = scaleLinear<number>({
+          domain: [0, Math.max(1, buckets.length - 1)],
+          range: [0, inner.width],
+        });
         const y = scaleLinear<number>({ domain: [0, Math.max(peak, 1)], range: [plotH, 0] });
         const yt = yTicks(Math.max(peak, 1), 4);
         const labelIdx = tickIndices(buckets.length, Math.max(2, Math.floor(inner.width / 76)));
@@ -230,7 +253,9 @@ export function TimeArea({
                   left={0}
                   scale={x}
                   tickValues={labelIdx}
-                  format={(v) => (xFormat ? xFormat(Math.round(v)) : timeTick(buckets[Math.round(v)]?.ts ?? 0, gran))}
+                  format={(v) =>
+                    xFormat ? xFormat(Math.round(v)) : timeTick(buckets[Math.round(v)]?.ts ?? 0, gran)
+                  }
                 />
               </Group>
               {hover && (
@@ -379,7 +404,8 @@ export function StackRule({
 }) {
   const tip = useTip();
   const total = segments.reduce((a, s) => a + Math.max(0, s.value), 0);
-  if (total <= 0) return <span className="block" style={{ width, height, background: "var(--color-rule)" }} />;
+  if (total <= 0)
+    return <span className="block" style={{ width, height, background: "var(--color-rule)" }} />;
   return (
     <span className="relative flex overflow-hidden" style={{ width, height }} onMouseLeave={tip.hide}>
       {segments
@@ -389,13 +415,15 @@ export function StackRule({
             key={s.label}
             onMouseEnter={(e) => {
               const host = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
-              tip.show(e.clientX - host.left, e.clientY - host.top, (
+              tip.show(
+                e.clientX - host.left,
+                e.clientY - host.top,
                 <>
                   <TipTitle>{s.label}</TipTitle>
                   <TipRow label="tokens" value={tok(s.value)} />
                   <TipRow label="share" value={`${((s.value / total) * 100).toFixed(1)}%`} />
-                </>
-              ));
+                </>,
+              );
               if (onHover) onHover(s.label);
             }}
             onMouseLeave={onHover ? () => onHover(null) : undefined}

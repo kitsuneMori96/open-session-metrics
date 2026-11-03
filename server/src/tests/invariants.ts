@@ -86,10 +86,12 @@ function store(days: number, perDay: number): DatabaseSync {
       first + i * HOUR,
       first + days * 86400000,
       `generated prompt ${i}`,
-      0.5
+      0.5,
     );
   }
-  const insertTurn = db.prepare("INSERT INTO turns VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+  const insertTurn = db.prepare(
+    "INSERT INTO turns VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+  );
   const insertTool = db.prepare("INSERT INTO tools VALUES (?,?,?,?,?,?)");
   let toolId = 0;
   for (let back = days - 1; back >= 0; back--) {
@@ -103,13 +105,32 @@ function store(days: number, perDay: number): DatabaseSync {
       const out = 60 + ((back * 13 + k * 7) % 900);
       const turnId = `${sid}-${back}-${k}`;
       insertTurn.run(
-        turnId, sid, "assistant", at, at + dur, dur,
-        PROJECTS[si % 2], MODELS[si % 2], AGENTS[si % 2],
-        out * 5, out, 0, out * 3, 0, 0.002 + k * 0.0001,
+        turnId,
+        sid,
+        "assistant",
+        at,
+        at + dur,
+        dur,
+        PROJECTS[si % 2],
+        MODELS[si % 2],
+        AGENTS[si % 2],
+        out * 5,
+        out,
+        0,
+        out * 3,
+        0,
+        0.002 + k * 0.0001,
         k % 7 === 0 ? "length" : "stop",
-        0.2 + ((back + k) % 60) / 100, 128000,
-        TOOLS.length, k % 11 === 0 ? 1 : 0,
-        k % 4, k % 3, 0, day, hour, Math.floor(at / 300000) * 300000
+        0.2 + ((back + k) % 60) / 100,
+        128000,
+        TOOLS.length,
+        k % 11 === 0 ? 1 : 0,
+        k % 4,
+        k % 3,
+        0,
+        day,
+        hour,
+        Math.floor(at / 300000) * 300000,
       );
       for (const name of TOOLS) {
         insertTool.run(++toolId, sid, turnId, name, toolId % 23 === 0 ? "error" : "ok", dur / 2);
@@ -146,7 +167,16 @@ async function measure(days: number, perDay: number) {
   const bytes = Buffer.byteLength(JSON.stringify(data));
   const page = sessionsPage(db, slice, { limit: 100 });
   db.close();
-  return { days, perDay, ms, bytes, data: data!, maxCols: MAX_COLS, rows: page.rows.length, roots: page.roots };
+  return {
+    days,
+    perDay,
+    ms,
+    bytes,
+    data: data!,
+    maxCols: MAX_COLS,
+    rows: page.rows.length,
+    roots: page.roots,
+  };
 }
 
 async function main() {
@@ -158,17 +188,17 @@ async function main() {
   ok(
     "a decade of history still fits the column budget",
     long.data.series.buckets.length <= long.maxCols,
-    `${long.data.series.buckets.length} > ${long.maxCols}`
+    `${long.data.series.buckets.length} > ${long.maxCols}`,
   );
   ok(
     "the axis is at its coarsest, not the data's finest",
     long.data.series.gran === "week" || long.data.series.gran === "month",
-    long.data.series.gran
+    long.data.series.gran,
   );
   ok(
     "the session sample stays bounded",
     long.data.sessions.length <= SESSION_SAMPLE,
-    `${long.data.sessions.length} > ${SESSION_SAMPLE}`
+    `${long.data.sessions.length} > ${SESSION_SAMPLE}`,
   );
   // Size tracks the number of *columns* (which is capped), not the number of days: the
   // decade has 121 weekly columns and the quarter 90 daily ones, and each column costs
@@ -178,25 +208,25 @@ async function main() {
   ok(
     "the payload grows with columns, not with history",
     perCol(long) <= perCol(short) * 1.2,
-    `${perCol(long).toFixed(0)}B/column vs ${perCol(short).toFixed(0)}B/column`
+    `${perCol(long).toFixed(0)}B/column vs ${perCol(short).toFixed(0)}B/column`,
   );
   ok(
     "the response stays small in absolute terms",
     long.bytes < 200 * 1024,
-    `${(long.bytes / 1024).toFixed(0)}KB`
+    `${(long.bytes / 1024).toFixed(0)}KB`,
   );
   const total = long.data.totals.turns;
   ok(
     "no turns are silently dropped by the coarser axis",
     Math.abs(total - long.days * long.perDay) <= long.perDay,
-    `${total} of ${long.days * long.perDay}`
+    `${total} of ${long.days * long.perDay}`,
   );
 
   // The page is over sessions, not days: 40x the history, the same 12 sessions.
   ok(
     "paging a decade still returns the same sessions",
     long.rows === short.rows && long.roots === short.roots,
-    `${long.rows}/${long.roots} vs ${short.rows}/${short.roots}`
+    `${long.rows}/${long.roots} vs ${short.rows}/${short.roots}`,
   );
 
   // Percentiles still walk the window's turns, so this is a ceiling rather than a
@@ -204,15 +234,15 @@ async function main() {
   ok(
     "a decade answers in seconds, not in proportion to its rows",
     long.ms < 3000,
-    `${long.ms.toFixed(0)}ms for ${(long.days * long.perDay).toLocaleString()} turns (a quarter: ${short.ms.toFixed(0)}ms)`
+    `${long.ms.toFixed(0)}ms for ${(long.days * long.perDay).toLocaleString()} turns (a quarter: ${short.ms.toFixed(0)}ms)`,
   );
   console.log(
     `\n  ${(long.days / 365).toFixed(1)} years · ${(long.days * long.perDay).toLocaleString()} turns · ` +
-      `${long.data.series.buckets.length} columns · ${(long.bytes / 1024).toFixed(0)}KB · ${long.ms.toFixed(0)}ms`
+      `${long.data.series.buckets.length} columns · ${(long.bytes / 1024).toFixed(0)}KB · ${long.ms.toFixed(0)}ms`,
   );
   console.log(
     `  ${(short.days / 30).toFixed(0)} months · ${(short.days * short.perDay).toLocaleString()} turns · ` +
-      `${short.data.series.buckets.length} columns · ${(short.bytes / 1024).toFixed(0)}KB · ${short.ms.toFixed(0)}ms`
+      `${short.data.series.buckets.length} columns · ${(short.bytes / 1024).toFixed(0)}KB · ${short.ms.toFixed(0)}ms`,
   );
 
   console.log(failures ? `\n${failures} check(s) failed` : "\nall invariant checks passed");

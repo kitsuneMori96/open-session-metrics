@@ -90,7 +90,7 @@ export default function Transcript({
   const all = useMemo(() => buildRows(turns, prompts), [turns, prompts]);
   const matched = useMemo(
     () => all.filter((r) => rowMatches(r, filter, query, turnRange[0], turnRange[1], md)),
-    [all, filter, query, turnRange, md]
+    [all, filter, query, turnRange, md],
   );
   /**
    * A search keeps the header of any turn that still has a hit under it. Without this
@@ -157,44 +157,46 @@ export default function Transcript({
         return next;
       });
     },
-    [rows.length, virt]
+    [rows.length, virt],
   );
 
   const jumpMatch = useCallback(
     (dir: 1 | -1) => {
       if (matches.length === 0) return;
       const at = matches.findIndex((i) => i > cursor);
-      const next = dir === 1 ? (at === -1 ? matches[0] : matches[at]) : [...matches].reverse().find((i) => i < cursor) ?? matches[matches.length - 1];
+      const next =
+        dir === 1
+          ? at === -1
+            ? matches[0]
+            : matches[at]
+          : ([...matches].reverse().find((i) => i < cursor) ?? matches[matches.length - 1]);
       setCursor(next);
       virt.scrollToIndex(next, { align: "center" });
     },
-    [matches, cursor, virt]
+    [matches, cursor, virt],
   );
 
-  useKeys(
-    (e) => {
-      if (e.key === "j") return move(1);
-      if (e.key === "k") return move(-1);
-      if (e.key === "g") return move(-rows.length);
-      if (e.key === "G") return move(rows.length);
-      if (e.key === "n") return jumpMatch(1);
-      if (e.key === "N") return jumpMatch(-1);
-      if (e.key === "f") return onFilter(NEXT_FILTER[filter]);
-      if (e.key === "Enter") {
-        const row = rows[cursor];
-        if (row?.kind === "tool" && row.part && row.turn) return toggleTool(toolKey(row.turn.id, row.part));
-        if (row?.kind === "reasoning") return toggleReasoning(row.id);
-        if (row?.kind === "gap") return toggleGap(row.id);
-        return;
-      }
-      if (e.key === "e" && (rows[cursor]?.kind === "turn" || rows[cursor]?.kind === "prompt")) {
-        onTurnRange([rows[cursor].turnIndex, rows[cursor].turnIndex]);
-        return;
-      }
+  useKeys((e) => {
+    if (e.key === "j") return move(1);
+    if (e.key === "k") return move(-1);
+    if (e.key === "g") return move(-rows.length);
+    if (e.key === "G") return move(rows.length);
+    if (e.key === "n") return jumpMatch(1);
+    if (e.key === "N") return jumpMatch(-1);
+    if (e.key === "f") return onFilter(NEXT_FILTER[filter]);
+    if (e.key === "Enter") {
+      const row = rows[cursor];
+      if (row?.kind === "tool" && row.part && row.turn) return toggleTool(toolKey(row.turn.id, row.part));
+      if (row?.kind === "reasoning") return toggleReasoning(row.id);
+      if (row?.kind === "gap") return toggleGap(row.id);
       return;
-    },
-    keyboard
-  );
+    }
+    if (e.key === "e" && (rows[cursor]?.kind === "turn" || rows[cursor]?.kind === "prompt")) {
+      onTurnRange([rows[cursor].turnIndex, rows[cursor].turnIndex]);
+      return;
+    }
+    return;
+  }, keyboard);
 
   const setExpandedAll = (open: boolean) => {
     if (!open) {
@@ -203,13 +205,15 @@ export default function Transcript({
       return;
     }
     setExpandedTools(
-      new Set(rows.flatMap((r) => (r.kind === "tool" && r.part && r.turn ? [toolKey(r.turn.id, r.part)] : [])))
+      new Set(
+        rows.flatMap((r) => (r.kind === "tool" && r.part && r.turn ? [toolKey(r.turn.id, r.part)] : [])),
+      ),
     );
     setExpandedReasoning(new Set(rows.filter((r) => r.kind === "reasoning").map((r) => r.id)));
   };
 
   const cursorRow = rows[Math.min(cursor, rows.length - 1)];
-  const first = rows.length ? virt.getVirtualItems()[0]?.index ?? 0 : 0;
+  const first = rows.length ? (virt.getVirtualItems()[0]?.index ?? 0) : 0;
   const last = rows.length ? Math.min(rows.length, (virt.getVirtualItems().at(-1)?.index ?? 0) + 1) : 0;
 
   return (
@@ -244,7 +248,10 @@ export default function Transcript({
         )}
         <span className="flex-1" />
         {turnRange[1] - turnRange[0] < turns.length - 1 && (
-          <Chip onClick={() => onTurnRange([0, Math.max(0, turns.length - 1)])} title="clear the timeline selection">
+          <Chip
+            onClick={() => onTurnRange([0, Math.max(0, turns.length - 1)])}
+            title="clear the timeline selection"
+          >
             ✕ turns {turnRange[0] + 1}–{turnRange[1] + 1}
           </Chip>
         )}
@@ -275,8 +282,14 @@ export default function Transcript({
                   key={row.id}
                   ref={virt.measureElement}
                   data-index={item.index}
-                  className={clsx("absolute left-0 top-0 w-full px-2 py-1", cursor === item.index && "bg-flow/[0.07]")}
-                  style={{ transform: `translateY(${item.start}px)`, borderTop: item.index === 0 ? undefined : `1px solid ${ROW_RULE}` }}
+                  className={clsx(
+                    "absolute left-0 top-0 w-full px-2 py-1",
+                    cursor === item.index && "bg-flow/[0.07]",
+                  )}
+                  style={{
+                    transform: `translateY(${item.start}px)`,
+                    borderTop: item.index === 0 ? undefined : `1px solid ${ROW_RULE}`,
+                  }}
                   onClick={() => {
                     setCursor(item.index);
                     if (row.kind === "turn" || row.kind === "prompt") onActiveTurn?.(row.turnIndex);
@@ -380,7 +393,8 @@ function TurnHeader({ row, active, query }: { row: Row; active: boolean; query: 
       {t.errors > 0 && <span className="tape shrink-0 text-danger">{t.errors}×</span>}
       {t.additions + t.deletions > 0 && (
         <span className="tape shrink-0">
-          <span className="text-good">+{t.additions}</span> <span className="text-danger">−{t.deletions}</span>
+          <span className="text-good">+{t.additions}</span>{" "}
+          <span className="text-danger">−{t.deletions}</span>
         </span>
       )}
     </div>
@@ -454,11 +468,17 @@ function ReasoningRow({
 }) {
   return (
     <div className="border-l-2 border-rule pl-2">
-      <button type="button" onClick={onToggle} className="flex w-full items-baseline gap-2 text-left hover:bg-ink/5">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-baseline gap-2 text-left hover:bg-ink/5"
+      >
         <span className="tape shrink-0 text-ink-faint">
           <span className={clsx("turn", open && "rotate-90")}>▸</span> reasoning
         </span>
-        <span className="tape min-w-0 truncate text-ink-soft">{open ? "" : <Mark text={preview} query={query} />}</span>
+        <span className="tape min-w-0 truncate text-ink-soft">
+          {open ? "" : <Mark text={preview} query={query} />}
+        </span>
         <span className="tape shrink-0 text-ink-faint">{int(row.text.length)} chars</span>
       </button>
       {open && (
@@ -470,7 +490,17 @@ function ReasoningRow({
   );
 }
 
-function ToolRow({ row, open, onToggle, query }: { row: Row; open: boolean; onToggle: () => void; query: string }) {
+function ToolRow({
+  row,
+  open,
+  onToggle,
+  query,
+}: {
+  row: Row;
+  open: boolean;
+  onToggle: () => void;
+  query: string;
+}) {
   if (!row.part) return null;
   const p = row.part;
   const error = p.status === "error";
@@ -486,14 +516,23 @@ function ToolRow({ row, open, onToggle, query }: { row: Row; open: boolean; onTo
         onClick={onToggle}
         className="flex w-full items-baseline gap-2 text-left hover:bg-ink/5"
       >
-        <span className={clsx("tape shrink-0", error ? "text-danger" : p.status === "completed" ? "text-good" : "text-warning")}>
+        <span
+          className={clsx(
+            "tape shrink-0",
+            error ? "text-danger" : p.status === "completed" ? "text-good" : "text-warning",
+          )}
+        >
           {statusGlyph(p.status)} {p.name}
         </span>
         <span className="tape min-w-0 flex-1 truncate text-ink-soft">
           <Mark text={p.title ?? ""} query={query} />
         </span>
-        {p.exitCode !== null && p.exitCode !== 0 && <span className="tape shrink-0 text-danger">exit {p.exitCode}</span>}
-        {p.started && p.ended && <span className="tape shrink-0 tabular text-ink-faint">{durInline(p.ended - p.started)}</span>}
+        {p.exitCode !== null && p.exitCode !== 0 && (
+          <span className="tape shrink-0 text-danger">exit {p.exitCode}</span>
+        )}
+        {p.started && p.ended && (
+          <span className="tape shrink-0 tabular text-ink-faint">{durInline(p.ended - p.started)}</span>
+        )}
         <span className="tape shrink-0 tabular text-ink-faint">{int(p.chars)} ch</span>
         <span className="tape shrink-0 text-ink-faint">
           <span className={clsx("turn", open && "rotate-90")}>▸</span>
@@ -548,7 +587,9 @@ function ToolRow({ row, open, onToggle, query }: { row: Row; open: boolean; onTo
               </div>
               <pre className="out max-h-[320px] overflow-auto border border-rule bg-paper/60 p-2 text-[10px] leading-[1.45]">
                 {shown.join("\n")}
-                {outLines.length > shown.length ? `\n… ${int(outLines.length - shown.length)} more lines (capture is capped at ${int(p.chars)} chars)` : ""}
+                {outLines.length > shown.length
+                  ? `\n… ${int(outLines.length - shown.length)} more lines (capture is capped at ${int(p.chars)} chars)`
+                  : ""}
               </pre>
             </>
           )}

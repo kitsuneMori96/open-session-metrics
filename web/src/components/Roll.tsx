@@ -140,6 +140,6 @@ function Digit({ ch, place }: { ch: string; place: number }) {
 
 export function Roll({ text }: { text: string }): ReactNode {
   return Array.from(text).map((ch, i) =>
-    DIGIT.test(ch) ? <Digit key={i} ch={ch} place={i} /> : <span key={i}>{ch}</span>
+    DIGIT.test(ch) ? <Digit key={i} ch={ch} place={i} /> : <span key={i}>{ch}</span>,
   );
 }

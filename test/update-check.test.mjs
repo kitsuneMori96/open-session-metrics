@@ -55,13 +55,10 @@ test("isNewer is strict", () => {
 });
 
 test("registryUrl encodes the scope and tolerates a trailing slash", () => {
-  assert.equal(
-    registryUrl(NAME),
-    "https://registry.npmjs.org/@kitsunemori96%2Fopen-session-metrics/latest"
-  );
+  assert.equal(registryUrl(NAME), "https://registry.npmjs.org/@kitsunemori96%2Fopen-session-metrics/latest");
   assert.equal(
     registryUrl(NAME, "https://npm.example/"),
-    "https://npm.example/@kitsunemori96%2Fopen-session-metrics/latest"
+    "https://npm.example/@kitsunemori96%2Fopen-session-metrics/latest",
   );
 });
 
@@ -140,7 +137,14 @@ test("a failed check is remembered, so the next command does not retry", async (
     calls += 1;
     throw new Error("offline");
   };
-  const first = await checkForUpdate({ name: NAME, current: "0.3.1", dataDir: dir, now: NOW, env: {}, fetchImpl: failFetch });
+  const first = await checkForUpdate({
+    name: NAME,
+    current: "0.3.1",
+    dataDir: dir,
+    now: NOW,
+    env: {},
+    fetchImpl: failFetch,
+  });
   assert.match(first.error, /offline/);
 
   const second = await checkForUpdate({
@@ -193,7 +197,13 @@ test("OSM_OFFLINE never opens a socket but may reuse a cache entry", async (t) =
     calls += 1;
     throw new Error("should not fetch");
   };
-  const empty = await checkForUpdate({ name: NAME, current: "0.3.1", dataDir: dir, env: { OSM_OFFLINE: "1" }, fetchImpl });
+  const empty = await checkForUpdate({
+    name: NAME,
+    current: "0.3.1",
+    dataDir: dir,
+    env: { OSM_OFFLINE: "1" },
+    fetchImpl,
+  });
   assert.equal(empty, null);
 
   writeCache(cachePath(dir), NAME, "0.4.0", NOW);

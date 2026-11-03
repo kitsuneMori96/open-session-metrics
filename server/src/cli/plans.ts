@@ -89,7 +89,8 @@ function meter(kind: SourceKind): Meter | null {
   if (!hasStore(kind)) return null;
   const db = new DatabaseSync(metricsDbPath(kind), { readOnly: true });
   const one = <T>(sql: string, ...args: (number | string)[]): T => db.prepare(sql).get(...args) as T;
-  const meta = (key: string) => one<{ value: string } | undefined>("SELECT value FROM meta WHERE key = ?", key)?.value;
+  const meta = (key: string) =>
+    one<{ value: string } | undefined>("SELECT value FROM meta WHERE key = ?", key)?.value;
   const last = one<{ t: number | null }>("SELECT MAX(created) AS t FROM turns");
   const since = (last.t ?? Date.now()) - BURN_DAYS * DAY;
 
@@ -103,17 +104,17 @@ function meter(kind: SourceKind): Meter | null {
     metered: one<Sum>(`SELECT ${SUM} FROM turns WHERE ${WHERE} AND cost > 0`),
     sessions: one<{ n: number }>("SELECT COUNT(*) AS n FROM sessions").n,
     meteredSessions: one<{ n: number }>(
-      `SELECT COUNT(DISTINCT session_id) AS n FROM turns WHERE ${WHERE} AND cost > 0`
+      `SELECT COUNT(DISTINCT session_id) AS n FROM turns WHERE ${WHERE} AND cost > 0`,
     ).n,
     burnDays: one<{ n: number }>(
       `SELECT COUNT(DISTINCT date(created / 1000, 'unixepoch', 'localtime')) AS n
        FROM turns WHERE ${WHERE} AND cost > 0 AND created >= ?`,
-      since
+      since,
     ).n,
     burn: one<Sum>(`SELECT ${SUM} FROM turns WHERE ${WHERE} AND cost > 0 AND created >= ?`, since),
     reconstructed: !one<{ hit: number } | undefined>(
       `SELECT 1 AS hit FROM turns WHERE ${WHERE}
-         AND (output > 0 OR cache_read > 0 OR cache_write > 0 OR reasoning > 0) LIMIT 1`
+         AND (output > 0 OR cache_read > 0 OR cache_write > 0 OR reasoning > 0) LIMIT 1`,
     ),
     thinSessions: one<{ n: number }>(`SELECT COUNT(*) AS n FROM (${thin})`).n,
     withoutThin: one<Sum>(`SELECT ${SUM} FROM turns WHERE ${WHERE} AND session_id NOT IN (${thin})`),
@@ -144,8 +145,7 @@ const int = (n: number): string => Math.round(n).toLocaleString("en-US");
 function table(head: string[], rows: string[][], aligns: ("l" | "r")[]): string {
   const all = [head, ...rows];
   const w = head.map((_, i) => Math.max(...all.map((r) => r[i].length)));
-  const cell = (s: string, i: number) =>
-    aligns[i] === "r" ? s.padStart(w[i]) : s.padEnd(w[i]);
+  const cell = (s: string, i: number) => (aligns[i] === "r" ? s.padStart(w[i]) : s.padEnd(w[i]));
   return all.map((r) => r.map(cell).join("  ").trimEnd()).join("\n");
 }
 
@@ -164,7 +164,7 @@ function billSplit(kind: SourceKind, list: Price): string[] {
     .prepare(
       `SELECT model, SUM(input) AS i, SUM(output) AS o, SUM(reasoning) AS re,
               SUM(cache_read) AS cr, SUM(cache_write) AS cw
-       FROM turns WHERE ${WHERE} AND cost > 0 GROUP BY model`
+       FROM turns WHERE ${WHERE} AND cost > 0 GROUP BY model`,
     )
     .all() as Record<string, number | string>[];
   const priced = db
@@ -179,7 +179,9 @@ function billSplit(kind: SourceKind, list: Price): string[] {
    * separately, and the paid tier here is six of them.
    */
   const parts = ["input", "output", "reasoning", "cache read", "cache write"].map((name) => ({
-    name, tokens: 0, cost: 0,
+    name,
+    tokens: 0,
+    cost: 0,
   }));
   for (const t of turns) {
     const model = String(t.model);
@@ -211,7 +213,7 @@ function billSplit(kind: SourceKind, list: Price): string[] {
         num((p.cost / total) * 100, 1),
         num((p.tokens / tokens) * 100, 1),
       ]),
-    ["l", "r", "r", "r", "r", "r"]
+    ["l", "r", "r", "r", "r", "r"],
   );
   /**
    * `turns.cost` is what the store recorded when it built the row; the split re-prices
@@ -267,23 +269,25 @@ for (const m of meters.values()) {
           num(m.all.cost / (m.all.tokens / 1e6), 5),
         ],
       ],
-      ["l", "r", "r", "r", "r", "r", "r"]
-    )
+      ["l", "r", "r", "r", "r", "r", "r"],
+    ),
   );
   if (zero > 0 && zero / m.all.turns >= 0.01) {
     console.log(
       `  ${int(zero)} turns (${num((zero / m.all.turns) * 100, 1)}%) are priced at zero — ` +
-        `${num(((m.all.tokens - m.metered.tokens) / m.all.tokens) * 100, 1)}% of the tokens`
+        `${num(((m.all.tokens - m.metered.tokens) / m.all.tokens) * 100, 1)}% of the tokens`,
     );
   }
-  console.log(`  ${m.burnDays} metered days in the last ${BURN_DAYS} · ` +
-    `${num(m.burn.cost / Math.max(m.burnDays, 1), 3)} ${m.unit === "usd" ? "$" : "cr"}/day · ` +
-    `${int(m.burn.turns / Math.max(m.burnDays, 1))} turns/day`);
+  console.log(
+    `  ${m.burnDays} metered days in the last ${BURN_DAYS} · ` +
+      `${num(m.burn.cost / Math.max(m.burnDays, 1), 3)} ${m.unit === "usd" ? "$" : "cr"}/day · ` +
+      `${int(m.burn.turns / Math.max(m.burnDays, 1))} turns/day`,
+  );
   if (m.reconstructed && m.thinSessions > 0) {
     const clean = priceOf(m.withoutThin);
     console.log(
       `  ${m.thinSessions} session(s) of ${int(m.sessions)} record <${int(THIN_TOKENS)} tok/turn; ` +
-        `without them ${num(clean.perMtok, 5)}/Mtok, ${num(clean.perTurn, 6)}/turn`
+        `without them ${num(clean.perMtok, 5)}/Mtok, ${num(clean.perTurn, 6)}/turn`,
     );
   }
   // Only a store that bills in dollars has a price per class to show.
@@ -320,17 +324,29 @@ for (const plan of PLANS) {
 console.log("[osm] what each plan buys\n");
 console.log(
   table(
-    ["plan", "price", "quota", "per turn $", "per Mtok $", "buys turns", "buys Mtok", "covers days", "$/30d*"],
+    [
+      "plan",
+      "price",
+      "quota",
+      "per turn $",
+      "per Mtok $",
+      "buys turns",
+      "buys Mtok",
+      "covers days",
+      "$/30d*",
+    ],
     rows,
-    ["l", "r", "r", "r", "r", "r", "r", "r", "r"]
-  )
+    ["l", "r", "r", "r", "r", "r", "r", "r", "r"],
+  ),
 );
 console.log("\n  * at that source's own observed load — the two loads differ, so compare the");
 console.log("    unit prices or the per-dollar figures, not the 30-day column.");
 
 if (comparable.length === 2) {
   const [a, b] = comparable;
-  console.log(`\n  ${b.plan.label} costs ${num(b.mtok / a.mtok, 2)}× per Mtok and ${num(b.turn / a.turn, 2)}× per turn.`);
+  console.log(
+    `\n  ${b.plan.label} costs ${num(b.mtok / a.mtok, 2)}× per Mtok and ${num(b.turn / a.turn, 2)}× per turn.`,
+  );
   /**
    * Both list prices in dollars: credits convert at the plan's own definition
    * ($0.01), never at a discount. The discount is what the plan adds on top, and it
@@ -341,11 +357,13 @@ if (comparable.length === 2) {
   const [la, lb] = [inUsd(a), inUsd(b)];
   const cheaper = la > lb ? b : a;
   const listRatio = la > lb ? la / lb : lb / la;
-  console.log(`  At list, before any plan: ${cheaper.plan.source} is ${num(listRatio, 2)}× cheaper per Mtok.`);
+  console.log(
+    `  At list, before any plan: ${cheaper.plan.source} is ${num(listRatio, 2)}× cheaper per Mtok.`,
+  );
   const breakEven = a.turn / b.list.perTurn;
   console.log(
     `  Break-even: one of ${b.plan.label}'s credits must cost $${num(breakEven, 5)} ` +
       `(now $${num(b.plan.price / b.plan.quota, 5)}), i.e. $${b.plan.price} must buy ` +
-      `${int(b.plan.price / breakEven)} credits.`
+      `${int(b.plan.price / breakEven)} credits.`,
   );
 }

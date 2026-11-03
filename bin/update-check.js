@@ -122,7 +122,8 @@ export async function checkForUpdate({
     writeCache(file, name, cached?.latest ?? null, now);
     // Keep the error on the cached answer: an ambient notice ignores it, but
     // `osm upgrade --check` must not report stale data as a fresh answer.
-    if (cached && cached.latest !== null) return { ...result(cached.latest, current, "cache"), error: error.message };
+    if (cached && cached.latest !== null)
+      return { ...result(cached.latest, current, "cache"), error: error.message };
     return { error: error.message, current };
   }
 }
