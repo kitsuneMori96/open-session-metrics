@@ -18,9 +18,26 @@ import { DATA_DIR, QODER_DESKTOP_DB } from "./config";
  * the store's mtime/size, which keeps a per-request `openSource` cheap.
  */
 
+/**
+ * The desktop index, read once per store change: the titles a transcript may
+ * lack, and where each side chat stops copying its owner.
+ */
+export interface DesktopIndex {
+  titles: Map<string, string>;
+  /**
+   * Side-chat session id → timestamp of its first own message (ms). A side chat's
+   * transcript starts with a verbatim copy of its owner's messages — same ids,
+   * same timestamps — so everything before this instant is inherited history, not
+   * a second billed response. Absent when the index has no message rows yet.
+   */
+  forks: Map<string, number>;
+}
+
+const EMPTY: DesktopIndex = { titles: new Map(), forks: new Map() };
+
 const SUFFIXES = ["", "-wal", "-shm"] as const;
 
-let cached: { sig: string; titles: Map<string, string> } | null = null;
+let cached: { sig: string; index: DesktopIndex } | null = null;
 
 function signature(db: string): string {
   return SUFFIXES.map((suffix) => {
@@ -33,19 +50,40 @@ function signature(db: string): string {
   }).join("|");
 }
 
-function readRows(file: string): Map<string, string> {
-  const out = new Map<string, string>();
+function readRows(file: string): DesktopIndex {
+  const titles = new Map<string, string>();
+  const forks = new Map<string, number>();
   let db: DatabaseSync | null = null;
   try {
     db = new DatabaseSync(file, { readOnly: true });
-    const rows = db
-      .prepare(
-        "SELECT session_id, title FROM chat_sessions WHERE deleted_at IS NULL AND title IS NOT NULL AND title <> ''",
-      )
-      .all() as { session_id: string; title: string }[];
-    for (const row of rows) if (row.session_id && row.title) out.set(row.session_id, row.title);
+    // Column sets differ across app versions, so each read stands alone: a store
+    // without the side-chat columns still yields titles.
+    try {
+      const rows = db
+        .prepare(
+          "SELECT session_id, title FROM chat_sessions WHERE deleted_at IS NULL AND title IS NOT NULL AND title <> ''",
+        )
+        .all() as { session_id: string; title: string }[];
+      for (const row of rows) if (row.session_id && row.title) titles.set(row.session_id, row.title);
+    } catch {
+      /* no title index */
+    }
+    try {
+      const rows = db
+        .prepare(
+          `SELECT s.session_id AS id, MIN(m.created_at) AS first_at
+           FROM chat_sessions s JOIN chat_session_messages m ON m.session_id = s.session_id
+           WHERE s.deleted_at IS NULL
+             AND (s.session_kind = 'sideChat' OR s.owner_session_id IS NOT NULL)
+           GROUP BY s.session_id`,
+        )
+        .all() as { id: string; first_at: number }[];
+      for (const row of rows) if (row.id && Number(row.first_at) > 0) forks.set(row.id, Number(row.first_at));
+    } catch {
+      /* no side-chat index */
+    }
   } catch {
-    /* a missing or half-written store simply contributes no titles */
+    /* a missing or half-written store simply contributes nothing */
   } finally {
     try {
       db?.close();
@@ -53,11 +91,11 @@ function readRows(file: string): Map<string, string> {
       /* already closed */
     }
   }
-  return out;
+  return { titles, forks };
 }
 
 /** Copy the store (and its WAL) somewhere the lock protocol can work. */
-function readSnapshot(db: string): Map<string, string> {
+function readSnapshot(db: string): DesktopIndex {
   const dir = path.join(DATA_DIR, "qoder-title-snapshot");
   mkdirSync(dir, { recursive: true });
   const snapshot = path.join(dir, `main.${process.pid}.${Date.now()}.sqlite`);
@@ -68,21 +106,30 @@ function readSnapshot(db: string): Map<string, string> {
     }
     return readRows(snapshot);
   } catch {
-    return new Map();
+    return EMPTY;
   } finally {
     for (const suffix of SUFFIXES) rmSync(snapshot + suffix, { force: true });
   }
 }
 
-export function qoderDesktopTitles(db = QODER_DESKTOP_DB): Map<string, string> {
-  if (!existsSync(db)) return new Map();
+function index(db = QODER_DESKTOP_DB): DesktopIndex {
+  if (!existsSync(db)) return EMPTY;
   const sig = signature(db);
-  if (cached?.sig === sig) return cached.titles;
+  if (cached?.sig === sig) return cached.index;
 
   const windowsMount = process.platform === "linux" && /^\/mnt\/[a-z]\//i.test(db);
-  const titles = windowsMount ? readSnapshot(db) : readRows(db);
-  cached = { sig, titles };
-  return titles;
+  const next = windowsMount ? readSnapshot(db) : readRows(db);
+  cached = { sig, index: next };
+  return next;
+}
+
+export function qoderDesktopTitles(db = QODER_DESKTOP_DB): Map<string, string> {
+  return index(db).titles;
+}
+
+/** Side-chat session id → first own message timestamp; inherited copies precede it. */
+export function qoderDesktopForks(db = QODER_DESKTOP_DB): Map<string, number> {
+  return index(db).forks;
 }
 
 /** Tests swap the store between assertions. */

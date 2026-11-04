@@ -622,6 +622,116 @@ async function main() {
     migrated.turns(new Set([sidW])).filter((t) => t.role === "assistant").length === 2,
     String(migrated.turns(new Set([sidW])).filter((t) => t.role === "assistant").length),
   );
+  /* ---------------------------------------------------------------- *
+   * Desktop side chat
+   *
+   * A side chat's transcript opens with a verbatim copy of its owner's rows —
+   * same uuids, same message ids, same timestamps — then continues on its own.
+   * Counting the copy would collide with the owner's turn rows (the store keys a
+   * turn by message id) and bill the same response twice.
+   * ---------------------------------------------------------------- */
+  const sidF = "aaaaaaaa-1111-2222-3333-444444444444";
+  const sidFork = "bbbbbbbb-1111-2222-3333-444444444444";
+  const projF = path.join(process.env.OSM_QODER_HOME!, "projects", "-tmp-demo");
+  // Inside the 6-hour tail window: an incremental tick only rewrites the tail.
+  const F0 = Date.now() - 60 * 60 * 1000;
+  const frow = (e: Record<string, unknown>) =>
+    JSON.stringify({ ...e, cwd: "/tmp/demo", version: "1.1.76" });
+  const fu = (uuid: string, at: number, content: string) =>
+    frow({ type: "user", uuid, timestamp: iso(at), message: { role: "user", content } });
+  const fa = (uuid: string, id: string, at: number, credits: number) =>
+    frow({
+      type: "assistant",
+      uuid,
+      timestamp: iso(at),
+      message: {
+        id,
+        model: "qfmodel",
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: id }],
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          credits,
+          original_credits: credits,
+          context_usage_ratio: 0.1,
+          request_id: `fr-${id}`,
+        },
+      },
+    });
+  const parentRows = [
+    fu("fu1", F0 + 100 * sec, "父会话问题"),
+    fa("fa1", "fm1", F0 + 101 * sec, 0.2),
+    fu("fu2", F0 + 102 * sec, "父会话追问"),
+    fa("fa2", "fm2", F0 + 103 * sec, 0.1),
+  ];
+  writeFileSync(path.join(projF, `${sidF}.jsonl`), parentRows.join("\n") + "\n", "utf8");
+  const forkRows = [
+    parentRows[0],
+    parentRows[1], // inherited verbatim
+    fu("fku1", F0 + 110 * sec, "侧聊问题"),
+    fa("fka1", "fkm1", F0 + 111 * sec, 0.3),
+  ];
+  writeFileSync(path.join(projF, `${sidFork}.jsonl`), forkRows.join("\n") + "\n", "utf8");
+
+  // The desktop index marks the fork and dates its first own message.
+  const forkDb = process.env.OSM_QODER_DESKTOP_DB!;
+  for (const suffix of ["", "-wal", "-shm"]) rmSync(forkDb + suffix, { force: true });
+  const ddbF = new DatabaseSync(forkDb);
+  ddbF.exec(
+    "CREATE TABLE chat_sessions (session_id TEXT PRIMARY KEY, title TEXT, deleted_at INTEGER, session_kind TEXT, owner_session_id TEXT)",
+  );
+  ddbF.exec("CREATE TABLE chat_session_messages (session_id TEXT, message_id TEXT, created_at INTEGER)");
+  ddbF.prepare("INSERT INTO chat_sessions VALUES (?, ?, NULL, ?, NULL)").run(sidF, "父会话", "standard");
+  ddbF.prepare("INSERT INTO chat_sessions VALUES (?, ?, NULL, ?, ?)").run(sidFork, "侧聊", "sideChat", sidF);
+  ddbF
+    .prepare("INSERT INTO chat_session_messages VALUES (?, ?, ?)")
+    .run(sidFork, "fku1", F0 + 110 * sec);
+  ddbF.close();
+  const titlesMod = await import("../qoder-titles");
+  titlesMod.resetQoderDesktopTitles();
+
+  const forkSrc = new QoderSource(path.join(process.env.OSM_QODER_HOME!, "projects"));
+  const forkTurns = forkSrc.turns(new Set([sidFork]));
+  ok(
+    "a side chat keeps only its own turns",
+    forkTurns.length === 2 && forkTurns.filter((t) => t.role === "assistant").length === 1,
+    forkTurns.map((t) => t.id).join(","),
+  );
+  ok(
+    "an inherited turn is not billed to the fork",
+    forkSrc.sessions(new Set([sidFork]))[0]?.creditsMicro === 300_000 &&
+      forkSrc.sessions(new Set([sidFork]))[0]?.tInput === 18000,
+    JSON.stringify(forkSrc.sessions(new Set([sidFork]))[0]),
+  );
+  ok(
+    "the fork starts when it was created, not when its owner's prefix did",
+    forkSrc.sessions(new Set([sidFork]))[0]?.created === F0 + 110 * sec,
+    new Date(forkSrc.sessions(new Set([sidFork]))[0]?.created ?? 0).toISOString(),
+  );
+  forkSrc.close();
+
+  // The production failure: an incremental tick that contains the fork collided
+  // with the owner's stored turn ids and aborted the whole build.
+  const { build: buildF } = await import("../metrics/build");
+  const { current: currentF } = await import("../metrics/store");
+  const fdb = currentF("qoder");
+  await buildF(fdb, { mode: "incremental", sessionIds: new Set([sidF, sidFork]) });
+  const forkStored = fdb.prepare("SELECT turns, credits_micro FROM sessions WHERE id = ?").get(sidFork) as any;
+  const parentStored = fdb.prepare("SELECT turns FROM sessions WHERE id = ?").get(sidF) as any;
+  ok("a tick containing a side chat completes", !!forkStored, "session row missing");
+  ok("the stored fork holds its own assistant turn", forkStored?.turns === 1, String(forkStored?.turns));
+  ok(
+    "the fork's credits exclude the copied response",
+    forkStored?.credits_micro === 300_000,
+    String(forkStored?.credits_micro),
+  );
+  ok("the parent keeps both assistant turns", parentStored?.turns === 2, String(parentStored?.turns));
+  const dupStored = fdb
+    .prepare("SELECT COUNT(*) c FROM turns WHERE id IN (?, ?)")
+    .get("fm1", "fm2") as any;
+  ok("each inherited message id is stored once", dupStored.c === 2, String(dupStored.c));
+
   const singleRoot = await import("../config");
   ok(
     "an explicit OSM_QODER_HOME keeps a test off the real /mnt/c",

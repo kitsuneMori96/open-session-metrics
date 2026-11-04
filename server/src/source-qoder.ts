@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { QODER_LOGS, QODER_PROJECTS } from "./config";
-import { qoderDesktopTitles } from "./qoder-titles";
+import { qoderDesktopForks, qoderDesktopTitles } from "./qoder-titles";
 import {
   bodyPart,
   hashSig,
@@ -501,6 +501,11 @@ export class QoderSource implements SourceLike {
     if (hit && hit.sig === sig) return hit.parsed;
 
     const parts: Parsed[] = [];
+    // A desktop side chat opens with a copy of its owner's transcript: identical
+    // message ids and timestamps. Nothing before the fork's first own message was
+    // billed to this session, so it is parsed out — otherwise every copied turn
+    // would collide with the owner's row and be counted twice.
+    const floor = qoderDesktopForks().get(id) ?? 0;
     for (const { f, st } of stamped) {
       let body = "";
       try {
@@ -515,7 +520,7 @@ export class QoderSource implements SourceLike {
         const cut = body.lastIndexOf("\n");
         body = cut < 0 ? "" : body.slice(0, cut + 1);
       }
-      parts.push(this.parse(id, f, st.mtime, body));
+      parts.push(this.parse(id, f, st.mtime, body, floor));
     }
     if (!parts.length) return null;
     const parsed = parts.length === 1 ? parts[0] : this.merge(id, parts);
@@ -565,7 +570,7 @@ export class QoderSource implements SourceLike {
     };
   }
 
-  private parse(id: string, file: string, mtime: number, body: string): Parsed {
+  private parse(id: string, file: string, mtime: number, body: string, floor = 0): Parsed {
     const order: Entry[] = [];
     const byId = new Map<string, Entry>();
     const prompts: { id: string; ts: number; text: string }[] = [];
@@ -698,6 +703,7 @@ export class QoderSource implements SourceLike {
     const ratios: { ts: number; tokens: number }[] = [];
 
     for (const entry of order) {
+      if (floor && entry.ts < floor) continue;
       const usage = entry.usage;
       const ratio = usage?.ratio ?? null;
       // A pinned window beats the catalog; the ratio's denominator is whatever the
@@ -831,7 +837,7 @@ export class QoderSource implements SourceLike {
     }
 
     for (const p of prompts) {
-      if (!p.ts) continue;
+      if (!p.ts || (floor && p.ts < floor)) continue;
       items.push({
         ts: p.ts,
         turn: {
@@ -889,6 +895,9 @@ export class QoderSource implements SourceLike {
       prev = r;
     }
 
+    // The fork's own life starts at its first own message, not at the owner's
+    // first turn that the copied prefix carries.
+    if (floor && created < floor) created = floor;
     return {
       id,
       file,
