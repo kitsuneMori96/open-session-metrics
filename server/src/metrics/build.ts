@@ -217,6 +217,22 @@ export async function build(
     const wanted = new Set<string>();
     for (const s of sessionById.values()) if (s.model) wanted.add(catalogKey(s.provider, s.model));
     const turnsRaw = await walk<SrcTurn>((ids) => src.turns(ids), scope ?? undefined);
+    // A message id is the turn's identity, so it may enter the store once. Desktop
+    // side chats copy their owner's transcript (same ids, same usage), and a source
+    // without a fork index cannot tell the copy from the original: the row that is
+    // already stored — or came first in this build — keeps it, and the copy's
+    // contribution is taken back out of its session totals instead of colliding.
+    const droppedBySession = dropRepeatedTurns(db, turnsRaw);
+    for (const [sid, d] of droppedBySession) {
+      const s = sessionById.get(sid);
+      if (!s) continue;
+      s.tInput = Math.max(0, s.tInput - d.input);
+      s.cost = Math.max(0, s.cost - d.cost);
+      s.creditsMicro = Math.max(0, (s.creditsMicro ?? 0) - d.credits);
+      s.additions = Math.max(0, s.additions - d.add);
+      s.deletions = Math.max(0, s.deletions - d.del);
+      s.files = Math.max(0, s.files - d.files);
+    }
     for (const t of turnsRaw)
       if (t.role === "assistant" && t.model) wanted.add(catalogKey(t.provider, t.model));
     const catalog: Catalog = await loadCatalog(wanted);
@@ -766,6 +782,52 @@ export async function build(
   } finally {
     if (ownsSource) src.close();
   }
+}
+
+/**
+ * Keep one turn per message id, in place. A turn id already stored under another
+ * session belongs to that session; an id already kept in this batch belongs to
+ * the first session that carried it. Returns, per session, what the dropped
+ * copies would have contributed — their totals are then corrected by it.
+ */
+function dropRepeatedTurns(
+  db: DatabaseSync,
+  turns: SrcTurn[],
+): Map<string, { input: number; cost: number; credits: number; add: number; del: number; files: number }> {
+  const owner = new Map<string, string>();
+  const ids = [...new Set(turns.map((t) => t.id))];
+  for (let i = 0; i < ids.length; i += 500) {
+    const chunk = ids.slice(i, i + 500);
+    const rows = db
+      .prepare(`SELECT id, session_id FROM turns WHERE id IN (${chunk.map(() => "?").join(",")})`)
+      .all(...chunk) as { id: string; session_id: string }[];
+    for (const r of rows) owner.set(String(r.id), String(r.session_id));
+  }
+
+  const seen = new Set<string>();
+  const dropped = new Map<
+    string,
+    { input: number; cost: number; credits: number; add: number; del: number; files: number }
+  >();
+  let kept = 0;
+  for (const t of turns) {
+    const prior = owner.get(t.id);
+    if ((prior !== undefined && prior !== t.sessionId) || seen.has(t.id)) {
+      const d = dropped.get(t.sessionId) ?? { input: 0, cost: 0, credits: 0, add: 0, del: 0, files: 0 };
+      d.input += t.input;
+      d.cost += t.cost;
+      d.credits += t.creditsMicro ?? 0;
+      d.add += t._add ?? 0;
+      d.del += t._del ?? 0;
+      d.files += t._files ?? 0;
+      dropped.set(t.sessionId, d);
+      continue;
+    }
+    seen.add(t.id);
+    turns[kept++] = t;
+  }
+  turns.length = kept;
+  return dropped;
 }
 
 /** A session the store knows about but this tick did not parse: lane and parent only. */
