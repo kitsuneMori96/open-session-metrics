@@ -128,6 +128,34 @@ export function RankBars({
   );
 }
 
+/** A two-way sort selector for a rank panel's header. */
+export function SortToggle<K extends string>({
+  value,
+  options,
+  onChange,
+}: {
+  value: K;
+  options: readonly { key: K; label: string }[];
+  onChange: (key: K) => void;
+}) {
+  return (
+    <span className="flex items-center gap-1.5">
+      {options.map((o, i) => (
+        <span key={o.key} className="flex items-center gap-1.5">
+          {i > 0 && <span className="text-ink-faint">·</span>}
+          <button
+            type="button"
+            className={`tape ${value === o.key ? "text-ink" : "text-ink-faint hover:text-ink-soft"}`}
+            onClick={() => onChange(o.key)}
+          >
+            {o.label}
+          </button>
+        </span>
+      ))}
+    </span>
+  );
+}
+
 /** States the scale a rank list is drawn against. */
 export function RankScale({ label, right }: { label: string; right: string }) {
   return (

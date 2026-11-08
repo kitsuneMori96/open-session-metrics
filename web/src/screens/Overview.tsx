@@ -21,7 +21,7 @@ import { useScope } from "../lib/scope";
 import { SessionScatter } from "../components/charts/scatter";
 import { TimeArea, Sparkline } from "../components/charts/series";
 import { ActivityHeatmap, HourStrip } from "../components/charts/heat";
-import { RankBars, TimeBars, DeltaBar } from "../components/charts/ranks";
+import { RankBars, TimeBars, DeltaBar, SortToggle } from "../components/charts/ranks";
 import { Legend } from "../components/charts/base";
 import { Chip, Panel, SectionHeader, Skeleton, Stat, Tile, toneColor } from "../components/ui";
 import { BaseHints, StatusBar } from "../components/Chrome";
@@ -60,6 +60,10 @@ export default function Overview() {
   const [muted, setMuted] = useState<Set<string>>(new Set());
   const [hoverSession, setHoverSession] = useState<string | null>(null);
   const [modelSort, setModelSort] = useState<"tokens" | "per">("tokens");
+  const [projectSort, setProjectSort] = useState<"tokens" | "cost">("tokens");
+  const [toolSort, setToolSort] = useState<"calls" | "p95">("calls");
+  const [agentSort, setAgentSort] = useState<"tokens" | "cost">("tokens");
+  const [sessionSort, setSessionSort] = useState<"tokens" | "cost">("tokens");
 
   const params = useSearchParams()[0];
   // Duration on y by default: tokens-vs-cost is the same line (a free model bills 0),
@@ -105,11 +109,14 @@ export default function Overview() {
   if (isLoading || !data) return <Skeleton />;
 
   const { totals, kpis, efficiency, tools, projects, models, agents, sessions } = data;
-  const toolPeak = Math.max(1, ...tools.map((t) => t.calls));
-  const projectPeak = Math.max(1, ...projects.map((p) => p.tokens));
-  // `models` arrives token-ranked; the card can also rank by cost per Mctx, the only order
-  // that lifts a small-but-expensive model above a big cheap one. The bar follows the
+  // Every breakdown panel prints two columns and can rank by either. The bar follows the
   // active key so the list stays monotonic, while both readouts keep their own column.
+  const rankedProjects = [...projects].sort((a, b) =>
+    projectSort === "cost" ? b.cost - a.cost || b.tokens - a.tokens : b.tokens - a.tokens,
+  );
+  const shownProjects = rankedProjects.slice(0, 10);
+  const projectPeak = Math.max(1, ...shownProjects.map((p) => (projectSort === "cost" ? p.cost : p.tokens)));
+
   const perM = (m: { cost: number; tokens: number }): number =>
     m.tokens > 0 ? (m.cost / m.tokens) * 1e6 : -1;
   const rankedModels = [...models].sort((a, b) =>
@@ -117,6 +124,21 @@ export default function Overview() {
   );
   const shownModels = rankedModels.slice(0, 10);
   const modelPeak = Math.max(1, ...shownModels.map((m) => (modelSort === "per" ? perM(m) : m.tokens)));
+
+  const rankedTools = [...tools].sort((a, b) =>
+    toolSort === "p95" ? b.p95Ms - a.p95Ms || b.calls - a.calls : b.calls - a.calls,
+  );
+  const shownTools = rankedTools.slice(0, 10);
+  const toolPeak = Math.max(1, ...shownTools.map((t) => (toolSort === "p95" ? t.p95Ms : t.calls)));
+
+  const rankedAgents = [...agents].sort((a, b) =>
+    agentSort === "cost" ? b.cost - a.cost || b.tokens - a.tokens : b.tokens - a.tokens,
+  );
+  const agentPeak = Math.max(1, ...rankedAgents.map((a) => (agentSort === "cost" ? a.cost : a.tokens)));
+
+  const shownSessions = [...sessions]
+    .sort((a, b) => (sessionSort === "cost" ? b.cost - a.cost || b.tokens - a.tokens : b.tokens - a.tokens))
+    .slice(0, 12);
   const seriesTokens = series?.buckets.map((b) => b.total) ?? [];
   const seriesCost = series?.buckets.map((b) => b.cost) ?? [];
   const seriesTurns = series?.buckets.map((b) => b.turns) ?? [];
@@ -289,12 +311,24 @@ export default function Overview() {
 
         {/* ── breakdowns ──────────────────────────────────────────── */}
         <div className="mt-4 grid grid-cols-1 gap-x-4 gap-y-4 lg:grid-cols-2 xl:grid-cols-3">
-          <Panel title="projects" right={<span className="tape text-ink-faint">by tokens</span>}>
+          <Panel
+            title="projects"
+            right={
+              <SortToggle
+                value={projectSort}
+                onChange={setProjectSort}
+                options={[
+                  { key: "tokens", label: "by tokens" },
+                  { key: "cost", label: "by cost" },
+                ] as const}
+              />
+            }
+          >
             <RankBars
-              rows={projects.slice(0, 10).map((p) => ({
+              rows={shownProjects.map((p) => ({
                 key: p.project,
                 label: p.project,
-                value: p.tokens,
+                value: projectSort === "cost" ? p.cost : p.tokens,
                 sub: `${p.sessions} sessions · ${int(p.turns)} turns · ${usd(p.cost)}`,
                 right: tok(p.tokens),
                 right2: usd3ceil(p.cost),
@@ -311,23 +345,14 @@ export default function Overview() {
           <Panel
             title="models"
             right={
-              <span className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  className={`tape ${modelSort === "tokens" ? "text-ink" : "text-ink-faint hover:text-ink-soft"}`}
-                  onClick={() => setModelSort("tokens")}
-                >
-                  by tokens
-                </button>
-                <span className="text-ink-faint">·</span>
-                <button
-                  type="button"
-                  className={`tape ${modelSort === "per" ? "text-ink" : "text-ink-faint hover:text-ink-soft"}`}
-                  onClick={() => setModelSort("per")}
-                >
-                  {perMLabel()}
-                </button>
-              </span>
+              <SortToggle
+                value={modelSort}
+                onChange={setModelSort}
+                options={[
+                  { key: "tokens", label: "by tokens" },
+                  { key: "per", label: perMLabel() },
+                ] as const}
+              />
             }
           >
             <RankBars
@@ -346,12 +371,24 @@ export default function Overview() {
             />
           </Panel>
 
-          <Panel title="tools" right={<span className="tape text-ink-faint">calls · p95</span>}>
+          <Panel
+            title="tools"
+            right={
+              <SortToggle
+                value={toolSort}
+                onChange={setToolSort}
+                options={[
+                  { key: "calls", label: "by calls" },
+                  { key: "p95", label: "by p95" },
+                ] as const}
+              />
+            }
+          >
             <RankBars
-              rows={tools.slice(0, 10).map((t) => ({
+              rows={shownTools.map((t) => ({
                 key: t.name,
                 label: t.name,
-                value: t.calls,
+                value: toolSort === "p95" ? t.p95Ms : t.calls,
                 right: int(t.calls),
                 right2: dur(t.p95Ms),
                 sub: `${int(t.calls)} calls · ${t.errors} errors · median ${dur(t.p50Ms)} · p95 ${dur(t.p95Ms)}`,
@@ -366,22 +403,36 @@ export default function Overview() {
         </div>
 
         <div className="mt-4 grid grid-cols-1 gap-x-4 gap-y-4 lg:grid-cols-2 xl:grid-cols-3">
-          <Panel title="agents">
+          <Panel
+            title="agents"
+            right={
+              <SortToggle
+                value={agentSort}
+                onChange={setAgentSort}
+                options={[
+                  { key: "tokens", label: "by tokens" },
+                  { key: "cost", label: "by cost" },
+                ] as const}
+              />
+            }
+          >
             <RankBars
-              rows={agents.map((a) => ({
+              rows={rankedAgents.map((a) => ({
                 key: a.agent,
                 label: a.agent,
-                value: a.tokens,
+                value: agentSort === "cost" ? a.cost : a.tokens,
                 right: `${tok(a.tokens)}`,
+                right2: usd(a.cost),
                 sub: `${int(a.turns)} turns · ${int(a.tools)} calls · ${a.errors} errors`,
                 active: facets.agent === a.agent,
                 onClick: () => setFacet("agent", facets.agent === a.agent ? null : a.agent),
               }))}
+              max={agentPeak}
               empty="no agent activity in this window"
             />
             <div className="mt-2">
               <SectionHeader title="failure rate" />
-              {agents.map((a) => {
+              {rankedAgents.map((a) => {
                 const r = a.tools > 0 ? a.errors / a.tools : 0;
                 return (
                   <div key={a.agent} className="flex items-baseline gap-2 py-px">
@@ -470,16 +521,23 @@ export default function Overview() {
           title="heaviest sessions"
           className="mt-4"
           right={
-            <span className="tape text-ink-faint">
-              top {Math.min(12, sessions.length)} of {int(totals.sessions)} · hover to locate in the plot
+            <span className="flex items-center gap-2">
+              <SortToggle
+                value={sessionSort}
+                onChange={setSessionSort}
+                options={[
+                  { key: "tokens", label: "by tokens" },
+                  { key: "cost", label: "by cost" },
+                ] as const}
+              />
+              <span className="tape text-ink-faint">
+                top {shownSessions.length} of {int(totals.sessions)} · hover to locate in the plot
+              </span>
             </span>
           }
         >
           <div className="grid grid-cols-1 gap-x-6 lg:grid-cols-2">
-            {[...sessions]
-              .sort((a, b) => b.tokens - a.tokens)
-              .slice(0, 12)
-              .map((s: SessionRow) => (
+            {shownSessions.map((s: SessionRow) => (
                 <button
                   key={s.id}
                   type="button"
