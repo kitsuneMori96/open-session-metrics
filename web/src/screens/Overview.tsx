@@ -59,6 +59,7 @@ export default function Overview() {
   const split: Split = picked && (picked !== "class" || classes) ? picked : classes ? "class" : "model";
   const [muted, setMuted] = useState<Set<string>>(new Set());
   const [hoverSession, setHoverSession] = useState<string | null>(null);
+  const [modelSort, setModelSort] = useState<"tokens" | "per">("tokens");
 
   const params = useSearchParams()[0];
   // Duration on y by default: tokens-vs-cost is the same line (a free model bills 0),
@@ -106,6 +107,16 @@ export default function Overview() {
   const { totals, kpis, efficiency, tools, projects, models, agents, sessions } = data;
   const toolPeak = Math.max(1, ...tools.map((t) => t.calls));
   const projectPeak = Math.max(1, ...projects.map((p) => p.tokens));
+  // `models` arrives token-ranked; the card can also rank by cost per Mctx, the only order
+  // that lifts a small-but-expensive model above a big cheap one. The bar follows the
+  // active key so the list stays monotonic, while both readouts keep their own column.
+  const perM = (m: { cost: number; tokens: number }): number =>
+    m.tokens > 0 ? (m.cost / m.tokens) * 1e6 : -1;
+  const rankedModels = [...models].sort((a, b) =>
+    modelSort === "per" ? perM(b) - perM(a) || b.tokens - a.tokens : b.tokens - a.tokens,
+  );
+  const shownModels = rankedModels.slice(0, 10);
+  const modelPeak = Math.max(1, ...shownModels.map((m) => (modelSort === "per" ? perM(m) : m.tokens)));
   const seriesTokens = series?.buckets.map((b) => b.total) ?? [];
   const seriesCost = series?.buckets.map((b) => b.cost) ?? [];
   const seriesTurns = series?.buckets.map((b) => b.turns) ?? [];
@@ -297,19 +308,40 @@ export default function Overview() {
             <div className="micro mt-1">click a project to filter every screen</div>
           </Panel>
 
-          <Panel title="models" right={<span className="tape text-ink-faint">{perMLabel()}</span>}>
+          <Panel
+            title="models"
+            right={
+              <span className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  className={`tape ${modelSort === "tokens" ? "text-ink" : "text-ink-faint hover:text-ink-soft"}`}
+                  onClick={() => setModelSort("tokens")}
+                >
+                  by tokens
+                </button>
+                <span className="text-ink-faint">·</span>
+                <button
+                  type="button"
+                  className={`tape ${modelSort === "per" ? "text-ink" : "text-ink-faint hover:text-ink-soft"}`}
+                  onClick={() => setModelSort("per")}
+                >
+                  {perMLabel()}
+                </button>
+              </span>
+            }
+          >
             <RankBars
-              rows={models.slice(0, 10).map((m) => ({
+              rows={shownModels.map((m) => ({
                 key: m.id,
                 label: shortModel(m.id),
-                value: m.tokens,
+                value: modelSort === "per" ? perM(m) : m.tokens,
                 right: tok(m.tokens),
                 right2: usdPerM(m.cost, m.tokens),
                 sub: `${int(m.calls)} turns · ${m.sessions} sessions · ${usd(m.cost)}`,
                 active: facets.model === m.id,
                 onClick: () => setFacet("model", facets.model === m.id ? null : m.id),
               }))}
-              max={Math.max(1, ...models.map((m) => m.tokens))}
+              max={modelPeak}
               empty="no model usage in this window"
             />
           </Panel>
