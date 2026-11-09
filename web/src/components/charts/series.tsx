@@ -372,7 +372,9 @@ function TipBody({
       ))}
       <div className="tip-row mt-1" style={{ borderTop: `1px solid ${RULE}`, paddingTop: 3 }}>
         <span className="tip-key">total</span>
-        <span className="tip-val">{format(bucket.total)}</span>
+        {/* `bucket.total` is the token sum in every split, so it is always tokens —
+            `format` is the stack's unit (cost when stacking by cost) and would mislabel it. */}
+        <span className="tip-val">{tok(bucket.total)}</span>
       </div>
       <TipNote>
         {bucket.turns} turns · {bucket.tools} calls{bucket.errors > 0 ? ` · ${bucket.errors} errors` : ""}
