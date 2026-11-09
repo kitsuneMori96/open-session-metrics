@@ -260,7 +260,9 @@ export default function Overview() {
             onClearWindow={() => setPreset(DEFAULT_PRESET)}
             height={196}
             tipExtra={(b) => [
-              { label: "cost", value: usd(b.cost) },
+              // Stacking by cost already prints it as the segment row; adding it again
+              // here would show the same number twice.
+              ...(split === "cost" ? [] : [{ label: "cost", value: usd(b.cost) }]),
               { label: "additions", value: `+${int(b.additions)}` },
               { label: "deletions", value: `−${int(b.deletions)}` },
             ]}
