@@ -24,13 +24,20 @@ export const PALETTE = [
 
 export const OTHER = "var(--chart-other)";
 
-/** Stable colour per label: the same model keeps its colour across every figure. */
+/**
+ * Stable colour per label: the same label keeps its colour across every figure.
+ *
+ * Colours follow name order, not the caller's order — the model stack arrives
+ * volume-ranked per window, so index-based assignment would repaint every model
+ * when the reader switches day → week → month. If the visible set itself changes
+ * between windows, models past the shared prefix can still shift; with eight
+ * slots that is the accepted boundary.
+ */
 export function paletteFor(labels: string[]): Map<string, string> {
   const map = new Map<string, string>();
-  let i = 0;
-  for (const label of labels) {
-    map.set(label, label === "other" ? OTHER : PALETTE[i++ % PALETTE.length]);
-  }
+  const named = [...new Set(labels.filter((l) => l !== "other"))].sort((a, b) => a.localeCompare(b));
+  named.forEach((label, i) => map.set(label, PALETTE[i % PALETTE.length]));
+  if (labels.includes("other")) map.set("other", OTHER);
   return map;
 }
 
