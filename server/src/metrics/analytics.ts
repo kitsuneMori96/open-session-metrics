@@ -1262,7 +1262,7 @@ export function toolDetail(db: DatabaseSync, raw: Slice, name: string): ToolDeta
 
 export interface Facets {
   projects: { project: string; sessions: number; tokens: number; cost: number; updated: number }[];
-  models: { id: string; label: string; calls: number }[];
+  models: { id: string; label: string; calls: number; first: number }[];
   agents: { agent: string; calls: number }[];
   tools: { name: string; calls: number }[];
   extent: { from: number; to: number };
@@ -1283,7 +1283,7 @@ export function facets(db: DatabaseSync): Facets {
   // it can be matched, because a facet value has to be exactly what `slice.model` accepts.
   const models = db
     .prepare(
-      `SELECT COALESCE(t.model,'unknown') id, COUNT(*) calls
+      `SELECT COALESCE(t.model,'unknown') id, COUNT(*) calls, MIN(t.created) first
        FROM turns t WHERE t.role='assistant'
        GROUP BY COALESCE(t.model,'unknown') ORDER BY calls DESC`,
     )
@@ -1328,6 +1328,8 @@ export function facets(db: DatabaseSync): Facets {
       id: String(m.id),
       label: catalogue.get(String(m.id)) ?? String(m.id),
       calls: num(m.calls),
+      // First seen, so the chart can hand out colours in a history-stable order.
+      first: num(m.first),
     })),
     agents: agents.map((a) => ({ agent: String(a.agent), calls: num(a.calls) })),
     tools: tools.map((t) => ({ name: String(t.name), calls: num(t.calls) })),

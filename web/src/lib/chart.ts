@@ -24,23 +24,40 @@ export const PALETTE = [
 
 export const OTHER = "var(--chart-other)";
 
+/** Rank 0–7 wear the theme palette; later ranks get a generated tone, so the
+ *  eight slots are a length, not a limit. */
+function rankColor(rank: number): string {
+  if (rank < PALETTE.length) return PALETTE[rank];
+  const k = rank - PALETTE.length;
+  const hue = Math.round((k * 137.508 + 15) % 360);
+  const lightness = 0.5 + (k % 3) * 0.06;
+  const chroma = 0.14 + (k % 2) * 0.02;
+  return `oklch(${lightness} ${chroma} ${hue})`;
+}
+
 /**
  * Stable colour per label: the same label keeps its colour across every figure.
  *
- * `universe` is the window-independent label set (all-time models, say): slots
- * are handed out over its name order, so a model present in both today's and
- * last month's window paints the same colour in both. Labels outside the
- * universe are appended in name order. If the universe grows past eight entries,
- * labels eight ranks apart share a slot — the palette's accepted boundary.
+ * `universe` is an identity order that predates the current window — for models,
+ * first appearance in the store. A label's rank never moves when a new label
+ * arrives (it appends), so a burst of new models cannot repaint or grey out an
+ * old one. Without a universe, labels fall back to name order, which is stable
+ * only while the visible set is.
  */
-export function paletteFor(labels: string[], universe: string[] = labels): Map<string, string> {
-  const map = new Map<string, string>();
+export function paletteFor(labels: string[], universe?: string[]): Map<string, string> {
   const byName = (a: string, b: string) => a.localeCompare(b);
-  const named = [...new Set(universe.filter((l) => l !== "other"))].sort(byName);
-  const known = new Set(named);
-  const rest = [...new Set(labels.filter((l) => l !== "other" && !known.has(l)))].sort(byName);
-  [...named, ...rest].forEach((label, i) => map.set(label, PALETTE[i % PALETTE.length]));
-  if (labels.includes("other")) map.set("other", OTHER);
+  const named = (list: string[]) => [...new Set(list.filter((l) => l !== "other"))];
+  const order = universe ? named(universe) : named(labels).sort(byName);
+  const rank = new Map<string, number>();
+  order.forEach((label, i) => rank.set(label, i));
+  named(labels)
+    .filter((l) => !rank.has(l))
+    .sort(byName)
+    .forEach((label, i) => rank.set(label, order.length + i));
+  const map = new Map<string, string>();
+  for (const label of labels) {
+    map.set(label, label === "other" ? OTHER : rankColor(rank.get(label)!));
+  }
   return map;
 }
 

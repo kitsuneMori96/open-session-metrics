@@ -41,10 +41,17 @@ type Split = "class" | "model" | "cost";
 export default function Overview() {
   const { window, facets, gran, slice, label, setWindow, setPreset, setFacet } = useSlice();
   const { data, isLoading, isFetching } = useAnalytics(window, facets, gran);
-  // The all-time model list, so a model keeps its colour when the window changes
-  // which models are visible. The facets query is shared with the filter bar.
+  // First appearance, oldest first: a model's colour rank can only be appended
+  // to by models that arrive later, never displaced by them.
   const allModels = useFacets().data?.models;
-  const modelUniverse = useMemo(() => allModels?.map((m) => m.id) ?? [], [allModels]);
+  const modelOrder = useMemo(
+    () =>
+      allModels
+        ?.slice()
+        .sort((a, b) => a.first - b.first || a.id.localeCompare(b.id))
+        .map((m) => m.id) ?? [],
+    [allModels],
+  );
   const [, setParams] = useSearchParams();
   const href = useSliceHref();
   const navigate = useNavigate();
@@ -92,9 +99,9 @@ export default function Overview() {
     if (!series) return [];
     if (split === "class") return TOKEN_CLASSES.map((c) => ({ key: c.key, label: c.label, color: c.color }));
     if (split === "cost") return [{ key: "cost", label: "cost", color: "var(--color-good)" }];
-    const colors = paletteFor(series.models, modelUniverse);
+    const colors = paletteFor(series.models, modelOrder);
     return series.models.map((m) => ({ key: `m:${m}`, label: shortModel(m), color: colors.get(m)! }));
-  }, [series, split, modelUniverse]);
+  }, [series, split, modelOrder]);
 
   /** The model stack arrives as index-aligned rows rather than named keys. */
   const buckets = useMemo(() => {

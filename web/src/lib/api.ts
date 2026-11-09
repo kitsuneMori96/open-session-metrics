@@ -321,7 +321,7 @@ export interface ToolDetail {
 
 export interface Facets {
   projects: { project: string; sessions: number; tokens: number; cost: number; updated: number }[];
-  models: { id: string; label: string; calls: number }[];
+  models: { id: string; label: string; calls: number; first: number }[];
   agents: { agent: string; calls: number }[];
   tools: { name: string; calls: number }[];
   extent: { from: number; to: number };
