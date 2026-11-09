@@ -27,16 +27,19 @@ export const OTHER = "var(--chart-other)";
 /**
  * Stable colour per label: the same label keeps its colour across every figure.
  *
- * Colours follow name order, not the caller's order — the model stack arrives
- * volume-ranked per window, so index-based assignment would repaint every model
- * when the reader switches day → week → month. If the visible set itself changes
- * between windows, models past the shared prefix can still shift; with eight
- * slots that is the accepted boundary.
+ * `universe` is the window-independent label set (all-time models, say): slots
+ * are handed out over its name order, so a model present in both today's and
+ * last month's window paints the same colour in both. Labels outside the
+ * universe are appended in name order. If the universe grows past eight entries,
+ * labels eight ranks apart share a slot — the palette's accepted boundary.
  */
-export function paletteFor(labels: string[]): Map<string, string> {
+export function paletteFor(labels: string[], universe: string[] = labels): Map<string, string> {
   const map = new Map<string, string>();
-  const named = [...new Set(labels.filter((l) => l !== "other"))].sort((a, b) => a.localeCompare(b));
-  named.forEach((label, i) => map.set(label, PALETTE[i % PALETTE.length]));
+  const byName = (a: string, b: string) => a.localeCompare(b);
+  const named = [...new Set(universe.filter((l) => l !== "other"))].sort(byName);
+  const known = new Set(named);
+  const rest = [...new Set(labels.filter((l) => l !== "other" && !known.has(l)))].sort(byName);
+  [...named, ...rest].forEach((label, i) => map.set(label, PALETTE[i % PALETTE.length]));
   if (labels.includes("other")) map.set("other", OTHER);
   return map;
 }
