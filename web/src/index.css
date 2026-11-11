@@ -404,3 +404,10 @@ select.field {
   scrollbar-width: thin;
   scrollbar-color: oklch(0.2 0.05 250 / 0.25) transparent;
 }
+/* No native bar at all: ScrollBox draws its own hairline rail. */
+.scroll-hidden {
+  scrollbar-width: none;
+}
+.scroll-hidden::-webkit-scrollbar {
+  display: none;
+}

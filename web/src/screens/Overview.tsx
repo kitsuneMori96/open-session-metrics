@@ -23,7 +23,7 @@ import { TimeArea, Sparkline } from "../components/charts/series";
 import { ActivityHeatmap, HourStrip } from "../components/charts/heat";
 import { RankBars, TimeBars, DeltaBar, SortToggle } from "../components/charts/ranks";
 import { ModelLegend } from "../components/charts/base";
-import { Chip, Panel, SectionHeader, Skeleton, Stat, Tile, toneColor } from "../components/ui";
+import { Chip, Panel, ScrollBox, SectionHeader, Skeleton, Stat, Tile, toneColor } from "../components/ui";
 import { BaseHints, StatusBar } from "../components/Chrome";
 
 /**
@@ -367,7 +367,10 @@ export default function Overview() {
               />
             }
           >
-            <div className="no-scrollbar max-h-[176px] overflow-y-auto pr-1">
+            {/* A rank row is 21px; ten of them is the window the projects and tools
+                cards give their lists, so models shows the same ten and scrolls the
+                rest instead of shrinking the card. */}
+            <ScrollBox maxHeight={10 * 21} className="pr-1">
               <RankBars
                 rows={shownModels.map((m) => ({
                   key: m.id,
@@ -382,6 +385,9 @@ export default function Overview() {
                 max={modelPeak}
                 empty="no model usage in this window"
               />
+            </ScrollBox>
+            <div className="micro mt-1">
+              {shownModels.length > 10 ? `scroll for all ${shownModels.length} · ` : ""}click a model to filter every screen
             </div>
           </Panel>
 

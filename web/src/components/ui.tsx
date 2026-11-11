@@ -1,4 +1,12 @@
-import type { ChangeEvent, CSSProperties, ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import clsx from "clsx";
 import { signed } from "../lib/format";
 import { Roll } from "./Roll";
@@ -40,6 +48,108 @@ export function Panel({
       )}
       <div className={clsx("min-w-0 flex-1", bodyClass ?? "p-2")}>{children}</div>
     </section>
+  );
+}
+
+/**
+ * A scroll window for the one list whose length the data decides.
+ *
+ * Chromium's overlay scrollbars ignore `::-webkit-scrollbar`, so a styled native bar
+ * cannot be made to match this sheet — it arrives as a rounded OS thumb floating over
+ * the 1px grid. The rail here is drawn by the page instead: a 2px ink thumb on the
+ * card's own edge, the same weight as every hairline, shown only while the pointer is
+ * over the box or the box is moving. Wheel, trackpad, drag and keyboard all still work.
+ */
+export function ScrollBox({
+  maxHeight,
+  className,
+  children,
+}: {
+  maxHeight?: number;
+  className?: string;
+  children: ReactNode;
+}) {
+  const view = useRef<HTMLDivElement>(null);
+  const cool = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [thumb, setThumb] = useState<{ top: number; height: number } | null>(null);
+  const [hot, setHot] = useState(false);
+
+  const measure = () => {
+    const el = view.current;
+    if (!el) return;
+    const full = el.scrollHeight;
+    const windowH = el.clientHeight;
+    if (full <= windowH + 1) {
+      setThumb((prev) => (prev === null ? prev : null));
+      return;
+    }
+    const height = Math.max((windowH / full) * 100, 12);
+    const travel = 100 - height;
+    const top = (el.scrollTop / Math.max(full - windowH, 1)) * travel;
+    // Same reference when nothing moved: this runs after every render, and a fresh
+    // object each time would schedule the next one forever.
+    setThumb((prev) =>
+      prev && Math.abs(prev.top - top) < 0.1 && Math.abs(prev.height - height) < 0.1
+        ? prev
+        : { top, height },
+    );
+  };
+
+  // Content can change height without any render-time signal (a window switch swaps the
+  // rows), so the rail is re-measured after every render and on any resize.
+  useLayoutEffect(() => {
+    measure();
+  });
+  useEffect(() => {
+    const el = view.current;
+    if (!el) return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    if (el.firstElementChild) ro.observe(el.firstElementChild);
+    return () => {
+      ro.disconnect();
+      if (cool.current) clearTimeout(cool.current);
+    };
+  }, []);
+
+  const heat = () => {
+    setHot(true);
+    if (cool.current) clearTimeout(cool.current);
+    cool.current = setTimeout(() => setHot(false), 900);
+  };
+
+  return (
+    <div
+      className="relative"
+      onPointerEnter={() => setHot(true)}
+      onPointerLeave={() => setHot(false)}
+    >
+      <div
+        ref={view}
+        onScroll={() => {
+          measure();
+          heat();
+        }}
+        className={clsx("scroll-hidden overflow-y-auto", className)}
+        style={maxHeight !== undefined ? { maxHeight } : undefined}
+      >
+        {children}
+      </div>
+      {thumb && (
+        <div
+          aria-hidden
+          className={clsx(
+            "pointer-events-none absolute inset-y-0 right-0 w-[2px] transition-opacity duration-200",
+            hot ? "opacity-100" : "opacity-0",
+          )}
+        >
+          <i
+            className="absolute right-0 block w-[2px] bg-ink/45"
+            style={{ top: `${thumb.top}%`, height: `${thumb.height}%` }}
+          />
+        </div>
+      )}
+    </div>
   );
 }
 
