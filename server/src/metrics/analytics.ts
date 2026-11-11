@@ -284,15 +284,13 @@ export interface Series {
   buckets: Bucket[];
   /** Token-richest models, in stack order (bottom first). */
   models: string[];
-  /** `modelTokens[k][i]`; the last row is `"other"` when more than eight models matched. */
+  /** `modelTokens[k][i]` follows the complete model list. */
   modelTokens: number[][];
   /** `[weekday 0=Mon][hour]` turn counts. */
   heat: number[][];
   /** Turn counts per local hour, 24 entries. */
   hourly: number[];
 }
-
-const MODEL_STACK = 8;
 
 /**
  * Three queries, each bounded by the column count.
@@ -386,19 +384,8 @@ function seriesOf(db: DatabaseSync, slice: Slice, gran: Granularity): Series {
     hourly[hour] += num(r.n);
   }
 
-  const ranked = [...modelTotals.entries()].sort((a, b) => b[1] - a[1]).map(([m]) => m);
-  const models = ranked.slice(0, MODEL_STACK);
-  const rest = ranked.slice(MODEL_STACK);
+  const models = [...modelTotals.entries()].sort((a, b) => b[1] - a[1]).map(([m]) => m);
   const modelTokens = models.map((m) => perModel.get(m) ?? new Array(count).fill(0));
-  if (rest.length) {
-    const other = new Array(count).fill(0);
-    for (const m of rest) {
-      const row = perModel.get(m)!;
-      for (let i = 0; i < count; i++) other[i] += row[i];
-    }
-    models.push("other");
-    modelTokens.push(other);
-  }
 
   return { gran, buckets, models, modelTokens, heat, hourly };
 }

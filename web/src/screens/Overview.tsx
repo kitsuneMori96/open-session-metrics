@@ -22,7 +22,7 @@ import { SessionScatter } from "../components/charts/scatter";
 import { TimeArea, Sparkline } from "../components/charts/series";
 import { ActivityHeatmap, HourStrip } from "../components/charts/heat";
 import { RankBars, TimeBars, DeltaBar, SortToggle } from "../components/charts/ranks";
-import { Legend } from "../components/charts/base";
+import { ModelLegend } from "../components/charts/base";
 import { Chip, Panel, SectionHeader, Skeleton, Stat, Tile, toneColor } from "../components/ui";
 import { BaseHints, StatusBar } from "../components/Chrome";
 
@@ -100,7 +100,7 @@ export default function Overview() {
     if (split === "class") return TOKEN_CLASSES.map((c) => ({ key: c.key, label: c.label, color: c.color }));
     if (split === "cost") return [{ key: "cost", label: "cost", color: "var(--color-good)" }];
     const colors = paletteFor(series.models, modelOrder);
-    return series.models.map((m) => ({ key: `m:${m}`, label: shortModel(m), color: colors.get(m)! }));
+    return series.models.map((m) => ({ key: `m:${m}`, label: m, color: colors.get(m)! }));
   }, [series, split, modelOrder]);
 
   /** The model stack arrives as index-aligned rows rather than named keys. */
@@ -133,7 +133,7 @@ export default function Overview() {
   const rankedModels = [...models].sort((a, b) =>
     modelSort === "per" ? perM(b) - perM(a) || b.tokens - a.tokens : b.tokens - a.tokens,
   );
-  const shownModels = rankedModels.slice(0, 10);
+  const shownModels = rankedModels;
   const modelPeak = Math.max(1, ...shownModels.map((m) => (modelSort === "per" ? perM(m) : m.tokens)));
 
   const rankedTools = [...tools].sort((a, b) =>
@@ -228,7 +228,7 @@ export default function Overview() {
 
         {/* ── the series ──────────────────────────────────────────── */}
         <div className="mt-4">
-          <div className="mb-1 flex flex-wrap items-center gap-2">
+          <div className="mb-1 flex items-center gap-2">
             <span className="tape text-ink-faint">stack by</span>
             {(
               [
@@ -245,8 +245,7 @@ export default function Overview() {
                   {text}
                 </Chip>
               ))}
-            <span className="flex-1" />
-            <Legend
+            <ModelLegend
               items={keys}
               active={new Set(keys.map((k) => k.key).filter((k) => !muted.has(k)))}
               onToggle={(k) =>
@@ -368,20 +367,22 @@ export default function Overview() {
               />
             }
           >
-            <RankBars
-              rows={shownModels.map((m) => ({
-                key: m.id,
-                label: shortModel(m.id),
-                value: modelSort === "per" ? perM(m) : m.tokens,
-                right: tok(m.tokens),
-                right2: usdPerM(m.cost, m.tokens),
-                sub: `${int(m.calls)} turns · ${m.sessions} sessions · ${usd(m.cost)}`,
-                active: facets.model === m.id,
-                onClick: () => setFacet("model", facets.model === m.id ? null : m.id),
-              }))}
-              max={modelPeak}
-              empty="no model usage in this window"
-            />
+            <div className="no-scrollbar max-h-[176px] overflow-y-auto pr-1">
+              <RankBars
+                rows={shownModels.map((m) => ({
+                  key: m.id,
+                  label: shortModel(m.id),
+                  value: modelSort === "per" ? perM(m) : m.tokens,
+                  right: tok(m.tokens),
+                  right2: usdPerM(m.cost, m.tokens),
+                  sub: `${int(m.calls)} turns · ${m.sessions} sessions · ${usd(m.cost)}`,
+                  active: facets.model === m.id,
+                  onClick: () => setFacet("model", facets.model === m.id ? null : m.id),
+                }))}
+                max={modelPeak}
+                empty="no model usage in this window"
+              />
+            </div>
           </Panel>
 
           <Panel

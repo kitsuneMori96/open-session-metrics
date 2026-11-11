@@ -257,6 +257,100 @@ export function TipNote({ children }: { children: ReactNode }) {
  * A legend in the same voice as the caption.
  * ------------------------------------------------------------------ */
 
+export function ModelLegend({ items, active, onToggle }: {
+  items: { key: string; label: string; color: string }[];
+  active: Set<string>;
+  onToggle: (key: string) => void;
+}) {
+  const host = useRef<HTMLDivElement>(null);
+  const measure = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const [visible, setVisible] = useState(0);
+  const [open, setOpen] = useState(false);
+  const hidden = items.length - visible;
+
+  useLayoutEffect(() => {
+    const resize = () => {
+      if (!host.current || !measure.current) return;
+      const widths = Array.from(measure.current.children).map((el) => el.getBoundingClientRect().width);
+      const available = host.current.clientWidth;
+      const total = widths.reduce((sum, w) => sum + w, 0) + Math.max(0, widths.length - 1) * 8;
+      if (total <= available) { setVisible(items.length); return; }
+      let used = trigger.current?.getBoundingClientRect().width ?? 120;
+      let count = 0;
+      for (const width of widths) {
+        if (used + 8 + width > available) break;
+        used += 8 + width;
+        count++;
+      }
+      setVisible(count);
+    };
+    resize();
+    const observer = new ResizeObserver(resize);
+    if (host.current) observer.observe(host.current);
+    if (measure.current) observer.observe(measure.current);
+    return () => observer.disconnect();
+  }, [items, hidden]);
+
+  useEffect(() => {
+    if (!open) return;
+    const dismiss = (event: PointerEvent) => {
+      if (!host.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { setOpen(false); trigger.current?.focus(); }
+    };
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", dismiss);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [open]);
+
+  const entry = (item: typeof items[number], measuring = false) => (
+    <button key={item.key} type="button" tabIndex={measuring ? -1 : undefined}
+      aria-pressed={active.has(item.key)} onClick={() => onToggle(item.key)}
+      className="flex shrink-0 items-center gap-1 whitespace-nowrap font-mono text-[9px] tracking-[0.06em]"
+      style={{ color: "var(--color-ink-soft)", opacity: active.has(item.key) ? 1 : 0.55 }}
+      title="toggle series">
+      <i className="block h-[7px] w-[7px] shrink-0" style={{ background: item.color }} />
+      {item.label}
+    </button>
+  );
+
+  return (
+    <div ref={host} className="relative min-w-0 flex-1">
+      <div aria-hidden className="pointer-events-none invisible absolute inset-0 overflow-hidden">
+        <div ref={measure} className="flex w-max gap-2">
+          {items.map((item) => entry(item, true))}
+        </div>
+      </div>
+      <div className="flex items-center justify-end gap-2 overflow-hidden">
+        {items.slice(0, visible).map((item) => entry(item))}
+        <button ref={trigger} type="button" aria-expanded={open && hidden > 0}
+          onClick={() => setOpen(!open)}
+          className={clsx("btn shrink-0 whitespace-nowrap", open && "btn-on", hidden === 0 && "absolute invisible")}
+          style={{ fontVariantNumeric: "tabular-nums" }}>
+          +{hidden || items.length} 个模型 <span aria-hidden>{open ? "−" : "+"}</span>
+        </button>
+      </div>
+      {open && hidden > 0 && (
+        <div className="absolute right-0 top-full z-50 mt-1 border border-rule bg-paper p-3 shadow-sm"
+          style={{ minWidth: 240, maxWidth: "calc(100vw - 32px)" }}>
+          <div className="micro mb-3 flex items-center justify-between gap-6 border-b border-rule pb-2 text-ink-faint">
+            <span>MODEL INDEX</span><span>{visible + 1}—{items.length} / {items.length}</span>
+          </div>
+          <div className="grid gap-3">
+            {items.slice(visible).map((item) => entry(item))}
+          </div>
+          <div className="micro mt-3 border-t border-rule pt-2 text-ink-faint">click to toggle · esc to close</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Legend({
   items,
   active,
