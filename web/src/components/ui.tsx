@@ -139,7 +139,9 @@ export function ScrollBox({
         <div
           aria-hidden
           className={clsx(
-            "pointer-events-none absolute inset-y-0 right-0 w-[2px] transition-opacity duration-200",
+            // The rail rides the card's own edge, past the body's padding, so it reads
+            // as part of the panel rather than as furniture inside the list.
+            "pointer-events-none absolute inset-y-0 -right-1.5 w-[2px] transition-opacity duration-200",
             hot ? "opacity-100" : "opacity-0",
           )}
         >

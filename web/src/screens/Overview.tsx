@@ -38,6 +38,9 @@ import { BaseHints, StatusBar } from "../components/Chrome";
 
 type Split = "class" | "model" | "cost";
 
+/** The ten-row window every ranked list in the breakdown grid shares; a row is 21px. */
+const LIST_WINDOW = 10 * 21;
+
 export default function Overview() {
   const { window, facets, gran, slice, label, setWindow, setPreset, setFacet } = useSlice();
   const { data, isLoading, isFetching } = useAnalytics(window, facets, gran);
@@ -125,7 +128,7 @@ export default function Overview() {
   const rankedProjects = [...projects].sort((a, b) =>
     projectSort === "cost" ? b.cost - a.cost || b.tokens - a.tokens : b.tokens - a.tokens,
   );
-  const shownProjects = rankedProjects.slice(0, 10);
+  const shownProjects = rankedProjects;
   const projectPeak = Math.max(1, ...shownProjects.map((p) => (projectSort === "cost" ? p.cost : p.tokens)));
 
   const perM = (m: { cost: number; tokens: number }): number =>
@@ -139,7 +142,7 @@ export default function Overview() {
   const rankedTools = [...tools].sort((a, b) =>
     toolSort === "p95" ? b.p95Ms - a.p95Ms || b.calls - a.calls : b.calls - a.calls,
   );
-  const shownTools = rankedTools.slice(0, 10);
+  const shownTools = rankedTools;
   const toolPeak = Math.max(1, ...shownTools.map((t) => (toolSort === "p95" ? t.p95Ms : t.calls)));
 
   const rankedAgents = [...agents].sort((a, b) =>
@@ -336,22 +339,26 @@ export default function Overview() {
               />
             }
           >
-            <RankBars
-              rows={shownProjects.map((p) => ({
-                key: p.project,
-                label: p.project,
-                value: projectSort === "cost" ? p.cost : p.tokens,
-                sub: `${p.sessions} sessions · ${int(p.turns)} turns · ${usd(p.cost)}`,
-                right: tok(p.tokens),
-                right2: usd3ceil(p.cost),
-                active: facets.project === p.project,
-                color: facets.project === p.project ? "var(--color-flow)" : undefined,
-                onClick: () => setFacet("project", facets.project === p.project ? null : p.project),
-              }))}
-              max={projectPeak}
-              empty="no project activity in this window"
-            />
-            <div className="micro mt-1">click a project to filter every screen</div>
+            <ScrollBox maxHeight={LIST_WINDOW} className="pr-1">
+              <RankBars
+                rows={shownProjects.map((p) => ({
+                  key: p.project,
+                  label: p.project,
+                  value: projectSort === "cost" ? p.cost : p.tokens,
+                  sub: `${p.sessions} sessions · ${int(p.turns)} turns · ${usd(p.cost)}`,
+                  right: tok(p.tokens),
+                  right2: usd3ceil(p.cost),
+                  active: facets.project === p.project,
+                  color: facets.project === p.project ? "var(--color-flow)" : undefined,
+                  onClick: () => setFacet("project", facets.project === p.project ? null : p.project),
+                }))}
+                max={projectPeak}
+                empty="no project activity in this window"
+              />
+            </ScrollBox>
+            <div className="micro mt-1">
+              {shownProjects.length > 10 ? `scroll for all ${shownProjects.length} · ` : ""}click a project to filter every screen
+            </div>
           </Panel>
 
           <Panel
@@ -370,7 +377,7 @@ export default function Overview() {
             {/* A rank row is 21px; ten of them is the window the projects and tools
                 cards give their lists, so models shows the same ten and scrolls the
                 rest instead of shrinking the card. */}
-            <ScrollBox maxHeight={10 * 21} className="pr-1">
+            <ScrollBox maxHeight={LIST_WINDOW} className="pr-1">
               <RankBars
                 rows={shownModels.map((m) => ({
                   key: m.id,
@@ -404,21 +411,25 @@ export default function Overview() {
               />
             }
           >
-            <RankBars
-              rows={shownTools.map((t) => ({
-                key: t.name,
-                label: t.name,
-                value: toolSort === "p95" ? t.p95Ms : t.calls,
-                right: int(t.calls),
-                right2: dur(t.p95Ms),
-                sub: `${int(t.calls)} calls · ${t.errors} errors · median ${dur(t.p50Ms)} · p95 ${dur(t.p95Ms)}`,
-                color: t.errors > 0 ? "var(--color-warning)" : undefined,
-                onClick: () => navigate(href(`/tools/${encodeURIComponent(t.name)}`)),
-              }))}
-              max={toolPeak}
-              empty="no tool calls in this window"
-            />
-            <div className="micro mt-1">click a tool for its latency distribution and error signatures</div>
+            <ScrollBox maxHeight={LIST_WINDOW} className="pr-1">
+              <RankBars
+                rows={shownTools.map((t) => ({
+                  key: t.name,
+                  label: t.name,
+                  value: toolSort === "p95" ? t.p95Ms : t.calls,
+                  right: int(t.calls),
+                  right2: dur(t.p95Ms),
+                  sub: `${int(t.calls)} calls · ${t.errors} errors · median ${dur(t.p50Ms)} · p95 ${dur(t.p95Ms)}`,
+                  color: t.errors > 0 ? "var(--color-warning)" : undefined,
+                  onClick: () => navigate(href(`/tools/${encodeURIComponent(t.name)}`)),
+                }))}
+                max={toolPeak}
+                empty="no tool calls in this window"
+              />
+            </ScrollBox>
+            <div className="micro mt-1">
+              {shownTools.length > 10 ? `scroll for all ${shownTools.length} · ` : ""}click a tool for its latency distribution and error signatures
+            </div>
           </Panel>
         </div>
 
