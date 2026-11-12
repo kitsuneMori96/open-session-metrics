@@ -255,7 +255,7 @@ function SourceRow({
  * ------------------------------------------------------------------ */
 
 export function SliceBar() {
-  const { window, facets, label, filtered, gran, setGran, setPreset, setFacet, reset } = useSlice();
+  const { window, facets, label, filtered, gran, setGran, setPreset, setFacet, clearFacets } = useSlice();
   const query = useFacets();
   const data = query.data;
   const { kind } = useScope();
@@ -307,11 +307,11 @@ export function SliceBar() {
       />
 
       {filtered ? (
-        <Chip onClick={reset} title="back to 30 days, no facet filters">
+        <Chip onClick={clearFacets} title="clear the project, model and agent filters — the window stays">
           ✕ clear filters
         </Chip>
       ) : (
-        <span className="tape text-ink-faint">whole store · no filter</span>
+        <span className="tape text-ink-faint">no facet filter</span>
       )}
 
       <div className="flex-1" />

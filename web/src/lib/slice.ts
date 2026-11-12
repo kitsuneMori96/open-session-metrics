@@ -142,8 +142,9 @@ export function useSlice(): SliceState {
     facets,
     slice,
     label: windowLabel(window),
-    filtered:
-      FACET_KEYS.some((k) => facets[k] !== null) || window.kind === "custom" || window.id !== DEFAULT_PRESET,
+    // The window is a view setting, not a filter: picking 90d is not something "clear
+    // filters" should undo, and the chart's own banner resets a brushed window.
+    filtered: FACET_KEYS.some((k) => facets[k] !== null),
     gran,
     setGran,
     setPreset,
