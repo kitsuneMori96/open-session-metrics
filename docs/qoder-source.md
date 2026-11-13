@@ -261,6 +261,10 @@ AES-256-GCM 加密的（密钥是 CLI 里的常量，AAD = sessionId + cwd 的 S
 `s0.total.input_tokens` 与“全量有 ratio 的会话”的 Σ(ratio × window) **逐会话完全相等**，
 所以它是缺 usage 轮次的唯一权威来源。解析规则：
 
+- AAD 里的 projectHash 必须按**写端平台**规范化 cwd：Windows 写的是
+  `win32.resolve(cwd)` 再转 `/` 且**全小写**（`D:\Download\Code\Kotoba` →
+  `d:/download/code/kotoba`）；在 WSL 里用 Linux 的 `path.resolve` 会把 `D:\…` 当相对路径，
+  哈希对不上，解密静默失败。Windows 桌面端会话今天为零就是这一条;
 - 有 blind（无 usage 且非 `<synthetic>`）轮次时，读 state.json；`Δ = total.input_tokens − Σ 已知 input`；
 - Δ 平均分摊到 blind 轮次，单轮不超过该轮的窗口（上下文不可能超过窗口）；
 - 超出分摊能力的部分（重试、被压缩掉的旧前缀）**丢弃**，不堆到某一轮上；

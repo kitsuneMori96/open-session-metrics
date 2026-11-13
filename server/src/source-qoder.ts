@@ -223,9 +223,15 @@ function sessionTokenTotal(file: string, id: string, cwd: string): number | null
   if (!item || typeof item.n !== "string" || typeof item.p !== "string" || typeof item.t !== "string")
     return null;
   const sessionId = typeof raw.sessionId === "string" ? raw.sessionId : id;
-  const projectHash = createHash("sha256")
-    .update(path.resolve(cwd).replace(/\\/g, "/"), "utf8")
-    .digest("hex");
+  // A WSL reader meets transcripts written by both plants, so the cwd has to be
+  // canonicalised the way the writer's own platform did it: the CLI resolves with
+  // the host's path module and lowercases the result on Windows, while a Linux
+  // `path.resolve` would treat `D:\…` as a relative name and hash the wrong tree.
+  const windows = /^[a-zA-Z]:[\\/]/.test(cwd) || cwd.startsWith("\\\\");
+  const root = windows
+    ? path.win32.resolve(cwd).replace(/\\/g, "/").toLowerCase()
+    : path.resolve(cwd).replace(/\\/g, "/");
+  const projectHash = createHash("sha256").update(root, "utf8").digest("hex");
   const aad = JSON.stringify({ sessionId, projectHash, segmentKey: "s0" });
   try {
     const decipher = createDecipheriv("aes-256-gcm", STATE_KEY, Buffer.from(item.n, "base64"));
