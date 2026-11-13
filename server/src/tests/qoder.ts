@@ -12,6 +12,7 @@
  *   pnpm -F @osm/server test
  */
 import { DatabaseSync } from "node:sqlite";
+import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -226,6 +227,38 @@ function seed() {
     }),
   ];
   writeFileSync(path.join(subDir, "agent-aExplore-abc.jsonl"), sub.join("\n") + "\n", "utf8");
+}
+
+/** The CLI's master key, copied from the parser — the sidecar is only obfuscated. */
+const STATE_KEY = Buffer.from([
+  44, 6, 96, 159, 67, 137, 172, 134, 152, 52, 157, 248, 15, 219, 49, 114, 225, 17, 195, 37, 71,
+  151, 145, 95, 214, 226, 9, 169, 250, 96, 125, 232,
+]);
+
+/** Write `<session>/state.json` the way qodercli seals it. */
+function sealState(file: string, sessionId: string, cwd: string, payload: unknown) {
+  mkdirSync(path.dirname(file), { recursive: true });
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", STATE_KEY, iv);
+  const projectHash = createHash("sha256")
+    .update(path.resolve(cwd).replace(/\\/g, "/"), "utf8")
+    .digest("hex");
+  const aad = JSON.stringify({ sessionId, projectHash, segmentKey: "s0" });
+  cipher.setAAD(Buffer.from(aad, "utf8"));
+  const body = Buffer.concat([cipher.update(JSON.stringify(payload), "utf8"), cipher.final()]);
+  writeFileSync(
+    file,
+    JSON.stringify({
+      sessionId,
+      items: {
+        s0: {
+          n: iv.toString("base64"),
+          p: body.toString("base64"),
+          t: cipher.getAuthTag().toString("base64"),
+        },
+      },
+    }),
+  );
 }
 
 async function main() {
@@ -781,6 +814,26 @@ async function main() {
     autoLines.join("\n") + "\n",
     "utf8",
   );
+  // The sidecar counts tokens and credits session-wide; two picks, two models,
+  // so each blind turn must take its own model's money. `smodel` has no row of
+  // its own — the router billed blind turns labelled with the requested name —
+  // and that remainder reaches the same rows through the session total.
+  sealState(
+    path.join(process.env.OSM_QODER_HOME!, "projects", "-tmp-demo", sidA, "state.json"),
+    sidA,
+    "/tmp/demo",
+    {
+      total: { input_tokens: 50_000 },
+      credits: {
+        total: 4.75,
+        byModel: {
+          qmodel_38max: { credits: 1.5 },
+          ultimate: { credits: 2.25 },
+          smodel: { credits: 1.0 },
+        },
+      },
+    },
+  );
   const autoSrc = new QoderSource(path.join(process.env.OSM_QODER_HOME!, "projects"));
   const autoTurns = autoSrc
     .turns(new Set([sidA]))
@@ -795,6 +848,21 @@ async function main() {
     "no turn is left in an auto lane",
     autoTurns.every((t) => t.model !== "auto"),
     autoTurns.map((t) => t.model).join(","),
+  );
+  ok(
+    "an un-billed turn takes its tokens from the session counter",
+    autoTurns.map((t) => t.input).join(",") === "25000,25000",
+    autoTurns.map((t) => t.input).join(","),
+  );
+  ok(
+    "an un-billed turn takes its own model's credits, then the session remainder",
+    autoTurns.map((t) => t.creditsMicro).join(",") === "2000000,2750000",
+    autoTurns.map((t) => t.creditsMicro).join(","),
+  );
+  ok(
+    "the session total includes the recovered credits",
+    autoSrc.sessions(new Set([sidA]))[0]?.creditsMicro === 4_750_000,
+    String(autoSrc.sessions(new Set([sidA]))[0]?.creditsMicro),
   );
   autoSrc.close();
 

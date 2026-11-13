@@ -102,6 +102,13 @@ export const QODER_MODELS: Record<string, string> = {
   dfmodel: "DeepSeek-Flash",
 };
 
+/** Shipped name → alias, so a renamed turn still matches its state counter. */
+function aliasOf(model: string | null): string | null {
+  if (!model) return null;
+  if (QODER_MODELS[model]) return model;
+  return Object.keys(QODER_MODELS).find((a) => QODER_MODELS[a] === model) ?? model;
+}
+
 /**
  * The window a ratio is measured against. A transcript can name its model either
  * way — the alias while parsing, the shipped name after `displayModel` renames a
@@ -198,20 +205,32 @@ const STATE_KEY = Buffer.from([
   151, 145, 95, 214, 226, 9, 169, 250, 96, 125, 232,
 ]);
 
+/** The CLI's own counters for one session, decoded from its sealed sidecar. */
+interface SessionState {
+  /** Cumulative prompt tokens, session-wide (subagents included). */
+  input: number;
+  /** Cumulative credits per model key; only present when the CLI billed any. */
+  credits: Record<string, number>;
+  /** Session-wide credits; may exceed the per-model sum when a request ran elsewhere. */
+  total: number;
+}
+
 /**
- * The CLI's token counter for a session, from `<project>/<sessionId>/state.json`.
+ * The CLI's counters for a session, from `<project>/<sessionId>/state.json`.
  *
  * `s0.total.input_tokens` equals Σ(ratio × window) exactly on sessions whose rows
  * all carry usage, which is what makes it the one trustworthy number for the
- * rows that carry none. Its `credits` counter is left out on purpose: it is
- * zero on most sessions, so it cannot be added to the transcript's per-turn
- * credits.
+ * rows that carry none. `s0.credits.byModel` is the same kind of number for the
+ * cost side: the transcript knows the billed turns, and the counter knows the
+ * session-wide per-model total, so the difference is what the un-billed turns
+ * cost. A model whose counter is zero (the CLI writes zeros for several keys)
+ * simply contributes nothing.
  *
  * The nonce/tag/ciphertext are sealed with AES-256-GCM; the AAD is the session
  * id, a SHA-256 of the session's cwd, and the segment name — the same tuple the
  * CLI binds the record to, so a record copied to another session will not open.
  */
-function sessionTokenTotal(file: string, id: string, cwd: string): number | null {
+function readSessionState(file: string, id: string, cwd: string): SessionState | null {
   if (!cwd) return null;
   let raw: any;
   try {
@@ -241,11 +260,79 @@ function sessionTokenTotal(file: string, id: string, cwd: string): number | null
       decipher.update(Buffer.from(item.p, "base64")),
       decipher.final(),
     ]).toString("utf8");
-    const input = num(JSON.parse(body)?.total?.input_tokens);
-    return input > 0 ? input : null;
+    const payload = JSON.parse(body);
+    const credits: Record<string, number> = {};
+    for (const [model, row] of Object.entries(payload?.credits?.byModel ?? {})) {
+      const value = num((row as any)?.credits);
+      if (value > 0) credits[model] = value;
+    }
+    return {
+      input: num(payload?.total?.input_tokens),
+      credits,
+      total: num(payload?.credits?.total),
+    };
   } catch {
     return null;
   }
+}
+
+/**
+ * Cost for the turns the CLI did not bill inside the transcript.
+ *
+ * `s0.credits.byModel` is the session's billed total per model; the transcript
+ * bills some of those turns itself, so the difference is what the un-billed
+ * turns cost. The counter keeps no per-turn figures, so the difference goes out
+ * evenly across the session's zero-credit turns of that model — main transcript
+ * and subagents both, because the counter covers both. A counter that lags the
+ * transcript (the CLI writes zeros for several model keys on older sessions) is
+ * skipped, never subtracted.
+ *
+ * One model's counter can stay unmatched: `auto` rows carry the model the client
+ * asked for, while the router may have billed them to another one (this is how
+ * `smodel` work lands on turns labelled with the requested name). The session
+ * total catches that remainder, and it goes over the same un-billed rows, so the
+ * session cost lands on the counter even when the per-model split cannot.
+ */
+function reconcileCredits(p: Parsed): void {
+  const blind = p.turns.filter((t) => t.role === "assistant" && t.creditsMicro === 0);
+  if (!blind.length) return;
+  const state = readSessionState(p.file, p.id, p.directory);
+  if (!state) return;
+  const spread = (micro: number, group: SrcTurn[]) => {
+    const each = Math.floor(micro / group.length);
+    group.forEach((t, i) => {
+      const cut = i === group.length - 1 ? micro - each * (group.length - 1) : each;
+      t.creditsMicro = (t.creditsMicro ?? 0) + cut;
+      t.cost = t.creditsMicro / 1e6;
+    });
+  };
+  // The per-model pass runs first: a model's own delta belongs on its own turns
+  // whenever those turns exist, and only the leftovers reach the shared pass.
+  let touched = false;
+  for (const [model, credits] of Object.entries(state.credits)) {
+    const group = blind.filter((t) => aliasOf(t.model) === model);
+    if (!group.length) continue;
+    const known = p.turns.reduce(
+      (a, t) => a + (aliasOf(t.model) === model ? (t.creditsMicro ?? 0) : 0),
+      0,
+    );
+    const delta = Math.round(credits * 1e6) - known;
+    if (delta <= 0) continue;
+    spread(delta, group);
+    touched = true;
+  }
+  let residue = 0;
+  if (state.total > 0) {
+    const billed = p.turns.reduce((a, t) => a + (t.creditsMicro ?? 0), 0);
+    residue = Math.round(state.total * 1e6) - billed;
+  }
+  if (residue > 0) {
+    spread(residue, blind);
+    touched = true;
+  }
+  if (!touched) return;
+  p.credits = p.turns.reduce((a, t) => a + t.cost, 0);
+  p.creditsMicro = p.turns.reduce((a, t) => a + (t.creditsMicro ?? 0), 0);
 }
 
 function lineCount(body: unknown): number {
@@ -597,6 +684,10 @@ export class QoderSource implements SourceLike {
     if (name !== "unknown" && !name.includes(" + ")) {
       for (const t of parsed.turns) if (t.role === "assistant" && t.model) t.model = name;
     }
+    // The model is settled, so the credits can be matched to the sidecar's
+    // per-model counters. After this a turn's cost no longer implies "billed in
+    // the transcript" — but the caller only needs the number.
+    reconcileCredits(parsed);
     // Keyed by id+sig, so an edited transcript simply replaces the entry.
     if (this.cache.size > 64) this.cache.clear();
     this.cache.set(id, { sig, parsed });
@@ -928,7 +1019,7 @@ export class QoderSource implements SourceLike {
     // dropped, a compacted-away prefix) keeps the excess unattributed rather
     // than parking it all on one turn.
     if (blind.length && path.basename(file, ".jsonl") === id) {
-      const total = sessionTokenTotal(file, id, directory);
+      const total = readSessionState(file, id, directory)?.input ?? null;
       const missing = total == null ? 0 : total - tInput;
       if (missing > 0) {
         const even = Math.round(missing / blind.length);
