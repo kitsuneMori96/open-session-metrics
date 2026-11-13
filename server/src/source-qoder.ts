@@ -647,6 +647,12 @@ export class QoderSource implements SourceLike {
     let directory = "";
     /** Window the user pinned in the model picker; 0 means "use the catalog". */
     let explicit = 0;
+    /**
+     * Model the client asked for, from the last `runtime-config`. Under CLI
+     * 1.1.86 a response row says `model: "auto"` — the routing placeholder —
+     * even though the user picked a concrete model; this row keeps the pick.
+     */
+    let requested: string | null = null;
     let created = 0;
     let updated = 0;
 
@@ -674,12 +680,15 @@ export class QoderSource implements SourceLike {
         if (!mid) continue;
         let entry = byId.get(mid);
         const rowTs = ms(e.timestamp);
+        // "auto" is not a model, it is the label the runtime puts on a request
+        // whose model the client chose; the pick itself is the last config.
+        const rowModel = m.model === "auto" && requested ? requested : m.model ?? null;
         if (!entry) {
           entry = {
             id: mid,
             ts: rowTs,
             last: rowTs,
-            model: m.model ?? null,
+            model: rowModel,
             stop: m.stop_reason ?? null,
             window: explicit,
             blocks: [],
@@ -692,7 +701,7 @@ export class QoderSource implements SourceLike {
         // time, so the turn's streaming span is last − first rather than always 0.
         if (rowTs > entry.last) entry.last = rowTs;
         if (m.stop_reason) entry.stop = m.stop_reason;
-        if (m.model) entry.model = m.model;
+        if (m.model) entry.model = rowModel;
         if (Array.isArray(m.content)) {
           for (const b of m.content) if (b && typeof b === "object" && b.type) entry.blocks.push(b as Block);
         }
@@ -746,6 +755,7 @@ export class QoderSource implements SourceLike {
         // `null` is the normal state and means "no preference": the request then
         // carries no `context_length`, and the ratio falls back to the catalog.
         explicit = typeof e.contextWindow === "number" && e.contextWindow > 0 ? e.contextWindow : 0;
+        if (typeof e.model === "string" && e.model) requested = e.model;
         continue;
       }
       if (type === "ai-title" && typeof e.aiTitle === "string") {

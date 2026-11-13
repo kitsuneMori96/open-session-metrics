@@ -250,6 +250,18 @@ DeepSeek 的压缩点会变成 790 k – 830 k，已经超出它实际运行的 
 只多出 `responseGroupId` / `requestTokenAnchor`）。只读 transcript 会把这些轮次记成
 0 token，看起来像“今天什么都没用”。
 
+同一批响应还把**模型名**写成了 `model: "auto"`，但这只是路由占位符，不是用户的
+选择：真正的选择在 `runtime-config.model`。本机实测（`2ffe5965`，1.1.86-hotfix.4）
+15:10:57Z 起响应行全部是 `auto`，而 `runtime-config` 在 15:11:23Z 写 `ultimate`、
+16:20:24Z 又写 `ultimate`（极致），与 `state.json` 的 `credits.byModel.ultimate`
+对得上。因此按文件顺序记住最后一条 `runtime-config.model`，用它给 `auto` 行命名；
+`auto` 只是占位符，有 `runtime-config` 就必须回到真实选择，不能给它单独开泳道
+（客户端真的选了 Auto 时 `runtime-config.model` 就是 `auto`，那是另一回事）。
+
+应用侧的 `.models/default` 在 23:07:42 被改写为 `{"key":"auto","scene":"app"}`，
+而 4 分钟后 `runtime-config` 记录的却是 `ultimate`——它只说明 App 当时的默认，
+既不是逐轮请求的证据，也不能反过来证明用户选了 auto，命名一律以转录为准。
+
 CLI 自己另有一份计数器：`<project>/<sessionId>/state.json` 的 `s0` 段。它是
 AES-256-GCM 加密的（密钥是 CLI 里的常量，AAD = sessionId + cwd 的 SHA-256 + 段名），
 解开后是：
@@ -301,7 +313,9 @@ AES-256-GCM 加密的（密钥是 CLI 里的常量，AAD = sessionId + cwd 的 S
 3. 无遥测证据 → 若别名在全局映射中且已被至少一个无歧义会话验证，使用真实名；
 4. `<synthetic>` 与空模型名**不是模型**，不参与命名（否则 `bb1e6e1d` 会显示成
    `<synthetic> + qfmodel`，把压缩提示当成一个模型）；
-5. 映射证据（会话、次数、是否冲突）写入 `sourceMeta`，别称变更可被发现。
+5. 映射证据（会话、次数、是否冲突）写入 `sourceMeta`，别称变更可被发现；
+6. `auto` 是占位符：1.1.86 起响应行用它覆盖用户选择，命名必须回到 `runtime-config.model`
+   （§5.1a）；有配置却仍落在 `auto` 泳道，就是把占位符当成了模型。
 
 ### 5.5 项目泳道
 
@@ -401,7 +415,10 @@ ALTER TABLE sessions ADD COLUMN credits_micro INTEGER DEFAULT 0;
     的反解名（`qoder通用工作区`），不是编码目录名（`D--Download-Code-qoder-----`）；
 12. 一个会话 id 出现在两棵树时只计一次，且取的是更完整的那一棵（副本不是两半）；
 13. Windows 会话的盘符路径要计入改动文件（`files_changed > 0`），不能因为
-    `D:\…` 不像 POSIX 路径就被丢掉。
+    `D:\…` 不像 POSIX 路径就被丢掉；
+14. 1.1.86-hotfix.4 的 `auto` 行必须按最后一条 `runtime-config.model` 命名；本机实测
+    `2ffe5965` 的 `auto` 段落应落在 `qmodel_38max` / `ultimate` / `dfmodel`，面板里
+    不再有一条名为 `auto` 的泳道。
 
 ---
 

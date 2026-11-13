@@ -732,6 +732,72 @@ async function main() {
     .get("fm1", "fm2") as any;
   ok("each inherited message id is stored once", dupStored.c === 2, String(dupStored.c));
 
+  /* ---------------------------------------------------------------- *
+   * `auto` is a routing placeholder, not a model
+   *
+   * CLI 1.1.86 writes `model: "auto"` on every response row and no `usage`,
+   * even when the picker is set to a concrete model. The pick itself is in the
+   * preceding `runtime-config` row — a session with two picks must keep both
+   * per-turn labels instead of collapsing into one `auto` lane.
+   * ---------------------------------------------------------------- */
+  const sidA = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+  const abase = { sessionId: sidA, cwd: "/tmp/demo", version: "1.1.86-hotfix.4" };
+  const arow = (id: string, at: number, text: string) =>
+    JSON.stringify({
+      ...abase,
+      type: "assistant",
+      uuid: `${id}-${at}`,
+      timestamp: iso(at),
+      message: {
+        id,
+        model: "auto",
+        stop_reason: "end_turn",
+        content: [{ type: "text", text }],
+        usage: null,
+      },
+      responseGroupId: `g-${id}`,
+    });
+  const autoLines = [
+    JSON.stringify({
+      ...abase,
+      type: "runtime-config",
+      model: "qmodel_38max",
+      contextWindow: null,
+      timestamp: T0 + 200 * sec,
+    }),
+    arow("auto-1", T0 + 201 * sec, "一到两行"),
+    arow("auto-1", T0 + 202 * sec, "同一响应"),
+    JSON.stringify({
+      ...abase,
+      type: "runtime-config",
+      model: "ultimate",
+      contextWindow: null,
+      timestamp: T0 + 203 * sec,
+    }),
+    arow("auto-2", T0 + 204 * sec, "换回极致"),
+  ];
+  writeFileSync(
+    path.join(process.env.OSM_QODER_HOME!, "projects", "-tmp-demo", `${sidA}.jsonl`),
+    autoLines.join("\n") + "\n",
+    "utf8",
+  );
+  const autoSrc = new QoderSource(path.join(process.env.OSM_QODER_HOME!, "projects"));
+  const autoTurns = autoSrc
+    .turns(new Set([sidA]))
+    .filter((t) => t.role === "assistant")
+    .sort((a, b) => a.created - b.created);
+  ok(
+    "an auto row takes the model the client requested",
+    autoTurns.map((t) => t.model).join(",") === "qmodel_38max,ultimate",
+    autoTurns.map((t) => t.model).join(","),
+  );
+  ok(
+    "no turn is left in an auto lane",
+    autoTurns.every((t) => t.model !== "auto"),
+    autoTurns.map((t) => t.model).join(","),
+  );
+  autoSrc.close();
+
   const singleRoot = await import("../config");
   ok(
     "an explicit OSM_QODER_HOME keeps a test off the real /mnt/c",
