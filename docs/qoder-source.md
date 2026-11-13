@@ -244,6 +244,31 @@ DeepSeek 的压缩点会变成 790 k – 830 k，已经超出它实际运行的 
 
 不估算输出 token（字符数反推会污染所有同比）。
 
+### 5.1a auto 模式：没有 usage 的轮次
+
+模型选到 `auto` 后，assistant 行的 `message` 里**完全没有 `usage`**（无 ratio、无 credits，
+只多出 `responseGroupId` / `requestTokenAnchor`）。只读 transcript 会把这些轮次记成
+0 token，看起来像“今天什么都没用”。
+
+CLI 自己另有一份计数器：`<project>/<sessionId>/state.json` 的 `s0` 段。它是
+AES-256-GCM 加密的（密钥是 CLI 里的常量，AAD = sessionId + cwd 的 SHA-256 + 段名），
+解开后是：
+
+```json
+{ "latest": {...}, "total": {"input_tokens": …}, "credits": {"total": …, "byModel": {...}} }
+```
+
+`s0.total.input_tokens` 与“全量有 ratio 的会话”的 Σ(ratio × window) **逐会话完全相等**，
+所以它是缺 usage 轮次的唯一权威来源。解析规则：
+
+- 有 blind（无 usage 且非 `<synthetic>`）轮次时，读 state.json；`Δ = total.input_tokens − Σ 已知 input`；
+- Δ 平均分摊到 blind 轮次，单轮不超过该轮的窗口（上下文不可能超过窗口）；
+- 超出分摊能力的部分（重试、被压缩掉的旧前缀）**丢弃**，不堆到某一轮上；
+- 只对会话主 transcript 做这一步（子 agent 文件共用计数器，会重复计入）。
+
+`credits` 计数器不可用：多数会话为 0，与 transcript 的逐轮 `credits` 不是同一口径，
+所以 auto 轮次的成本仍显示 0。token 更正，成本不猜。
+
 ### 5.2 积分 = 成本
 
 - `cost` 列存积分（REAL），`credits_micro` 存整数微积分（BIGINT，×1e6）作为精确源；

@@ -1,3 +1,4 @@
+import { createDecipheriv, createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { QODER_LOGS, QODER_PROJECTS } from "./config";
@@ -33,6 +34,11 @@ import {
  *    only volume signal is `context_usage_ratio`, which becomes context tokens
  *    once multiplied by the ratio's denominator. Cost is `credits`, stored as
  *    integer micro-credits.
+ * 3. **Some responses carry no usage at all.** When the model picker is on
+ *    `auto`, the CLI omits `usage` from the assistant rows — no ratio, no
+ *    credits. The transcript alone would show those turns as a confident zero;
+ *    the encrypted `state.json` beside the transcript holds the CLI's own
+ *    running token counter, and that is what `sessionTokenTotal` recovers.
  */
 
 /**
@@ -181,6 +187,60 @@ function ms(value: unknown): number {
 }
 
 const micro = (credits: number): number => Math.round(credits * 1e6);
+
+/**
+ * Master key of Qoder's session-state sidecar. It is a constant in the CLI, not
+ * a per-install secret: `state.json` is sealed only so a casual look does not
+ * read it, and the key ships in every build.
+ */
+const STATE_KEY = Buffer.from([
+  44, 6, 96, 159, 67, 137, 172, 134, 152, 52, 157, 248, 15, 219, 49, 114, 225, 17, 195, 37, 71,
+  151, 145, 95, 214, 226, 9, 169, 250, 96, 125, 232,
+]);
+
+/**
+ * The CLI's token counter for a session, from `<project>/<sessionId>/state.json`.
+ *
+ * `s0.total.input_tokens` equals Σ(ratio × window) exactly on sessions whose rows
+ * all carry usage, which is what makes it the one trustworthy number for the
+ * rows that carry none. Its `credits` counter is left out on purpose: it is
+ * zero on most sessions, so it cannot be added to the transcript's per-turn
+ * credits.
+ *
+ * The nonce/tag/ciphertext are sealed with AES-256-GCM; the AAD is the session
+ * id, a SHA-256 of the session's cwd, and the segment name — the same tuple the
+ * CLI binds the record to, so a record copied to another session will not open.
+ */
+function sessionTokenTotal(file: string, id: string, cwd: string): number | null {
+  if (!cwd) return null;
+  let raw: any;
+  try {
+    raw = JSON.parse(readFileSync(path.join(path.dirname(file), id, "state.json"), "utf8"));
+  } catch {
+    return null;
+  }
+  const item = raw?.items?.s0;
+  if (!item || typeof item.n !== "string" || typeof item.p !== "string" || typeof item.t !== "string")
+    return null;
+  const sessionId = typeof raw.sessionId === "string" ? raw.sessionId : id;
+  const projectHash = createHash("sha256")
+    .update(path.resolve(cwd).replace(/\\/g, "/"), "utf8")
+    .digest("hex");
+  const aad = JSON.stringify({ sessionId, projectHash, segmentKey: "s0" });
+  try {
+    const decipher = createDecipheriv("aes-256-gcm", STATE_KEY, Buffer.from(item.n, "base64"));
+    decipher.setAAD(Buffer.from(aad, "utf8"));
+    decipher.setAuthTag(Buffer.from(item.t, "base64"));
+    const body = Buffer.concat([
+      decipher.update(Buffer.from(item.p, "base64")),
+      decipher.final(),
+    ]).toString("utf8");
+    const input = num(JSON.parse(body)?.total?.input_tokens);
+    return input > 0 ? input : null;
+  } catch {
+    return null;
+  }
+}
 
 function lineCount(body: unknown): number {
   if (typeof body !== "string" || !body) return 0;
@@ -694,6 +754,8 @@ export class QoderSource implements SourceLike {
     }
 
     const items: { ts: number; turn: SrcTurn }[] = [];
+    /** Assistant turns whose row carried no usage — see `sessionTokenTotal`. */
+    const blind: SrcTurn[] = [];
     const models: string[] = [];
     let credits = 0;
     let tInput = 0;
@@ -827,6 +889,7 @@ export class QoderSource implements SourceLike {
         _write: writeLines,
       };
       items.push({ ts: entry.ts, turn });
+      if (!usage && !synthetic) blind.push(turn);
       if (entry.model) models.push(entry.model);
       credits += turnCredits;
       tInput += input;
@@ -834,6 +897,34 @@ export class QoderSource implements SourceLike {
       deletions += del;
       files += fileCount;
       if (ratio != null) ratios.push({ ts: entry.ts, tokens: input });
+    }
+
+    // Responses without usage are not zero-token responses; they are responses
+    // whose usage the CLI did not write down (`auto` mode). The sidecar counter
+    // covers them session-wide, so the missing volume is spread over exactly the
+    // blind turns: the per-turn split is even because nothing finer exists. Only
+    // the session's main transcript does this; subagent files share the counter
+    // and would count the delta twice.
+    //
+    // A turn cannot hold more context than its model's window, so that is also
+    // the most a turn is ever given back. A session whose counter exceeds the
+    // transcript by more than the blind turns can hold (retries the transcript
+    // dropped, a compacted-away prefix) keeps the excess unattributed rather
+    // than parking it all on one turn.
+    if (blind.length && path.basename(file, ".jsonl") === id) {
+      const total = sessionTokenTotal(file, id, directory);
+      const missing = total == null ? 0 : total - tInput;
+      if (missing > 0) {
+        const even = Math.round(missing / blind.length);
+        let left = missing;
+        blind.forEach((turn, i) => {
+          const room = turn.contextWindow || modelWindow(turn.model);
+          const share = Math.min(i === blind.length - 1 ? left : even, room);
+          turn.input += share;
+          tInput += share;
+          left -= share;
+        });
+      }
     }
 
     for (const p of prompts) {
