@@ -282,7 +282,10 @@ export function TimeBars({
                     d={values
                       .map((v, i) => {
                         if (!(v.value > 0)) return "";
-                        const bx = x(i) - barW / 2;
+                        // Columns are centred on their tick, so the first and last would
+                        // straddle the plot edge and paint over the y axis; keep every
+                        // column inside the plot instead.
+                        const bx = Math.max(0, Math.min(inner.width - barW, x(i) - barW / 2));
                         const by = y(v.value);
                         return `M${bx} ${by}h${barW}v${Math.max(1, plotH - by)}h${-barW}z`;
                       })
