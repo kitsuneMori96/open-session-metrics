@@ -62,7 +62,7 @@ StatusBar 的提示行也不加字——不设 source 专用快捷键（`1`–`4
                                   │  ◆  opencode                    232 ses · 29 273 turns       │
                                   │     └ ~/.local/share/opencode/opencode.db                    │
                                   │  ◌  qoder                        24 ses · 6 693 turns         │
-                                  │     └ ~/.qoder/projects                                      │
+                                  │     └ ~/.qoder{,-cn}/projects                                │
                                   ├──────────────────────────────────────────────────────────────┤
                                   │  window and filters stay per source                          │
                                   └──────────────────────────────────────────────────────────────┘

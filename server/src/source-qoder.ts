@@ -1,7 +1,7 @@
 import { createDecipheriv, createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { QODER_LOGS, QODER_PROJECTS } from "./config";
+import { QODER_LOG_ROOTS, QODER_PROJECTS } from "./config";
 import { qoderDesktopForks, qoderDesktopTitles } from "./qoder-titles";
 import {
   bodyPart,
@@ -85,7 +85,7 @@ export const COMPACTION_DROP_TOKENS = 50_000;
  * belongs to — feeding them to `inferProject` would label a home-launched session
  * after the encoded project folder (`-home-kitsunemori`).
  */
-const INTERNAL_PATH = /(^|\/)\.(qoder|opencode|osm)\//;
+const INTERNAL_PATH = /(^|\/)\.(qoder(?:-cn)?|opencode|osm)\//;
 
 /**
  * Rows that are not a model: `<synthetic>` events carry no usage, and a session
@@ -606,7 +606,7 @@ export class QoderSource implements SourceLike {
     if (hit) return hit;
     const out = new Set<string>();
     for (const enc of this.telemetryDirs()) {
-      const dir = path.join(QODER_LOGS, enc, sessionId, "segments");
+      const dir = path.join(enc, sessionId, "segments");
       if (!existsSync(dir)) continue;
       for (const f of readdirSync(dir)) {
         if (!f.endsWith(".jsonl")) continue;
@@ -632,13 +632,17 @@ export class QoderSource implements SourceLike {
     return out;
   }
 
+  /** `<log root>/<encoded-cwd>` across every build's home, not just one. */
   private telemetryDirs(): string[] {
     if (this.logDirs) return this.logDirs;
-    this.logDirs = existsSync(QODER_LOGS)
-      ? readdirSync(QODER_LOGS, { withFileTypes: true })
-          .filter((d) => d.isDirectory())
-          .map((d) => d.name)
-      : [];
+    const out: string[] = [];
+    for (const root of QODER_LOG_ROOTS) {
+      if (!existsSync(root)) continue;
+      for (const entry of readdirSync(root, { withFileTypes: true })) {
+        if (entry.isDirectory()) out.push(path.join(root, entry.name));
+      }
+    }
+    this.logDirs = out;
     return this.logDirs;
   }
 

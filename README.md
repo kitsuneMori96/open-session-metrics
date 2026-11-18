@@ -7,9 +7,10 @@ Token / 积分、调用了哪些工具、每个工具失败过几次、成本落
 
 - **OpenCode**：`~/.local/share/opencode/opencode.db`（SQLite，只读），成本单位美元；
 - **Qoder CLI**：`~/.qoder/projects/**/*.jsonl`（逐行转录），成本单位积分。Qoder Desktop
-  底层就是 qodercli，它跑过的会话也写进同一棵转录树，因此不再单列一个源；WSL 机器上
-  Windows 侧那几棵树（`/mnt/c/Users/*/.qoder/projects`）属于同一个账号、同一个积分池，
-  一并读进这个源。
+  底层就是 qodercli，它跑过的会话也写进同一棵转录树，因此不再单列一个源；国际版与
+  CN 版各用一棵家目录（`~/.qoder`、`~/.qoder-cn`），WSL 机器上 Windows 侧还有各
+  Windows 配置文件的同名目录（`/mnt/c/Users/*/.qoder{,-cn}/projects`）——同一个账号、
+  同一个积分池，一并读进这个源。
 
 两种来源归一成同一套会话 / 轮次 / 工具记录，聚合、切片、图表与正文面板完全共用。
 
@@ -31,7 +32,7 @@ osm upgrade             # 装最新版（--check 只看不装）
 ```
 
 要求 **Node 24+**（使用内置 `node:sqlite`，无原生依赖），且本机至少有一种数据源：
-`~/.local/share/opencode/opencode.db`（OpenCode）或 `~/.qoder/projects`（Qoder）。
+`~/.local/share/opencode/opencode.db`（OpenCode）或 `~/.qoder{,-cn}/projects`（Qoder）。
 默认源自动探测，也可以 `OSM_SOURCE=qoder osm` 指定，
 或启动后在页眉切换（见[数据源](#数据源)）。全局安装把指标库写在
 `~/.local/share/open-session-metrics`（`OSM_DATA_DIR` 或 `osm --data` 可改），
@@ -198,8 +199,8 @@ Wipe（图表按内容指纹重画）。
 
 ```
 OpenCode        opencode.db (只读) ──▸ SourceReader ───────┐
-             ~/.qoder/projects/*.jsonl ─┐                  ├──▸ SrcSession / SrcTurn / SrcTool
-Qoder CLI     /mnt/c/Users/*/.qoder/  ──┴▸ QoderSource ────┤        （归一化记录）
+       ~/.qoder{,-cn}/projects/*.jsonl ─┐                  ├──▸ SrcSession / SrcTurn / SrcTool
+Qoder CLI  /mnt/c/Users/*/.qoder{,-cn}/ ┴▸ QoderSource ────┤        （归一化记录）
                     ▲                                     │
         main.sqlite（仅补标题）                            │ 物化
                                  ┌────────────────────────┴────────────────────────┐
@@ -240,16 +241,18 @@ Qoder 是会话文件的 mtime——不维护偏移文件，避免与 CLI 自己
 | 来源 | 位置 | 成本单位 | 物化库 |
 | --- | --- | --- | --- |
 | OpenCode | `~/.local/share/opencode/opencode.db`（SQLite，只读） | 美元 | `metrics.db` |
-| Qoder CLI | `~/.qoder/projects/<encoded-cwd>/<sessionId>.jsonl`，WSL 下再加各 Windows 配置文件下的同名目录 | 积分 | `metrics-qoder.db` |
+| Qoder CLI | `~/.qoder/projects/<encoded-cwd>/<sessionId>.jsonl`；CN 版写 `~/.qoder-cn/...`，WSL 下再加各 Windows 配置文件下的同名目录 | 积分 | `metrics-qoder.db` |
 
 Qoder Desktop 不是第三个源：它是 qodercli 的 Electron 壳，会话本来就在上面这棵 JSONL
 树里。桌面应用另有一份 `main.sqlite`，只在转录没写 `ai-title` 时用来补会话标题
-（标题生成由应用完成、落在 `chat_sessions.title`），不贡献轮次或积分。WSL 下这份
+（标题生成由应用完成、落在 `chat_sessions.title`），不贡献轮次或积分。国际版与 CN 版是
+两个独立安装，各有各的 `main.sqlite`；两份都读，行合并。WSL 下这些
 Windows 数据库无法就地加锁，读取前会先快照 `main.sqlite` + `-wal`。
 
-同一台机器上 qodercli 会按**运行它的那一侧**落盘：WSL 里的会话写
-`~/.qoder/projects`，Windows 侧开的会话写 `C:\Users\<name>\.qoder\projects`。
-两边是同一个账号、同一个积分池，所以是**一个源、多个根**，全部并进一条时间线；
+同一台机器上 qodercli 会按**运行它的那一侧**、以及**哪个版本的构建**落盘：WSL 里的国际版
+写 `~/.qoder/projects`、CN 版写 `~/.qoder-cn/projects`，Windows 侧对应
+`C:\Users\<name>\.qoder{,-cn}\projects`。schema 与积分口径一致，构建之间的差别只是
+目录名，所以是**一个源、多个根**，全部并进一条时间线；
 一个会话被 Qoder 自己在两侧之间迁移而留下两份副本时，取文件更多、其次更新的那一份，
 另一份整棵丢弃，绝不重复计费。跨 OS 读 DrvFs 的代价实测过小（3 个会话 2.5MB 全扫
 271ms），因此就地读，不做镜像副本。
@@ -260,7 +263,7 @@ Windows 数据库无法就地加锁，读取前会先快照 `main.sqlite` + `-wa
 [docs/source-scope.md](https://github.com/kitsuneMori96/open-session-metrics/blob/master/docs/source-scope.md)。
 
 启动时的默认源：`OSM_SOURCE=opencode\|qoder` → 显式给了 `OSM_SOURCE_DB`（按 OpenCode 处理）→
-存在 `opencode.db` → 存在 `~/.qoder/projects`。
+存在 `opencode.db` → 存在任一 Qoder 转录树（`~/.qoder/projects` 或 `~/.qoder-cn/projects`）。
 启动只物化默认源；另一个库在你第一次切过去时才建（Qoder 约 4 秒），之后由 2 分钟一轮的
 增量同步跟着走。一轮同步只做三件事：扫一遍源的文件元数据、解析被改动的会话、重写它们水位
 之后 6 小时以内的尾部行——更早的轮次已经定稿，不再重写，会话行则始终用完整转录重算汇总。
@@ -282,7 +285,7 @@ Qwen 180K、DeepSeek 200K，与选择器一致）；积分按整数微积分
 
 ## 快速开始
 
-从源码运行：要求 Node 24+、pnpm，且本机已有 `opencode.db` 或 `~/.qoder/projects`。
+从源码运行：要求 Node 24+、pnpm，且本机已有 `opencode.db` 或 `~/.qoder{,-cn}/projects`。
 
 ```bash
 pnpm install
@@ -424,10 +427,10 @@ pnpm plans                  # 按两库实测单价算套餐性价比（见 docs
 | --- | --- | --- |
 | `OSM_SOURCE` | 自动 | 默认数据源：`opencode` / `qoder`（页眉可切换，不设则自动探测） |
 | `OSM_SOURCE_DB` | `~/.local/share/opencode/opencode.db` | OpenCode 源库路径（只读） |
-| `OSM_QODER_HOME` | `~/.qoder` | Qoder 数据根目录（读其下 `projects/` 与 `logs/`）；显式设置即只读这一棵树 |
-| `OSM_QODER_PROJECT_ROOTS` | 自动 | 逗号分隔的转录树清单，覆盖自动探测（默认 `~/.qoder/projects` 加 WSL 下各 Windows 配置文件的同名目录） |
-| `OSM_QODER_DESKTOP_HOME` | 自动探测 | Qoder Desktop 的 Electron 数据目录，仅供标题补全；默认扫描 `$APPDATA`、`~/.config`、`~/.local/share` 与 WSL 下各 Windows 盘的 `*/AppData/Roaming` |
-| `OSM_QODER_DESKTOP_DB` | `<HOME>/main.sqlite` | 直接指定桌面标题库（优先于 HOME） |
+| `OSM_QODER_HOME` | `~/.qoder` | Qoder 数据根目录（读其下 `projects/` 与 `logs/`）；显式设置即只读这一棵树，不再自动带上 `~/.qoder-cn` |
+| `OSM_QODER_PROJECT_ROOTS` | 自动 | 逗号分隔的转录树清单，覆盖自动探测（默认 `~/.qoder{,-cn}/projects` 加 WSL 下各 Windows 配置文件的同名目录，只收真含转录的） |
+| `OSM_QODER_DESKTOP_HOME` | 自动探测 | Qoder Desktop 的 Electron 数据目录，仅供标题补全；默认扫描 `$APPDATA`、`~/.config`、`~/.local/share` 与 WSL 下各 Windows 盘的 `*/AppData/Roaming`，国际版与 CN 版（`com.qoder.app.stable` / `com.qodercn.app.stable`）都收 |
+| `OSM_QODER_DESKTOP_DB` | 各 `<HOME>/main.sqlite` | 直接指定桌面标题库（优先于 HOME，且只读这一份） |
 | `OSM_DATA_DIR` | `<项目根>/.data` | 各指标库、标题库快照、价目与更新检查缓存（已 gitignore） |
 | `OSM_HOST` | `127.0.0.1` | API 监听地址 |
 | `OSM_PORT` | `8787` | API 端口 |

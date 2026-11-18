@@ -9,6 +9,7 @@
 
 Qoder CLI **没有会话数据库**。会话以 JSONL 写在 `~/.qoder/projects/<encoded-cwd>/<sessionId>.jsonl`，
 同目录下的 SQLite（`shared_client/cache/db/local.db`、`atlas.db`）是 IDE 缓存与代码索引，与会话无关。
+国际版与 CN 版是同一个 runtime 的两套安装，CN 版把同一格式写到 `~/.qoder-cn/...`（见 §3.5）。
 
 接入方式因此是**新增一个 JSONL 数据源适配器**，而不是读数据库：
 
@@ -69,7 +70,8 @@ ECG、transcript、API）保持不变。
 
 ### 3.2 遥测（仅用于模型名）
 
-`~/.qoder/logs/sessions/<encoded-cwd>/<sessionId>/segments/*.jsonl`：
+`~/.qoder/logs/sessions/<encoded-cwd>/<sessionId>/segments/*.jsonl`
+（CN 版是 `~/.qoder-cn/logs/sessions/...`，两棵树都读）：
 
 - `model.request.started` / `model.response.completed` 带 `data.model`（别名）与 `request_id`；
 - `hook.started` 的 `data.hook_input.model` 带真实模型名，但**与别名不同框**；
@@ -99,20 +101,26 @@ ECG、transcript、API）保持不变。
 
 Qoder Desktop 是 qodercli 的 Electron 壳，会话本来就在同一棵 `projects/` 转录树里，
 所以**它不是独立数据源**，`main.sqlite` 只当标题旁路：不增删会话，不提供轮次或积分。
-WSL 下该库位于 Windows 盘（DrvFs），WAL 锁无法就地获取，读取前复制
+国际版与 CN 版是两个独立 Electron 安装，各有自己的数据目录
+（`com.qoder.app.stable` / `com.qodercn.app.stable`）和 `main.sqlite`，两份都读、
+行合并；同一个 session id 只会出现在创建它的那份库里。
+WSL 下这些库位于 Windows 盘（DrvFs），WAL 锁无法就地获取，读取前逐份复制
 `main.sqlite` + `-wal` + `-shm` 到 `<DATA_DIR>/qoder-title-snapshot/`，读完即删；
-标题表按库文件的 mtime/size 缓存，进程内只解析一次。
+标题表按各库的 mtime/size 缓存，进程内只解析一次。
 
-### 3.5 跨 OS 的转录树：一个源、多个根
+### 3.5 跨 OS、跨构建的转录树：一个源、多个根
 
-qodercli 把转录写到**运行它的那一侧**的数据根。WSL 机器因此同时有两类树：
+qodercli 把转录写到**运行它的那一侧**的数据根，而国际版与 CN 版各用一个家目录。
+WSL 机器因此同时有几类树：
 
 ```
-/home/<user>/.qoder/projects/<encoded-cwd>/<sessionId>.jsonl          # WSL 侧
-/mnt/c/Users/<name>/.qoder/projects/<encoded-cwd>/<sessionId>.jsonl   # Windows 侧
+/home/<user>/.qoder/projects/<encoded-cwd>/<sessionId>.jsonl             # WSL 侧，国际版
+/home/<user>/.qoder-cn/projects/<encoded-cwd>/<sessionId>.jsonl          # WSL 侧，CN 版
+/mnt/c/Users/<name>/.qoder/projects/<encoded-cwd>/<sessionId>.jsonl      # Windows 侧，国际版
+/mnt/c/Users/<name>/.qoder-cn/projects/<encoded-cwd>/<sessionId>.jsonl   # Windows 侧，CN 版
 ```
 
-它们是同一个账号、同一个积分池，还共用同一个 `main.sqlite` 标题索引，所以
+schema、`usage`、积分口径完全一致，差别只是目录名，所以
 **不另立数据源**：`QODER_PROJECT_ROOTS` 把这些根并列交给同一个 `QoderSource`。
 
 实测差异（2026-11-03，Windows 侧 3 个会话）：
@@ -138,9 +146,9 @@ qodercli 把转录写到**运行它的那一侧**的数据根。WSL 机器因此
 `OSM_QODER_HOME` 显式设置时**只用这一棵树**：测试与单机安装不能因为扫到 `/mnt/c`
 就改变结果。
 
-Windows 侧的 `logs/sessions/` **不读**（§3.2 的模型真实名仍只从 WSL 侧遥测取）：那一边
-目前只有 `session.config.loaded` 一个空事件，没有 `model.request.started`，喂进去只会
-把证据更少的名字当成权威。
+Windows 侧的 `logs/sessions/` **不读**（§3.2 的模型真实名只从 WSL 侧遥测取，两个构建的
+家目录都查）：那一边目前只有 `session.config.loaded` 一个空事件，没有
+`model.request.started`，喂进去只会把证据更少的名字当成权威。
 
 Windows 侧还在写的会话是另一种风险：一次读可能正好截在半个 JSON 行上。`/mnt/<盘>/`
 下的读取因此丢掉最后一段没有换行结尾的内容，不硬拼半条回复——下一轮 mtime 与 size
@@ -338,10 +346,10 @@ AES-256-GCM 加密的（密钥是 CLI 里的常量，AAD = sessionId + cwd 的 S
 ### 5.5 项目泳道
 
 `inferProject` 从工具触达的路径投票决定项目泳道。Qoder 会把自己的状态目录
-（`.qoder/projects/<encoded>/memory/*`、`.qoder/tmp/<encoded>/tool-outputs/*`）
+（`.qoder{,-cn}/projects/<encoded>/memory/*`、`.qoder{,-cn}/tmp/<encoded>/tool-outputs/*`）
 写进工具入参，而 `<encoded>` 形如 `-home-kitsunemori`：一旦参与投票，从家目录
-启动的会话就会被标成 `-home-kitsunemori`。因此**`.qoder` / `.opencode` / `.osm`
-下的路径不参与泳道推断**，只保留真实的项目文件。
+启动的会话就会被标成 `-home-kitsunemori`。因此**`.qoder` / `.qoder-cn` / `.opencode`
+/ `.osm` 下的路径不参与泳道推断**，只保留真实的项目文件。
 
 ---
 
@@ -389,14 +397,16 @@ interface SourceLike {
 
 1. `OSM_SOURCE=opencode|qoder`
 2. `OSM_SOURCE_DB` 显式给出 → `opencode`
-3. 自动：`~/.local/share/opencode/opencode.db` 存在 → opencode；否则 `~/.qoder/projects` 存在 → qoder
+3. 自动：`~/.local/share/opencode/opencode.db` 存在 → opencode；否则任一 Qoder 转录树
+   （`~/.qoder/projects` 或 `~/.qoder-cn/projects`）存在 → qoder
 
 两库并存与切换的完整设计见 [source-scope.md](./source-scope.md)。
 
-Qoder 根目录：`OSM_QODER_HOME`（默认 `~/.qoder`）。转录树的完整清单是
-`QODER_PROJECT_ROOTS`——默认 `~/.qoder/projects` 加上 WSL 下每个 Windows 配置文件
-（`/mnt/<盘>/Users/<name>` 或搬家后的 `/mnt/<盘>/<name>`）里的 `.qoder/projects`，
-只在该目录真的含转录时才收；`OSM_QODER_PROJECT_ROOTS`（逗号分隔）整体覆盖。
+Qoder 根目录：`OSM_QODER_HOME`（默认 `~/.qoder`；显式设置即只读这一棵，不再自动带上
+`~/.qoder-cn`）。转录树的完整清单是 `QODER_PROJECT_ROOTS`——默认 `~/.qoder{,-cn}/projects`
+加上 WSL 下每个 Windows 配置文件（`/mnt/<盘>/Users/<name>` 或搬家后的 `/mnt/<盘>/<name>`）
+里的 `.qoder{,-cn}/projects`，只在该目录真的含转录时才收；`OSM_QODER_PROJECT_ROOTS`
+（逗号分隔）整体覆盖。
 `/api/sources` 的 `roots` 报出除主树以外还读了哪些。
 
 增量：`maxMessageTime()` = 会话文件最大 mtime；`changedSessions(since)` = mtime > since 的会话。

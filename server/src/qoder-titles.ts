@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { copyFileSync, existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
-import { DATA_DIR, QODER_DESKTOP_DB } from "./config";
+import { DATA_DIR, QODER_DESKTOP_DBS } from "./config";
 
 /**
  * Session titles from the Qoder Desktop index, keyed by session id.
@@ -13,9 +13,12 @@ import { DATA_DIR, QODER_DESKTOP_DB } from "./config";
  * in `chat_sessions.title` instead. Those rows are merged into the CLI source
  * as a title fallback — no separate source, and no extra turns or credits.
  *
- * The database sits on a DrvFs mount under WSL where the WAL lock cannot be
- * taken, so it is read through a private snapshot copy. Results are cached by
- * the store's mtime/size, which keeps a per-request `openSource` cheap.
+ * The international and CN builds each keep their own store, so every store on
+ * the machine is read and the rows merge; a session id lives in exactly one.
+ *
+ * The databases sit on a DrvFs mount under WSL where the WAL lock cannot be
+ * taken, so each is read through a private snapshot copy. Results are cached by
+ * the stores' mtime/size, which keeps a per-request `openSource` cheap.
  */
 
 /**
@@ -112,24 +115,31 @@ function readSnapshot(db: string): DesktopIndex {
   }
 }
 
-function index(db = QODER_DESKTOP_DB): DesktopIndex {
-  if (!existsSync(db)) return EMPTY;
-  const sig = signature(db);
+function index(dbs: readonly string[] = QODER_DESKTOP_DBS): DesktopIndex {
+  const stores = dbs.filter((db) => existsSync(db));
+  if (!stores.length) return EMPTY;
+  const sig = stores.map(signature).join("||");
   if (cached?.sig === sig) return cached.index;
 
-  const windowsMount = process.platform === "linux" && /^\/mnt\/[a-z]\//i.test(db);
-  const next = windowsMount ? readSnapshot(db) : readRows(db);
-  cached = { sig, index: next };
-  return next;
+  const merged: DesktopIndex = { titles: new Map(), forks: new Map() };
+  for (const db of stores) {
+    const windowsMount = process.platform === "linux" && /^\/mnt\/[a-z]\//i.test(db);
+    const one = windowsMount ? readSnapshot(db) : readRows(db);
+    for (const [id, title] of one.titles) if (!merged.titles.has(id)) merged.titles.set(id, title);
+    for (const [id, at] of one.forks) if (!merged.forks.has(id)) merged.forks.set(id, at);
+  }
+  cached = { sig, index: merged };
+  return merged;
 }
 
-export function qoderDesktopTitles(db = QODER_DESKTOP_DB): Map<string, string> {
-  return index(db).titles;
+/** `db` narrows the read to one store; omitted means every store on the machine. */
+export function qoderDesktopTitles(db?: string | readonly string[]): Map<string, string> {
+  return index(db === undefined ? QODER_DESKTOP_DBS : typeof db === "string" ? [db] : db).titles;
 }
 
 /** Side-chat session id → first own message timestamp; inherited copies precede it. */
-export function qoderDesktopForks(db = QODER_DESKTOP_DB): Map<string, number> {
-  return index(db).forks;
+export function qoderDesktopForks(db?: string | readonly string[]): Map<string, number> {
+  return index(db === undefined ? QODER_DESKTOP_DBS : typeof db === "string" ? [db] : db).forks;
 }
 
 /** Tests swap the store between assertions. */

@@ -481,6 +481,22 @@ async function main() {
   );
   ok("an ai-title beats the desktop index", titleOf(sid) === "Qoder demo", String(titleOf(sid)));
   ok("a soft-deleted desktop row contributes no title", !qoderDesktopTitles().has("deleted-session"));
+
+  // The CN build is a separate Electron install with its own store, so a machine
+  // that runs both has two title indexes and neither holds the other's sessions.
+  const cnDb = path.join(dir, "qoder-cn-desktop", "main.sqlite");
+  mkdirSync(path.dirname(cnDb), { recursive: true });
+  const cdb = new DatabaseSync(cnDb);
+  cdb.exec("CREATE TABLE chat_sessions (session_id TEXT PRIMARY KEY, title TEXT, deleted_at INTEGER)");
+  cdb.prepare("INSERT INTO chat_sessions VALUES (?, ?, NULL)").run("cn-only-session", "CN 桌面标题");
+  cdb.close();
+  const mergedTitles = qoderDesktopTitles([desktopDb, cnDb]);
+  ok(
+    "both Qoder builds' title stores are read",
+    mergedTitles.get("cn-only-session") === "CN 桌面标题" && mergedTitles.get(sid2) === "桌面生成的标题",
+    JSON.stringify([...mergedTitles]),
+  );
+  ok("an explicit store list stays narrow", !qoderDesktopTitles([cnDb]).has(sid2));
   const cross1 = src2
     .turns(new Set([sid2]))
     .filter((t) => t.role === "assistant")

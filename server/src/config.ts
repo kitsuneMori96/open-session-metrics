@@ -34,10 +34,25 @@ export const SOURCE_DB =
  * `<home>/projects/<encoded-cwd>/<sessionId>.jsonl`, and the SQLite files
  * beside them are IDE caches. `QODER_PROJECTS` is therefore a directory,
  * not a database path.
+ *
+ * Two builds ship: the international one keeps its state in `~/.qoder`, the CN
+ * one in `~/.qoder-cn`. Same runtime, same JSONL schema, same credit pool per
+ * account — so the CN tree is a second tree of the one `qoder` source, exactly
+ * like a Windows tree on a WSL machine, never a source of its own.
  * ------------------------------------------------------------------ */
 export const QODER_HOME = process.env.OSM_QODER_HOME ?? path.join(os.homedir(), ".qoder");
+
+/** Home trees a reader may use. An explicit `OSM_QODER_HOME` means "this one only". */
+export const QODER_HOMES: readonly string[] = process.env.OSM_QODER_HOME
+  ? [QODER_HOME]
+  : [QODER_HOME, path.join(os.homedir(), ".qoder-cn")];
+
 export const QODER_PROJECTS = path.join(QODER_HOME, "projects");
 export const QODER_LOGS = path.join(QODER_HOME, "logs", "sessions");
+/** Telemetry roots (real model names), one per build's home. */
+export const QODER_LOG_ROOTS: readonly string[] = QODER_HOMES.map((home) =>
+  path.join(home, "logs", "sessions"),
+);
 
 /* ------------------------------------------------------------------ *
  * Qoder Desktop title index
@@ -49,11 +64,16 @@ export const QODER_LOGS = path.join(QODER_HOME, "logs", "sessions");
  * on Windows, so the path can live on any drive and under a relocated profile
  * (`D:\Administrator\...`, not `C:\Users\...`). Discovery therefore asks the
  * standard locations first, then scans the Windows mount roots once.
+ *
+ * The international and CN builds are separate Electron apps with separate
+ * stores (`com.qoder.app.stable`, `com.qodercn.app.stable`), so both are read
+ * and their titles merge; a session id only occurs in the store of the build
+ * that created it.
  * ------------------------------------------------------------------ */
-const QODER_APP_DIR = "com.qoder.app.stable";
+const QODER_APP_DIRS = ["com.qoder.app.stable", "com.qodercn.app.stable"] as const;
 
-const appDirUnder = (base: string | null | undefined): string | null =>
-  base ? path.join(base, QODER_APP_DIR) : null;
+const appDirsUnder = (base: string | null | undefined): string[] =>
+  base ? QODER_APP_DIRS.map((dir) => path.join(base, dir)) : [];
 
 function safeDirs(dir: string): string[] {
   try {
@@ -79,52 +99,66 @@ function windowsMounts(): string[] {
 function* desktopCandidates(): Generator<string> {
   const home = os.homedir();
   if (process.platform === "win32") {
-    for (const dir of [appDirUnder(process.env.APPDATA), appDirUnder(path.join(home, "AppData", "Roaming"))])
-      if (dir) yield dir;
+    for (const base of [process.env.APPDATA, path.join(home, "AppData", "Roaming")])
+      yield* appDirsUnder(base);
   } else if (process.platform === "darwin") {
-    yield appDirUnder(path.join(home, "Library", "Application Support"))!;
+    yield* appDirsUnder(path.join(home, "Library", "Application Support"));
   } else {
-    yield appDirUnder(process.env.XDG_CONFIG_HOME ?? path.join(home, ".config"))!;
+    yield* appDirsUnder(process.env.XDG_CONFIG_HOME ?? path.join(home, ".config"));
   }
 
   const wsl = process.platform === "linux" && (!!process.env.WSL_DISTRO_NAME || existsSync("/mnt/c/Windows"));
   if (!wsl) return;
   for (const root of windowsMounts()) {
     for (const user of safeDirs(path.join(root, "Users"))) {
-      yield appDirUnder(path.join(root, "Users", user, "AppData", "Roaming"))!;
+      yield* appDirsUnder(path.join(root, "Users", user, "AppData", "Roaming"));
     }
     // A relocated Windows profile or a portable install can sit anywhere one
     // or two levels under the drive root, so `C:\Users` alone is not enough.
     for (const top of safeDirs(root)) {
       if (top === "Users") continue;
-      yield appDirUnder(path.join(root, top, "AppData", "Roaming"))!;
+      yield* appDirsUnder(path.join(root, top, "AppData", "Roaming"));
       for (const mid of safeDirs(path.join(root, top))) {
-        yield appDirUnder(path.join(root, top, mid, "AppData", "Roaming"))!;
+        yield* appDirsUnder(path.join(root, top, mid, "AppData", "Roaming"));
       }
     }
   }
 }
 
-/** The first app-data directory that actually holds a store, else the expected one. */
-function discoverDesktopHome(): string {
+/**
+ * Every app-data directory that actually holds a store, else the expected one.
+ * Both builds are independent installs, so a machine can have two.
+ */
+function discoverDesktopHomes(): string[] {
+  const found: string[] = [];
   let first: string | null = null;
   for (const dir of desktopCandidates()) {
     first ??= dir;
-    if (existsSync(path.join(dir, "main.sqlite"))) return dir;
+    if (existsSync(path.join(dir, "main.sqlite")) && !found.includes(dir)) found.push(dir);
   }
-  return first ?? path.join(os.homedir(), ".config", QODER_APP_DIR);
+  if (found.length) return found;
+  return [first ?? path.join(os.homedir(), ".config", QODER_APP_DIRS[0])];
 }
 
-export const QODER_DESKTOP_HOME = process.env.OSM_QODER_DESKTOP_HOME ?? discoverDesktopHome();
+export const QODER_DESKTOP_HOMES: readonly string[] = process.env.OSM_QODER_DESKTOP_HOME
+  ? [process.env.OSM_QODER_DESKTOP_HOME]
+  : discoverDesktopHomes();
+export const QODER_DESKTOP_HOME = QODER_DESKTOP_HOMES[0]!;
 export const QODER_DESKTOP_DB =
   process.env.OSM_QODER_DESKTOP_DB ?? path.join(QODER_DESKTOP_HOME, "main.sqlite");
+
+/** Every title store on this machine — one per Qoder build that ran here. */
+export const QODER_DESKTOP_DBS: readonly string[] = process.env.OSM_QODER_DESKTOP_DB
+  ? [process.env.OSM_QODER_DESKTOP_DB]
+  : QODER_DESKTOP_HOMES.map((home) => path.join(home, "main.sqlite"));
 
 /* ------------------------------------------------------------------ *
  * Qoder transcript roots
  *
- * qodercli writes under the OS it runs on, so one account can own several
- * trees: the WSL home plus each Windows profile under `/mnt/<drive>`. Same
- * product, same credit pool, same JSONL schema — one source, several roots.
+ * qodercli writes under the OS it runs on, and each build under its own home
+ * (`.qoder`, `.qoder-cn`), so one account can own several trees: the WSL homes
+ * plus each Windows profile under `/mnt/<drive>`. Same product, same credit
+ * pool, same JSONL schema — one source, several roots.
  *
  * An explicit `OSM_QODER_HOME` means "this tree only": tests and single-machine
  * installs must not pick up a stray `/mnt/c`.
@@ -144,16 +178,20 @@ function isTranscriptRoot(dir: string): boolean {
 }
 
 function discoverProjectRoots(): string[] {
-  const out = [QODER_PROJECTS];
+  const out = QODER_HOMES.map((home) => path.join(home, "projects"));
   if (process.env.OSM_QODER_HOME || process.platform !== "linux") return out;
   if (!process.env.WSL_DISTRO_NAME && !existsSync("/mnt/c/Windows")) return out;
+  // Same home names on the Windows side: a profile holds `.qoder` and/or `.qoder-cn`.
+  const names = QODER_HOMES.map((home) => path.basename(home));
   for (const mount of windowsMounts()) {
     // A Windows profile sits one level deep: `C:\Users\<name>`, or a relocated
     // `D:\Administrator`. Anything further down is not a profile.
     for (const parent of [path.join(mount, "Users"), mount]) {
-      for (const name of safeDirs(parent)) {
-        const dir = path.join(parent, name, ".qoder", "projects");
-        if (!out.includes(dir) && isTranscriptRoot(dir)) out.push(dir);
+      for (const profile of safeDirs(parent)) {
+        for (const name of names) {
+          const dir = path.join(parent, profile, name, "projects");
+          if (!out.includes(dir) && isTranscriptRoot(dir)) out.push(dir);
+        }
       }
     }
   }
@@ -189,7 +227,7 @@ export function resolveSourceKind(): SourceKind {
   if ((SOURCE_KINDS as readonly string[]).includes(explicit ?? "")) return explicit as SourceKind;
   if (process.env.OSM_SOURCE_DB) return "opencode";
   if (existsSync(SOURCE_DB)) return "opencode";
-  if (existsSync(QODER_PROJECTS)) return "qoder";
+  if (QODER_PROJECT_ROOTS.some((root) => existsSync(root))) return "qoder";
   return "opencode";
 }
 
@@ -216,11 +254,17 @@ export const metricsDbPath = (kind: SourceKind): string => METRICS_DB_BY_KIND[ki
 export const METRICS_DB = METRICS_DB_BY_KIND.opencode;
 
 /** Where this source keeps its raw data — the path the UI prints in the menu. */
-export const sourceProbe = (kind: SourceKind): string => (kind === "qoder" ? QODER_PROJECTS : SOURCE_DB);
+export const sourceProbe = (kind: SourceKind): string =>
+  kind === "qoder"
+    ? (QODER_PROJECT_ROOTS.find((root) => existsSync(root)) ?? QODER_PROJECTS)
+    : SOURCE_DB;
 
-/** Every tree this source reads. Qoder has one per OS that ran it. */
+/**
+ * Every tree this source reads. Qoder has one per OS and per build that ran it;
+ * a tree that does not exist yet is not part of the menu.
+ */
 export const sourceRoots = (kind: SourceKind): string[] =>
-  kind === "qoder" ? [...QODER_PROJECT_ROOTS] : [SOURCE_DB];
+  kind === "qoder" ? QODER_PROJECT_ROOTS.filter((root) => existsSync(root)) : [SOURCE_DB];
 
 /** True when this source exists on this machine — an unmaterialized store is still available. */
 export const sourceAvailable = (kind: SourceKind): boolean => sourceRoots(kind).some((p) => existsSync(p));
