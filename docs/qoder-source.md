@@ -410,7 +410,9 @@ Qoder 根目录：`OSM_QODER_HOME`（默认 `~/.qoder`；显式设置即只读�
 `/api/sources` 的 `roots` 报出除主树以外还读了哪些。
 
 增量：`maxMessageTime()` = 会话文件最大 mtime；`changedSessions(since)` = mtime > since 的会话。
-不维护偏移文件，避免与 Qoder 自己的写入竞争。
+水位是**整个源一个数**，而根清单可能在两次构建之间变长（新开一个 Windows 配置文件、
+装上 CN 版）。新树里的会话 mtime 早于水位，只看时钟就永远进不了库，所以每一轮还会
+补上"源里有、库里没有"的会话 id。不维护偏移文件，避免与 Qoder 自己的写入竞争。
 
 ---
 

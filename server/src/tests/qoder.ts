@@ -888,6 +888,20 @@ async function main() {
     singleRoot.QODER_PROJECT_ROOTS.length === 1,
     singleRoot.QODER_PROJECT_ROOTS.join(","),
   );
+
+  // A tree can appear after the last build (another OS profile, the CN build):
+  // its sessions predate the single watermark, so the tick has to add ids the
+  // store has never seen rather than trusting mtime alone.
+  const { tickScope } = await import("../metrics/store");
+  ok(
+    "a session from a tree added after the watermark is picked up",
+    [...tickScope(new Set(["touched"]), ["touched", "new"], new Set(["touched"]))].join(",") ===
+      "touched,new",
+  );
+  ok(
+    "an unchanged stored session stays out of the tick",
+    tickScope(new Set(), ["stored"], new Set(["stored"])).size === 0,
+  );
   migrated.close();
   multi.close();
   console.log(failures ? `\n${failures} check(s) failed` : "\nall qoder checks passed");

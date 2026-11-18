@@ -129,6 +129,26 @@ async function fullRebuild(kind: SourceKind): Promise<BuildReport> {
   return report;
 }
 
+/**
+ * The sessions one tick owes the store: everything touched since the watermark,
+ * plus every source session the store has never seen.
+ *
+ * The watermark is one number across the whole source, but a source can gain a
+ * tree after a build — another Windows profile, the CN build's `~/.qoder-cn`.
+ * Sessions in that tree were written before the watermark and would stay
+ * invisible forever if mtime were the only criterion. An id the store does not
+ * hold cannot be "unchanged", so it is always picked up.
+ */
+export function tickScope(
+  touched: ReadonlySet<string>,
+  present: Iterable<string>,
+  known: ReadonlySet<string>,
+): Set<string> {
+  const out = new Set(touched);
+  for (const id of present) if (!known.has(id)) out.add(id);
+  return out;
+}
+
 async function incrementalRebuild(kind: SourceKind): Promise<BuildReport> {
   const db = current(kind);
   const prevWatermark = getMetaNumber(db, "sourceMaxTime");
@@ -136,7 +156,11 @@ async function incrementalRebuild(kind: SourceKind): Promise<BuildReport> {
   // reads it back, so its snapshot of the transcript is one instant.
   const src = openSource(kind);
   try {
-    const changed = prevWatermark > 0 ? src.changedSessions(prevWatermark) : new Set<string>();
+    const touched = prevWatermark > 0 ? src.changedSessions(prevWatermark) : new Set<string>();
+    const known = new Set(
+      (db.prepare("SELECT id FROM sessions").all() as { id: string }[]).map((r) => String(r.id)),
+    );
+    const changed = tickScope(touched, src.sessionIds(), known);
     if (changed.size === 0) {
       setMeta(db, "materializedAt", String(Date.now()));
       return {
